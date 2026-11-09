@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Check, Search, FilePlus2, Plus, Trash2, ArrowRightLeft } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
-import type { CommandType, Order } from '../domain/types.ts';
+import type { CommandType, Order, Payment } from '../domain/types.ts';
 import { isShiftCashier } from '../domain/access.ts';
+import { paymentMethod } from '../domain/engine.ts';
+import { transferAccounts } from './Pos.tsx';
 import {
   Badge,
   Empty,
@@ -144,6 +146,39 @@ export function Orders() {
       fields: Field[];
       extra: Record<string, unknown>;
     } | null>(null);
+  const paymentLabel = (x: Payment) =>
+    paymentMethod(x) === 'cash'
+      ? 'Efectivo'
+      : [
+          'Transferencia',
+          state.locations.find((l) => l.id === x.accountId)?.name ?? 'cuenta',
+          x.reference && `ref ${x.reference}`,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+  /** Selector de cómo se devuelve el dinero; propone el medio de la venta original. */
+  const refundField = (o: Order): Field[] => {
+    const accounts = transferAccounts(state, true);
+    if (!accounts.length) return [];
+    const paid = state.payments.find((x) => x.orderId === o.id && x.amount > 0);
+    const value =
+      paid && paymentMethod(paid) === 'transfer' && accounts.some((a) => a.id === paid.accountId)
+        ? `transfer:${paid.accountId}`
+        : 'cash';
+    return [
+      {
+        name: 'refundTo',
+        label: 'Cómo se devuelve el dinero',
+        type: 'select',
+        required: true,
+        value,
+        options: [
+          { value: 'cash', label: 'Efectivo de la caja' },
+          ...accounts.map((a) => ({ value: `transfer:${a.id}`, label: `Transferencia desde ${a.name}` })),
+        ],
+      },
+    ];
+  };
   const canCash = isShiftCashier(
     { ...actor, online: app.online },
     state.shifts.find((s) => s.status === 'open'),
@@ -308,6 +343,7 @@ export function Orders() {
                                   type: 'refund_order',
                                   extra: { orderId: o.id },
                                   fields: [
+                                    ...refundField(o),
                                     {
                                       name: 'evidenceId',
                                       label: 'Comprobante del reembolso',
@@ -371,6 +407,16 @@ export function Orders() {
               <dd>{details.origin === 'paper' ? `Planilla · ${details.paperFolio}` : 'App'}</dd>
               <dt>Cobrado</dt>
               <dd>{date(details.paidAt)}</dd>
+              {state.payments
+                .filter((x) => x.orderId === details.id)
+                .map((x) => (
+                  <Fragment key={x.id}>
+                    <dt>{x.amount < 0 ? 'Devolución' : 'Medio de pago'}</dt>
+                    <dd>
+                      {money(Math.abs(x.amount))} · {paymentLabel(x)}
+                    </dd>
+                  </Fragment>
+                ))}
             </dl>
             {details.lines.map((l) => (
               <div className="list-row" key={l.id}>
@@ -402,7 +448,14 @@ export function Orders() {
             fields={form.fields}
             onCancel={() => setForm(null)}
             onSubmit={async (v) => {
-              await app.run(form.type, { ...form.extra, ...v });
+              const { refundTo, ...values } = v;
+              // «cash» o «transfer:<cuenta>»: cómo sale el dinero del reembolso.
+              const [method, accountId] = String(refundTo ?? '').split(':');
+              await app.run(form.type, {
+                ...form.extra,
+                ...values,
+                ...(refundTo ? { method, accountId } : {}),
+              });
               setForm(null);
               app.toast('Registro guardado.');
             }}
@@ -469,6 +522,7 @@ function ReplaceDialog({ order, onClose }: { order: Order; onClose: () => void }
 function PaperDialog({ onClose }: { onClose: () => void }) {
   const app = useApp(),
     { state } = app.data!,
+    accounts = transferAccounts(state),
     [lines, setLines] = useState<DraftLine[]>([
       {
         flavorId: '',
@@ -504,13 +558,39 @@ function PaperDialog({ onClose }: { onClose: () => void }) {
             value: localDateTime(),
           },
           { name: 'evidenceId', label: 'Foto de la planilla', type: 'photo', required: true },
+          ...(accounts.length
+            ? [
+                {
+                  name: 'paidWith',
+                  label: 'Cómo pagó el cliente',
+                  type: 'select',
+                  required: true,
+                  value: 'cash',
+                  options: [
+                    { value: 'cash', label: 'Efectivo' },
+                    ...accounts.map((a) => ({
+                      value: `transfer:${a.id}`,
+                      label: `Transferencia a ${a.name}`,
+                    })),
+                  ],
+                } satisfies Field,
+              ]
+            : []),
           { name: 'delivered', label: 'Productos entregados', type: 'checkbox', value: true },
           { name: 'notes', label: 'Novedades', type: 'textarea' },
         ]}
         onCancel={onClose}
         submit="Registrar pedido desde papel"
         onSubmit={async (v) => {
-          await app.run('record_paper' as CommandType, { ...v, lines, originalAt: utc(v.originalAt) });
+          const { paidWith, ...values } = v;
+          const [method, accountId] = String(paidWith ?? 'cash').split(':');
+          await app.run('record_paper' as CommandType, {
+            ...values,
+            method,
+            accountId,
+            lines,
+            originalAt: utc(v.originalAt),
+          });
           app.toast('Pedido de planilla registrado.');
           onClose();
         }}

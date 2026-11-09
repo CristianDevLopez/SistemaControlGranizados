@@ -18,9 +18,77 @@ import { api } from '../lib/api.ts';
 import { getMeta, setMeta } from '../lib/db.ts';
 import { lineTotal } from '../domain/pricing.ts';
 import { isShiftCashier } from '../domain/access.ts';
-import type { Order, OrderLine } from '../domain/types.ts';
+import type { MoneyLocation, Order, OrderLine, State } from '../domain/types.ts';
+import { paymentMethod } from '../domain/engine.ts';
 import { Badge, Empty, FieldsForm, Modal, MoneyInput, money, date, stateNames } from './components.tsx';
 import { parseMoney } from '../lib/money.ts';
+
+/** Cómo paga el cliente: en efectivo o por transferencia a una cuenta del negocio. */
+export interface PaymentChoice {
+  method: 'cash' | 'transfer';
+  accountId?: string;
+  reference: string;
+}
+export const CASH: PaymentChoice = { method: 'cash', reference: '' };
+/** Cuentas activas donde los clientes pueden transferir; para devolver dinero sirve cualquier cuenta activa. */
+export const transferAccounts = (state: State, refund = false): MoneyLocation[] =>
+  state.locations.filter((x) => x.active && x.type === 'bank' && (refund || x.receivesSales === true));
+export const paymentPayload = (choice: PaymentChoice) =>
+  choice.method === 'cash'
+    ? { method: 'cash' }
+    : { method: 'transfer', accountId: choice.accountId, reference: choice.reference.trim() || undefined };
+
+/**
+ * Selector de un toque: «Efectivo» y una opción por cuenta que recibe transferencias. Con una sola
+ * cuenta se llama «Transferencia». Sin cuentas configuradas no se muestra.
+ */
+export function PaymentPicker({
+  value,
+  onChange,
+  accounts,
+}: {
+  value: PaymentChoice;
+  onChange: (choice: PaymentChoice) => void;
+  accounts: MoneyLocation[];
+}) {
+  if (!accounts.length) return null;
+  const selected = value.method === 'transfer' ? accounts.find((a) => a.id === value.accountId) : undefined;
+  return (
+    <div className="payment-picker">
+      <div className="segmented" role="group" aria-label="Medio de pago">
+        <button
+          type="button"
+          className={value.method === 'cash' ? 'active' : ''}
+          aria-pressed={value.method === 'cash'}
+          onClick={() => onChange(CASH)}
+        >
+          Efectivo
+        </button>
+        {accounts.map((a) => (
+          <button
+            key={a.id}
+            type="button"
+            className={selected?.id === a.id ? 'active' : ''}
+            aria-pressed={selected?.id === a.id}
+            title={`Transferencia a ${a.name}`}
+            onClick={() => onChange({ method: 'transfer', accountId: a.id, reference: value.reference })}
+          >
+            {accounts.length === 1 ? 'Transferencia' : a.name}
+          </button>
+        ))}
+      </div>
+      {value.method === 'transfer' && (
+        <input
+          aria-label="Comprobante de la transferencia"
+          placeholder={`${accounts.length === 1 ? `${accounts[0].name} · ` : ''}N.º de comprobante (opcional)`}
+          value={value.reference}
+          maxLength={80}
+          onChange={(e) => onChange({ ...value, reference: e.target.value })}
+        />
+      )}
+    </div>
+  );
+}
 
 export function Scanner({ onCode, onClose }: { onCode: (code: string) => void; onClose: () => void }) {
   const video = useRef<HTMLVideoElement>(null),
@@ -58,8 +126,33 @@ export function Scanner({ onCode, onClose }: { onCode: (code: string) => void; o
   );
 }
 
-function Checkout({ order, onClose, onDone }: { order: Order; onClose: () => void; onDone: () => void }) {
+function Checkout({
+  order,
+  initialPayment,
+  onClose,
+  onDone,
+}: {
+  order: Order;
+  initialPayment: PaymentChoice;
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const app = useApp(),
+    { state } = app.data!,
+    refund = (order.paymentCredit ?? 0) > order.total,
+    // Si hay que devolver dinero, se propone el mismo medio con el que se pagó la venta anulada.
+    original = refund
+      ? state.payments.find((x) => x.orderId === order.replacesId && x.amount > 0)
+      : undefined,
+    [payment, setPayment] = useState<PaymentChoice>(
+      original
+        ? paymentMethod(original) === 'transfer'
+          ? { method: 'transfer', accountId: original.accountId, reference: '' }
+          : CASH
+        : refund
+          ? CASH
+          : initialPayment,
+    ),
     [code, setCode] = useState(''),
     [codes, setCodes] = useState<string[]>([]),
     [total, setTotal] = useState(order.total),
@@ -140,24 +233,27 @@ function Checkout({ order, onClose, onDone }: { order: Order; onClose: () => voi
             </div>
           )}
         </div>
+        <PaymentPicker value={payment} onChange={setPayment} accounts={transferAccounts(state, due < 0)} />
         {due >= 0 ? (
-          <label className="field">
-            <span>
-              Efectivo recibido <small>Opcional</small>
-            </span>
-            <MoneyInput
-              value={tendered}
-              onChange={(text) => setTendered(text)}
-              placeholder={money(due)}
-              preview={false}
-            />
-            {parseMoney(tendered) !== null &&
-              (parseMoney(tendered)! >= due ? (
-                <small>Vuelto: {money(parseMoney(tendered)! - due)}</small>
-              ) : (
-                <small className="warning-text">Faltan {money(due - parseMoney(tendered)!)}</small>
-              ))}
-          </label>
+          payment.method === 'cash' && (
+            <label className="field">
+              <span>
+                Efectivo recibido <small>Opcional</small>
+              </span>
+              <MoneyInput
+                value={tendered}
+                onChange={(text) => setTendered(text)}
+                placeholder={money(due)}
+                preview={false}
+              />
+              {parseMoney(tendered) !== null &&
+                (parseMoney(tendered)! >= due ? (
+                  <small>Vuelto: {money(parseMoney(tendered)! - due)}</small>
+                ) : (
+                  <small className="warning-text">Faltan {money(due - parseMoney(tendered)!)}</small>
+                ))}
+            </label>
+          )
         ) : (
           <label className="field">
             <span>Foto del reembolso *</span>
@@ -194,8 +290,11 @@ function Checkout({ order, onClose, onDone }: { order: Order; onClose: () => voi
                 codes,
                 deliver,
                 refundEvidenceId,
+                ...paymentPayload(payment),
               });
-              app.toast(`Venta registrada · ${money(total)}`);
+              app.toast(
+                `Venta registrada · ${money(total)}${payment.method === 'transfer' ? ' · transferencia' : ''}`,
+              );
               onDone();
             } catch (e) {
               setError((e as Error).message);
@@ -222,7 +321,8 @@ export function Pos() {
     [error, setError] = useState(''),
     [checkout, setCheckout] = useState(false),
     [showOrders, setShowOrders] = useState(false),
-    [tasting, setTasting] = useState(false);
+    [tasting, setTasting] = useState(false),
+    [payment, setPayment] = useState<PaymentChoice>(CASH);
   const active = state.shifts.find((x) => x.status === 'open'),
     order = state.orders.find((x) => x.id === orderId && x.status === 'open'),
     size = state.sizes.find((x) => x.id === sizeId),
@@ -237,6 +337,8 @@ export function Pos() {
     setOrderId(key);
     void setMeta(`active-order:${actor.branchId ?? 'legacy'}`, key);
     setShowOrders(false);
+    // Cada pedido nuevo vuelve a efectivo, el medio más común.
+    setPayment(CASH);
   };
   const action = async (work: () => Promise<unknown>) => {
     setBusy(true);
@@ -530,6 +632,7 @@ export function Pos() {
                 </div>
                 {canCash && order.lines.length > 0 ? (
                   <>
+                    <PaymentPicker value={payment} onChange={setPayment} accounts={transferAccounts(state)} />
                     <button
                       className="button primary full large"
                       disabled={busy || !!state.settings[0].auditId}
@@ -540,8 +643,11 @@ export function Pos() {
                             expectedVersion: order.version,
                             expectedTotal: order.total,
                             deliver: true,
+                            ...paymentPayload(payment),
                           });
-                          app.toast(`Venta registrada · ${money(order.total)}`);
+                          app.toast(
+                            `Venta registrada · ${money(order.total)}${payment.method === 'transfer' ? ' · transferencia' : ''}`,
+                          );
                           select(null);
                         })
                       }
@@ -614,6 +720,7 @@ export function Pos() {
       {checkout && order && (
         <Checkout
           order={order}
+          initialPayment={payment}
           onClose={() => setCheckout(false)}
           onDone={() => {
             setCheckout(false);
