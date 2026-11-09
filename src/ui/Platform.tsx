@@ -72,7 +72,7 @@ export function Platform() {
         {
           name: 'monthlyFee',
           label: 'Mensualidad por este local (COP)',
-          type: 'number',
+          type: 'money',
           min: 0,
           max: 1_000_000_000,
           required: true,
@@ -337,7 +337,7 @@ export function Platform() {
                                     {
                                       name: 'amount',
                                       label: 'Valor recibido (COP)',
-                                      type: 'number',
+                                      type: 'money',
                                       required: true,
                                       min: 1,
                                       max: balance(i),

@@ -14,6 +14,7 @@ import {
   money,
   stateNames,
   type Field,
+  MoneyInput,
 } from './components.tsx';
 export function Purchasing() {
   const app = useApp(),
@@ -43,7 +44,7 @@ export function Purchasing() {
         ]),
       ].map((x) => ({ value: x, label: x })),
     },
-    { name: 'amount', label: 'Monto pagado', type: 'number', min: 1, required: true },
+    { name: 'amount', label: 'Monto pagado', type: 'money', min: 1, required: true },
     {
       name: 'source',
       label: 'Pagado con',
@@ -421,13 +422,12 @@ function ShipmentDialog({ onClose }: { onClose: () => void }) {
               </label>
               <label>
                 Costo unitario
-                <input
-                  type="number"
-                  min="0"
+                <MoneyInput
                   required
-                  value={item.unitCost}
-                  onChange={(e) =>
-                    setItems(items.map((x, j) => (j === i ? { ...x, unitCost: Number(e.target.value) } : x)))
+                  preview={false}
+                  amount={item.unitCost || null}
+                  onChange={(_, amount) =>
+                    setItems(items.map((x, j) => (j === i ? { ...x, unitCost: amount ?? 0 } : x)))
                   }
                 />
               </label>

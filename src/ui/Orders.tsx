@@ -15,6 +15,7 @@ import {
   stateNames,
   utc,
   type Field,
+  MoneyInput,
 } from './components.tsx';
 
 export interface DraftLine {
@@ -91,13 +92,12 @@ export function LinesEditor({
           {prices && (
             <label>
               Precio unitario cobrado
-              <input
-                type="number"
+              <MoneyInput
                 required
-                min="1"
-                value={line.unitPrice ?? ''}
-                onChange={(e) =>
-                  onChange(value.map((l, j) => (j === i ? { ...l, unitPrice: Number(e.target.value) } : l)))
+                preview={false}
+                amount={line.unitPrice ?? null}
+                onChange={(_, amount) =>
+                  onChange(value.map((l, j) => (j === i ? { ...l, unitPrice: amount ?? 0 } : l)))
                 }
               />
             </label>

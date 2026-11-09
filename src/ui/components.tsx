@@ -1,10 +1,73 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { X, Camera, LoaderCircle, Inbox } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
+import { moneyText, parseMoney } from '../lib/money.ts';
 export const money = (value: number) =>
   new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(
     value,
   );
+/**
+ * Campo de pesos: acepta "150000", "150.000" o "$ 150.000" y muestra debajo el valor que se guardará.
+ * El valor formateado no forma parte del nombre accesible del campo (aria-hidden + aria-describedby).
+ */
+export function MoneyInput({
+  value,
+  defaultValue,
+  amount: external,
+  onChange,
+  name,
+  required,
+  placeholder,
+  ariaLabel,
+  autoFocus,
+  preview = true,
+}: {
+  /** Texto controlado desde afuera. */
+  value?: string;
+  defaultValue?: unknown;
+  /** Monto controlado desde afuera; el texto se resincroniza si cambia por otra razón (p. ej. al borrar una fila). */
+  amount?: number | null;
+  onChange?: (text: string, amount: number | null) => void;
+  name?: string;
+  required?: boolean;
+  placeholder?: string;
+  ariaLabel?: string;
+  autoFocus?: boolean;
+  preview?: boolean;
+}) {
+  const [own, setOwn] = useState(() => moneyText(external ?? defaultValue));
+  useEffect(() => {
+    if (external !== undefined && (external ?? 0) !== (parseMoney(own) ?? 0)) setOwn(moneyText(external));
+  }, [external]);
+  const text = value ?? own,
+    amount = parseMoney(text),
+    previewId = useId();
+  return (
+    <>
+      <input
+        name={name}
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
+        required={required}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        aria-describedby={preview ? previewId : undefined}
+        autoFocus={autoFocus}
+        value={text}
+        onChange={(e) => {
+          setOwn(e.target.value);
+          onChange?.(e.target.value, parseMoney(e.target.value));
+        }}
+      />
+      {preview && (
+        <small id={previewId} className="money-preview" aria-hidden="true">
+          {amount === null ? '' : money(amount)}
+        </small>
+      )}
+    </>
+  );
+}
 export const date = (value?: string) =>
   value
     ? new Intl.DateTimeFormat('es-CO', {
@@ -121,6 +184,7 @@ export interface Field {
   type?:
     | 'text'
     | 'number'
+    | 'money'
     | 'password'
     | 'email'
     | 'textarea'
@@ -190,6 +254,16 @@ export function FieldsForm({
           const ready = { ...values };
           for (const f of fields) {
             if (f.type === 'number') ready[f.name] = values[f.name] === '' ? null : Number(values[f.name]);
+            if (f.type === 'money') {
+              const amount = parseMoney(values[f.name]);
+              if (amount === null && String(values[f.name] ?? '').trim())
+                throw new Error(`${f.label}: escribe un monto en pesos.`);
+              if (amount !== null && f.min !== undefined && amount < f.min)
+                throw new Error(`${f.label}: el mínimo es ${money(f.min)}.`);
+              if (amount !== null && f.max !== undefined && amount > f.max)
+                throw new Error(`${f.label}: el máximo es ${money(f.max)}.`);
+              ready[f.name] = amount;
+            }
             if (f.type === 'photo')
               ready[f.name] = values[f.name] instanceof File ? await app.photo(values[f.name]) : undefined;
           }
@@ -264,6 +338,14 @@ export function FieldsForm({
                 type="checkbox"
                 checked={!!values[f.name]}
                 onChange={(e) => change(f, e.target.checked)}
+              />
+            ) : f.type === 'money' ? (
+              <MoneyInput
+                required={f.required}
+                value={
+                  typeof values[f.name] === 'number' ? moneyText(values[f.name]) : (values[f.name] ?? '')
+                }
+                onChange={(text) => change(f, text)}
               />
             ) : (
               <input

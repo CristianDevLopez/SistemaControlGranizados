@@ -10,6 +10,7 @@ import {
   Landmark,
 } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
+import { parseMoney } from '../lib/money.ts';
 import { articles, cashExpected, locationBalance } from '../domain/engine.ts';
 import { isShiftCashier } from '../domain/access.ts';
 import type { CommandType, Shift } from '../domain/types.ts';
@@ -18,6 +19,7 @@ import {
   Empty,
   FieldsForm,
   Modal,
+  MoneyInput,
   Panel,
   Stat,
   date,
@@ -67,10 +69,10 @@ export function CountDialog({
             await app.run(kind === 'audit' ? 'finish_audit' : 'count', {
               kind,
               shiftId: shift.id,
-              cash: skip ? undefined : Number(form.get('cash')),
+              cash: skip ? undefined : parseMoney(form.get('cash')),
               items,
               skip,
-              retained: Number(form.get('retained') ?? 0),
+              retained: parseMoney(form.get('retained')) ?? 0,
               locationId: form.get('locationId') || undefined,
               notes: form.get('notes'),
               checklist: Object.fromEntries(
@@ -102,15 +104,7 @@ export function CountDialog({
           <>
             <label className="field">
               <span>Efectivo contado *</span>
-              <input
-                name="cash"
-                type="number"
-                min="0"
-                step="1"
-                inputMode="numeric"
-                required
-                placeholder="Cuenta el efectivo real"
-              />
+              <MoneyInput name="cash" required placeholder="Cuenta el efectivo real" />
             </label>
             <div className="count-list">
               {list.map((x) => (
@@ -138,7 +132,7 @@ export function CountDialog({
           <>
             <label className="field">
               <span>Efectivo reservado para la siguiente apertura *</span>
-              <input name="retained" type="number" min="0" step="1" inputMode="numeric" required />
+              <MoneyInput name="retained" required />
               <small>
                 El remanente se solicita entregar o consignar. Solicitarlo no confirma que haya salido.
               </small>
@@ -226,7 +220,7 @@ export function Cash() {
                       {
                         name: 'base',
                         label: 'Base inicial (se utilizará el saldo físico anterior cuando exista)',
-                        type: 'number',
+                        type: 'money',
                         value: 0,
                         min: 0,
                         required: true,
@@ -272,7 +266,7 @@ export function Cash() {
                         {
                           name: 'base',
                           label: 'Base inicial (se utilizará el saldo físico anterior cuando exista)',
-                          type: 'number',
+                          type: 'money',
                           value: 0,
                           min: 0,
                           required: true,
@@ -385,7 +379,7 @@ export function Cash() {
                       options: locationOptions,
                       required: true,
                     },
-                    { name: 'amount', label: 'Monto', type: 'number', min: 1, required: true },
+                    { name: 'amount', label: 'Monto', type: 'money', min: 1, required: true },
                     { name: 'notes', label: 'Concepto', type: 'textarea', required: true },
                     ...(admin
                       ? [
@@ -531,7 +525,7 @@ export function Cash() {
                                   {
                                     name: 'receivedAmount',
                                     label: 'Monto recibido o verificado en la cuenta',
-                                    type: 'number',
+                                    type: 'money',
                                     min: 0,
                                     required: true,
                                   },
