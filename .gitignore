@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.local/
+coverage/
+test-results/
+playwright-report/
+.codegraph/
+.vercel/
+supabase/.temp/
+supabase/.branches/
+*.log
+backups/
+*.tsbuildinfo
+# Fuentes originales; no forman parte del código compartido.
+/transcripcion-literal-aud-20260831.docx
+/transcripcion-literal-granizados.docx

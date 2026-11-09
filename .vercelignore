@@ -1,0 +1,12 @@
+.local
+.codegraph
+.git
+node_modules
+legacy
+test-results
+playwright-report
+backups
+.env*
+*.docx
+app.js
+style.css
