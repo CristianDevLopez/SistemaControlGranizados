@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
 import { parseMoney } from '../lib/money.ts';
-import { articles, cashExpected, locationBalance } from '../domain/engine.ts';
+import { articles, cashExpected, locationBalance, salesByMethod } from '../domain/engine.ts';
 import { isShiftCashier } from '../domain/access.ts';
 import type { CommandType, Shift } from '../domain/types.ts';
 import {
@@ -320,6 +320,27 @@ export function Cash() {
                   )}
                 />
                 <Stat label="Base del turno" value={money(active.base)} />
+                {(() => {
+                  // Las transferencias no entran a la caja: se muestran aparte, por cuenta.
+                  const sales = salesByMethod(state, active.id);
+                  return (
+                    <>
+                      <Stat label="Cobrado en efectivo" value={money(sales.cash)} />
+                      <Stat
+                        label="Cobrado por transferencia"
+                        value={money(sales.transfer)}
+                        note={
+                          Object.entries(sales.byAccount)
+                            .map(
+                              ([id, amount]) =>
+                                `${state.locations.find((x) => x.id === id)?.name ?? 'Cuenta'}: ${money(amount)}`,
+                            )
+                            .join(' · ') || 'Sin transferencias en este turno'
+                        }
+                      />
+                    </>
+                  );
+                })()}
               </div>
             )}
           </>

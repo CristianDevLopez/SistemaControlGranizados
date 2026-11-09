@@ -53,6 +53,51 @@ export function Settings() {
         await app.run(type, { ...extra, ...v });
       },
     });
+  /** Campos de una caja o cuenta. Al editar, el saldo inicial ya no cambia. */
+  const locationFields = (edit: boolean): Field[] => [
+    { name: 'name', label: 'Nombre del destino', required: true },
+    {
+      name: 'type',
+      label: 'Tipo',
+      type: 'select',
+      required: true,
+      value: 'bank',
+      options: [
+        { value: 'bank', label: 'Cuenta bancaria de un admin' },
+        { value: 'treasury', label: 'Caja principal en custodia' },
+      ],
+    },
+    {
+      name: 'custodianId',
+      label: 'Administrador que recibe y custodia',
+      type: 'select',
+      required: true,
+      options: profiles
+        .filter((x) => x.active && x.role === 'admin')
+        .map((x) => ({ value: x.id, label: x.name })),
+    },
+    { name: 'bank', label: 'Banco (si es cuenta)' },
+    { name: 'account', label: 'Cuenta o referencia para consignar' },
+    ...(edit
+      ? []
+      : [
+          {
+            name: 'openingBalance',
+            label: 'Saldo inicial del negocio bajo esta custodia',
+            type: 'money',
+            value: 0,
+            min: 0,
+            required: true,
+          } satisfies Field,
+        ]),
+    {
+      name: 'receivesSales',
+      label: 'Recibe transferencias de clientes (Nequi, Daviplata, Bre-B)',
+      type: 'checkbox',
+      hint: 'Aparece como opción al cobrar. Solo aplica a cuentas bancarias.',
+    },
+    { name: 'active', label: 'Destino activo', type: 'checkbox', value: true },
+  ];
   const invoke = async (path: string, body: unknown) => {
     try {
       await api(path, body);
@@ -564,42 +609,7 @@ export function Settings() {
           action={
             <button
               className="button primary small"
-              onClick={() =>
-                businessForm('Registrar caja o cuenta', 'save_location', [
-                  { name: 'name', label: 'Nombre del destino', required: true },
-                  {
-                    name: 'type',
-                    label: 'Tipo',
-                    type: 'select',
-                    required: true,
-                    value: 'bank',
-                    options: [
-                      { value: 'bank', label: 'Cuenta bancaria de un admin' },
-                      { value: 'treasury', label: 'Caja principal en custodia' },
-                    ],
-                  },
-                  {
-                    name: 'custodianId',
-                    label: 'Administrador que recibe y custodia',
-                    type: 'select',
-                    required: true,
-                    options: profiles
-                      .filter((x) => x.active && x.role === 'admin')
-                      .map((x) => ({ value: x.id, label: x.name })),
-                  },
-                  { name: 'bank', label: 'Banco (si es cuenta)' },
-                  { name: 'account', label: 'Cuenta o referencia para consignar' },
-                  {
-                    name: 'openingBalance',
-                    label: 'Saldo inicial del negocio bajo esta custodia',
-                    type: 'money',
-                    value: 0,
-                    min: 0,
-                    required: true,
-                  },
-                  { name: 'active', label: 'Destino activo', type: 'checkbox', value: true },
-                ])
-              }
+              onClick={() => businessForm('Registrar caja o cuenta', 'save_location', locationFields(false))}
             >
               <Plus size={16} />
               Registrar destino
@@ -617,9 +627,25 @@ export function Settings() {
                 <small>
                   {l.type === 'bank' ? `${l.bank} · ${l.account}` : 'Caja principal'} ·{' '}
                   {profiles.find((x) => x.id === l.custodianId)?.name}
+                  {l.receivesSales ? ' · Recibe transferencias de clientes' : ''}
                 </small>
               </div>
               <Badge tone={l.active ? 'green' : 'neutral'}>{l.active ? 'Activo' : 'Inactivo'}</Badge>
+              <button
+                className="text-button"
+                aria-label={`Editar ${l.name}`}
+                onClick={() =>
+                  businessForm(
+                    'Editar caja o cuenta',
+                    'save_location',
+                    locationFields(true),
+                    { ...l },
+                    { id: l.id },
+                  )
+                }
+              >
+                Editar
+              </button>
             </div>
           ))}
           {!state.locations.length && <Empty title="Registra quién recibirá los remanentes" />}

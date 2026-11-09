@@ -1124,6 +1124,24 @@ strong {
   margin-top: 7px;
   font-size: 10px;
 }
+.payment-picker {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.payment-picker .segmented {
+  display: flex;
+  overflow-x: auto;
+}
+.payment-picker .segmented button {
+  flex: 1;
+  font-size: 12px;
+  min-height: 38px;
+}
+.payment-picker input {
+  padding: 9px 12px;
+  font-size: 12px;
+}
 .open-order-picker {
   padding: 10px 18px;
   background: #f7faf1;
