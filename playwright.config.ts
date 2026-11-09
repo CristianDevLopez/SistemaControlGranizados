@@ -18,7 +18,13 @@ export default defineConfig({
       command:
         'npm run build:e2e && node node_modules/vite/bin/vite.js preview --outDir .local/e2e-dist --host 127.0.0.1 --port 5174 --strictPort',
       url: 'http://127.0.0.1:5174',
-      env: { VITE_TEST_GATEWAY: 'http://127.0.0.1:5180/dexter' },
+      // Valores ficticios: las pruebas simulan Supabase Auth con page.route. Al venir del proceso,
+      // tienen prioridad sobre un .env.local y evitan que la compilación e2e apunte al proyecto real.
+      env: {
+        VITE_TEST_GATEWAY: 'http://127.0.0.1:5180/dexter',
+        VITE_SUPABASE_URL: 'http://127.0.0.1:5180',
+        VITE_SUPABASE_PUBLISHABLE_KEY: 'e2e-clave-publicable-ficticia',
+      },
       reuseExistingServer: false,
       timeout: 120000,
     },
