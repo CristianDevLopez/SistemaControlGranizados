@@ -99,6 +99,7 @@ export function fixture(): State {
       account: 'solo-pruebas',
       active: true,
       openingBalance: 0,
+      receivesSales: true,
     },
   ];
   s.parameters = [

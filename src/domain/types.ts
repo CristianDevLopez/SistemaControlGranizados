@@ -107,9 +107,16 @@ export interface Payment {
   cashierId: ID;
   amount: number;
   type: 'cash' | 'refund';
+  /** Medio de pago; si falta es efectivo (registros anteriores a las transferencias). */
+  method?: PaymentMethod;
+  /** Cuenta que recibió o devolvió una transferencia. */
+  accountId?: ID;
+  /** Número de comprobante opcional de la transferencia. */
+  reference?: string;
   at: string;
   eventId: ID;
 }
+export type PaymentMethod = 'cash' | 'transfer';
 export interface Delivery {
   id: ID;
   orderId: ID;
@@ -215,6 +222,8 @@ export interface MoneyLocation {
   account?: string;
   active: boolean;
   openingBalance?: number;
+  /** La cuenta recibe transferencias de clientes por ventas (Nequi, Daviplata, banco). */
+  receivesSales?: boolean;
 }
 export interface Transfer {
   id: ID;

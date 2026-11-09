@@ -12,6 +12,8 @@ import {
   type ID,
   type Order,
   type OrderLine,
+  type Payment,
+  type PaymentMethod,
   type Promotion,
   type Request,
   type Result,
@@ -164,7 +166,9 @@ export function cashExpected(state: State, shiftId: string, at?: string): number
   const before = (date: string) => !at || date <= at;
   return (
     shift.base +
-    state.payments.filter((x) => x.shiftId === shiftId && before(x.at)).reduce((n, x) => n + x.amount, 0) -
+    state.payments
+      .filter((x) => x.shiftId === shiftId && paymentMethod(x) === 'cash' && before(x.at))
+      .reduce((n, x) => n + x.amount, 0) -
     state.expenses
       .filter((x) => x.shiftId === shiftId && x.source === 'cash' && x.status === 'approved' && before(x.at))
       .reduce((n, x) => n + x.amount, 0) +
@@ -193,9 +197,28 @@ export function openingExpectedCash(state: State): number | null {
   );
   return last.cash - executed.reduce((n, x) => n + x.amount, 0);
 }
+/** Medio de un pago; los registros anteriores a las transferencias son efectivo. */
+export const paymentMethod = (x: Pick<Payment, 'method'>): PaymentMethod => x.method ?? 'cash';
+/** Lo cobrado en un turno por medio de pago; las transferencias también por cuenta (reembolsos restan). */
+export function salesByMethod(state: State, shiftId: string) {
+  const totals = { cash: 0, transfer: 0, transferCount: 0, byAccount: {} as Record<ID, number> };
+  for (const x of state.payments)
+    if (x.shiftId === shiftId) {
+      if (paymentMethod(x) === 'cash') totals.cash += x.amount;
+      else {
+        totals.transfer += x.amount;
+        if (x.amount > 0) totals.transferCount++;
+        totals.byAccount[x.accountId!] = (totals.byAccount[x.accountId!] ?? 0) + x.amount;
+      }
+    }
+  return totals;
+}
 export function locationBalance(state: State, locationId: string): number {
   return (
     (state.locations.find((x) => x.id === locationId)?.openingBalance ?? 0) +
+    state.payments
+      .filter((x) => paymentMethod(x) === 'transfer' && x.accountId === locationId)
+      .reduce((sum, x) => sum + x.amount, 0) +
     state.transfers
       .filter((x) => x.status === 'confirmed' && x.type === 'transfer' && x.to === locationId)
       .reduce((sum, x) => sum + x.amount, 0) -
@@ -354,6 +377,29 @@ export function applyCommand(
       'Turno abierto',
     );
   };
+  /**
+   * Medio de pago pedido en la operación. Sin indicar, usa el del pago de referencia (reembolsos) o
+   * efectivo. Una venta por transferencia exige una cuenta activa que recibe ventas; un reembolso, una
+   * cuenta activa del negocio.
+   */
+  const paymentFields = (
+    original?: Payment,
+    refund = false,
+  ): Pick<Payment, 'method' | 'accountId' | 'reference'> => {
+    const method = p.method ?? (original ? paymentMethod(original) : 'cash');
+    assert(method === 'cash' || method === 'transfer', 'Medio de pago inválido.');
+    if (method === 'cash') return { method };
+    const accountId = p.accountId ?? (p.method === undefined ? original?.accountId : undefined);
+    const account = required(
+      state.locations.find(
+        (x) => x.id === accountId && x.active && x.type === 'bank' && (refund || x.receivesSales === true),
+      ),
+      'Cuenta que recibe la transferencia',
+    );
+    const reference = typeof p.reference === 'string' ? p.reference.trim().slice(0, 80) : '';
+    return { method, accountId: account.id, ...(reference ? { reference } : {}) };
+  };
+  const originalPayment = (orderId?: ID) => state.payments.find((x) => x.orderId === orderId && x.amount > 0);
   const findOrder = () =>
     required(
       state.orders.find((x) => x.id === p.orderId),
@@ -926,6 +972,7 @@ export function applyCommand(
         cashierId: shift.cashierId,
         amount: total,
         type: 'cash',
+        ...paymentFields(),
         at: originalAt,
         eventId: command.id,
       });
@@ -1039,6 +1086,7 @@ export function applyCommand(
           cashierId: actor.id,
           amount,
           type: amount < 0 ? 'refund' : 'cash',
+          ...paymentFields(amount < 0 ? originalPayment(order.replacesId) : undefined, amount < 0),
           at: command.at,
           eventId: command.id,
         });
@@ -1320,6 +1368,7 @@ export function applyCommand(
           cashierId: actor.id,
           amount: -order.total,
           type: 'refund',
+          ...paymentFields(originalPayment(order.id), true),
           at: command.at,
           eventId: command.id,
         });
@@ -1578,6 +1627,7 @@ export function applyCommand(
         account: String(p.account ?? '').slice(0, 80),
         active: p.active !== false,
         openingBalance: prior?.openingBalance ?? money(p.openingBalance ?? 0, 'Saldo inicial', true),
+        receivesSales: p.type === 'bank' && p.receivesSales === true,
       };
       assert(['treasury', 'bank'].includes(location.type), 'Tipo de destino inválido.');
       if (location.type === 'bank') {
