@@ -12,7 +12,7 @@ La migración conserva el negocio existente como **Local principal**, activo, si
 
 ## Probar la aplicación
 
-Para incorporar un desarrollador, consultar [accesos y configuración local](docs/COLABORACION.md).
+Para incorporar un desarrollador, consultar [accesos y configuración local](docs/COLABORACION.md). Para desarrollar sin credenciales ni tocar la base real: `npm run dev:local` (sandbox en http://127.0.0.1:5174, ver la misma guía).
 
 Publicación para revisión: **https://dexter-granizados.vercel.app**. Cuenta `cristiandevlopez@gmail.com`, equipo `crisdevlopez`, proyecto `dexter-granizados`. Se mantuvo el plan gratuito Hobby por decisión del titular. La restricción de ese plan a uso personal no comercial debe resolverse antes de operar el negocio.
 

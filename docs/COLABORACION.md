@@ -4,7 +4,23 @@ Verificado el 9 de noviembre de 2026. Aplicación publicada: https://dexter-gran
 
 Se envió la invitación de GitHub a **OneTwoDan** con escritura y la de Supabase a **daniel_lon@hotmail.com** como **Developer**. El colaborador debe aceptarlas; la invitación de Supabase vence en 24 horas. No se creó una cuenta dentro de la aplicación.
 
-## Ejecutar el frontend en local
+## Sandbox 100 % local (recomendado para desarrollar)
+
+No necesita credenciales ni `.env.local` y nunca toca la base real. Levanta el backend de pruebas (el mismo gateway y las mismas migraciones sobre PGlite en memoria) y Vite apuntando a él:
+
+```powershell
+npm ci
+npm run dev:local
+```
+
+Abrir http://127.0.0.1:5174 y entrar por **Administrador** con `admin@test.invalid` o, como superadministrador de prueba, `owner@test.invalid`; cualquier contraseña. No hay MFA. `Ctrl + C` detiene ambos procesos.
+
+- Usa los puertos **5174** (app) y **5180** (backend); el backend solo acepta CORS desde `http://127.0.0.1:5174`. Detener el sandbox antes de `npm run test:e2e` o `npm ci`, que usan esos puertos y archivos.
+- Los datos viven en memoria y se pierden al detenerlo. Si la app muestra una sesión anterior, abrir una ventana de incógnito.
+- Aunque exista un `.env.local` con el proyecto real, el sandbox lo anula y no crea cliente de Supabase. La recuperación de contraseña no está disponible aquí.
+- La entrada de caja con PIN requiere registrar el dispositivo como hacen las pruebas e2e; para la mayoría de los flujos basta entrar como admin.
+
+## Ejecutar el frontend contra el backend desplegado
 
 1. Instalar Node.js 24 LTS y Git.
 2. Aceptar la invitación de GitHub y clonar el [repositorio privado](https://github.com/CristianDevLopez/SistemaControlGranizados):
