@@ -1,0 +1,10 @@
+# Saltos de línea LF en todas las plataformas (Prettier y el CI los exigen).
+* text=auto eol=lf
+
+# Binarios
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.docx binary
+*.zip binary
