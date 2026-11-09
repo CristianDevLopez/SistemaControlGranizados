@@ -205,8 +205,8 @@ export function Settings() {
                               `Configurar ${s.name}`,
                               'save_size',
                               [
-                                { name: 'alcoholPrice', label: 'Precio con licor', type: 'number', min: 1 },
-                                { name: 'plainPrice', label: 'Precio sin licor', type: 'number', min: 1 },
+                                { name: 'alcoholPrice', label: 'Precio con licor', type: 'money', min: 1 },
+                                { name: 'plainPrice', label: 'Precio sin licor', type: 'money', min: 1 },
                                 {
                                   name: 'ounces',
                                   label: 'Onzas efectivas de granizado',
@@ -256,14 +256,14 @@ export function Settings() {
               {
                 name: 'cashLimit',
                 label: 'Tope de efectivo por caja',
-                type: 'number',
+                type: 'money',
                 min: 0,
                 required: true,
               },
               {
                 name: 'expenseLimit',
                 label: 'Tope de un gasto pagado desde caja',
-                type: 'number',
+                type: 'money',
                 min: 0,
                 required: true,
               },
@@ -592,7 +592,7 @@ export function Settings() {
                   {
                     name: 'openingBalance',
                     label: 'Saldo inicial del negocio bajo esta custodia',
-                    type: 'number',
+                    type: 'money',
                     value: 0,
                     min: 0,
                     required: true,
@@ -661,7 +661,7 @@ export function Settings() {
                       value: localDateTime(new Date(Date.now() + 7 * 86400000)),
                     },
                     { name: 'cups', label: 'Meta en vasos', type: 'number', min: 0, required: true },
-                    { name: 'amount', label: 'Meta en pesos', type: 'number', min: 0, required: true },
+                    { name: 'amount', label: 'Meta en pesos', type: 'money', min: 0, required: true },
                   ],
                   save: async (v) => {
                     await app.run('save_goal', { ...v, startsAt: utc(v.startsAt), endsAt: utc(v.endsAt) });

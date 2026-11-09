@@ -19,7 +19,8 @@ import { getMeta, setMeta } from '../lib/db.ts';
 import { lineTotal } from '../domain/pricing.ts';
 import { isShiftCashier } from '../domain/access.ts';
 import type { Order, OrderLine } from '../domain/types.ts';
-import { Badge, Empty, FieldsForm, Modal, money, date, stateNames } from './components.tsx';
+import { Badge, Empty, FieldsForm, Modal, MoneyInput, money, date, stateNames } from './components.tsx';
+import { parseMoney } from '../lib/money.ts';
 
 export function Scanner({ onCode, onClose }: { onCode: (code: string) => void; onClose: () => void }) {
   const video = useRef<HTMLVideoElement>(null),
@@ -144,15 +145,18 @@ function Checkout({ order, onClose, onDone }: { order: Order; onClose: () => voi
             <span>
               Efectivo recibido <small>Opcional</small>
             </span>
-            <input
-              type="number"
-              inputMode="numeric"
-              min={due}
+            <MoneyInput
               value={tendered}
-              onChange={(e) => setTendered(e.target.value)}
-              placeholder={String(due)}
+              onChange={(text) => setTendered(text)}
+              placeholder={money(due)}
+              preview={false}
             />
-            {tendered && <small>Vuelto: {money(Math.max(0, Number(tendered) - due))}</small>}
+            {parseMoney(tendered) !== null &&
+              (parseMoney(tendered)! >= due ? (
+                <small>Vuelto: {money(parseMoney(tendered)! - due)}</small>
+              ) : (
+                <small className="warning-text">Faltan {money(due - parseMoney(tendered)!)}</small>
+              ))}
           </label>
         ) : (
           <label className="field">

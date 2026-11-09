@@ -9,13 +9,15 @@ async function nav(page: Page, name: string) {
   await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
 }
 
+// Los montos se escriben como en Colombia, con punto de miles ("12.000").
+const pesos = (value: number) => value.toLocaleString('es-CO');
 async function count(page: Page, cash: number, retained?: number) {
   const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('Efectivo contado *', { exact: true }).fill(String(cash));
+  await dialog.getByLabel('Efectivo contado *', { exact: true }).fill(pesos(cash));
   if (retained !== undefined)
     await dialog
       .getByLabel('Efectivo reservado para la siguiente apertura', { exact: false })
-      .fill(String(retained));
+      .fill(pesos(retained));
   for (const input of await dialog.locator('.count-list input').all()) await input.fill('0');
   for (const input of await dialog.locator('input[type="checkbox"][required]').all()) await input.check();
   await dialog.getByRole('button', { name: 'Registrar conteo', exact: true }).click();
@@ -41,13 +43,17 @@ for (const account of [
       await page.getByLabel('Vista de la aplicación').selectOption('admin');
     await nav(page, 'Turno y caja');
     await page.getByRole('button', { name: 'Iniciar caja', exact: true }).click();
-    await page.getByRole('dialog').getByLabel('Base inicial', { exact: false }).fill('12000');
+    await page.getByRole('dialog').getByLabel('Base inicial', { exact: false }).fill('12.000');
+    await expect(page.getByRole('dialog').locator('.money-preview')).toHaveText(/12\.000/);
     await page.getByRole('dialog').getByRole('button', { name: 'Guardar', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Conteo de apertura', exact: true })).toBeVisible();
     await count(page, 12000);
     await expect(page.getByRole('button', { name: 'Autorizar apertura', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Cerrar y contar caja', exact: true })).toBeVisible();
-    await expect(page.getByRole('row').filter({ hasText: 'Apertura' })).toContainText(account.name);
+    const opening = page.getByRole('row').filter({ hasText: 'Apertura' });
+    await expect(opening).toContainText(account.name);
+    // Contado y esperado completos ($12.000) y diferencia $0: "12.000" no se lee como $12.
+    await expect(opening).toContainText(/12\.000.*12\.000.*\$\s?0(?!\d)/);
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.screenshot({ path: testInfo.outputPath('caja-admin-iniciada.png'), fullPage: true });
     await nav(page, 'Mostrador');

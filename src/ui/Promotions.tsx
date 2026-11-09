@@ -282,7 +282,7 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
       hint: 'Si tiene límite global, su aplicación requiere conexión.',
     },
     ...(effect === 'fixed'
-      ? [{ name: 'fixedPrice', label: 'Precio promocional', type: 'number' as const, required: true, min: 1 }]
+      ? [{ name: 'fixedPrice', label: 'Precio promocional', type: 'money' as const, required: true, min: 1 }]
       : effect === 'upgrade'
         ? [
             {

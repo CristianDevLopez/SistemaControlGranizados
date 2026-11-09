@@ -1378,6 +1378,15 @@ td .button {
   font-size: 11px;
   line-height: 1.6;
 }
+.field .money-preview {
+  color: var(--teal);
+  font-weight: 700;
+  min-height: 1.6em;
+}
+.field .warning-text {
+  color: #a45447;
+  font-weight: 700;
+}
 .check-field {
   align-items: flex-start;
 }
