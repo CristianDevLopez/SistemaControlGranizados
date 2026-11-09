@@ -4,7 +4,7 @@ Dexter’s Granizados
 
 Guía de operación de locales para administradores propietarios encargados de caja y apoyo de mostrador
 
-Versión del manual 1   |   28 de octubre de 2026
+Versión del manual 1 | 28 de octubre de 2026
 
 Este manual explica cómo preparar un local, atender pedidos, registrar entregas y cobros, controlar mercancía y cerrar la jornada. También enseña a revisar novedades y a conservar la información cuando se pierde la conexión. Sigue el procedimiento correspondiente a tu rol y comprueba siempre el local y el turno antes de registrar una operación.
 
@@ -14,18 +14,18 @@ La aplicación se abre en https://dexter-granizados.vercel.app. Los importes se 
 
 La aplicación tiene tres roles de operación. El propietario utiliza una cuenta de administrador y, además, tiene acceso a la gestión de los locales de su negocio. El acceso privado de superadministrador se explica en un manual independiente.
 
-| Actividad | Administrador | Encargado de caja | Apoyo de mostrador |
-|---|---|---|---|
-| Crear pedidos y registrar entregas | Sí con turno disponible | Sí | Sí con conexión |
-| Cobrar pedidos | Solo su propio turno conectado | Solo su turno y equipo principal | No |
-| Abrir caja | Inicia su propia caja conectado o autoriza la solicitud del encargado | Solicita apertura desde el equipo principal | No |
-| Presentar apertura y cierre | Cuando es responsable del turno | Cuando es responsable del turno | No |
-| Abrir bolsas y paquetes y reportar daños | Sí durante la operación | Sí durante la operación | Sí con conexión |
-| Registrar recepción física de mercancía | Sí | Sí | Sí con conexión |
-| Registrar gastos y movimientos de dinero | Según origen y responsabilidad de caja | Según permisos y límites de caja | No |
-| Ver saldos teóricos y revisar diferencias | Sí | Conteos propios sin esperados ni diferencias | Sin saldos teóricos |
-| Configurar catálogo promociones equipo y metas | Sí con conexión y doble factor | No | No |
-| Solicitar locales y consultar mensualidades | Solo si es propietario | No | No |
+| Actividad                                      | Administrador                                                         | Encargado de caja                            | Apoyo de mostrador  |
+| ---------------------------------------------- | --------------------------------------------------------------------- | -------------------------------------------- | ------------------- |
+| Crear pedidos y registrar entregas             | Sí con turno disponible                                               | Sí                                           | Sí con conexión     |
+| Cobrar pedidos                                 | Solo su propio turno conectado                                        | Solo su turno y equipo principal             | No                  |
+| Abrir caja                                     | Inicia su propia caja conectado o autoriza la solicitud del encargado | Solicita apertura desde el equipo principal  | No                  |
+| Presentar apertura y cierre                    | Cuando es responsable del turno                                       | Cuando es responsable del turno              | No                  |
+| Abrir bolsas y paquetes y reportar daños       | Sí durante la operación                                               | Sí durante la operación                      | Sí con conexión     |
+| Registrar recepción física de mercancía        | Sí                                                                    | Sí                                           | Sí con conexión     |
+| Registrar gastos y movimientos de dinero       | Según origen y responsabilidad de caja                                | Según permisos y límites de caja             | No                  |
+| Ver saldos teóricos y revisar diferencias      | Sí                                                                    | Conteos propios sin esperados ni diferencias | Sin saldos teóricos |
+| Configurar catálogo promociones equipo y metas | Sí con conexión y doble factor                                        | No                                           | No                  |
+| Solicitar locales y consultar mensualidades    | Solo si es propietario                                                | No                                           | No                  |
 
 Si eres encargado de caja, comienza por acceso, apertura, pedidos, inventario, recepción, cierre y sincronización. Si eres apoyo, lee acceso, pedidos, entregas, degustaciones, inventario y recepción. Si eres administrador, revisa el manual completo antes de preparar el primer turno.
 
@@ -71,17 +71,17 @@ En escritorio, el menú está a la izquierda. En un teléfono, pulsa el botón d
 
 ![Mostrador y navegación del administrador en un entorno de capacitación](capturas/administrador-mostrador.png)
 
-| Pantalla | Para qué se utiliza |
-|---|---|
-| Mostrador | Preparar pedidos degustaciones entregas y cobros autorizados |
-| Pedidos | Buscar y revisar tickets entregar pendientes tramitar anulaciones e ingresar planillas cuando se tiene permiso |
-| Inventario | Abrir bolsas y paquetes registrar daños y consultar el control disponible para tu rol |
-| Turno y caja | Solicitar o iniciar turnos contar efectivo cerrar caja y registrar movimientos de dinero autorizados |
-| Compras y gastos | Crear compras y envíos recibir mercancía y registrar gastos permitidos |
-| Promociones | Crear beneficios y emitir cupones con cuenta administrativa |
-| Control y aprobaciones | Revisar solicitudes diferencias avisos auditoría y exportar información con cuenta administrativa |
-| Configuración | Administrar catálogo parámetros usuarios dispositivos destinos de dinero metas e histórico |
-| Locales y mensualidades | Solicitudes y consulta del propietario o gestión del desarrollador |
+| Pantalla                | Para qué se utiliza                                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Mostrador               | Preparar pedidos degustaciones entregas y cobros autorizados                                                   |
+| Pedidos                 | Buscar y revisar tickets entregar pendientes tramitar anulaciones e ingresar planillas cuando se tiene permiso |
+| Inventario              | Abrir bolsas y paquetes registrar daños y consultar el control disponible para tu rol                          |
+| Turno y caja            | Solicitar o iniciar turnos contar efectivo cerrar caja y registrar movimientos de dinero autorizados           |
+| Compras y gastos        | Crear compras y envíos recibir mercancía y registrar gastos permitidos                                         |
+| Promociones             | Crear beneficios y emitir cupones con cuenta administrativa                                                    |
+| Control y aprobaciones  | Revisar solicitudes diferencias avisos auditoría y exportar información con cuenta administrativa              |
+| Configuración           | Administrar catálogo parámetros usuarios dispositivos destinos de dinero metas e histórico                     |
+| Locales y mensualidades | Solicitudes y consulta del propietario o gestión del desarrollador                                             |
 
 En **Local de trabajo**, verifica el nombre antes de registrar pedidos o dinero. Cada local conserva sus datos de operación por separado y admite una caja operativa a la vez. Una cuenta propietaria puede ver varios locales; los empleados y administradores adicionales ven los que les correspondan.
 
@@ -110,19 +110,19 @@ Las onzas y los consumos físicos deben representar el producto real: si se conf
 
 En **Configuración → Parámetros**, completa los campos y pulsa **Publicar configuración**. Los cambios administrativos se guardan con tu identidad sin esperar aprobación de otro administrador.
 
-| Parámetro | Uso práctico |
-|---|---|
-| Nombre del negocio | Identifica la operación en el contexto del local |
-| Tope de efectivo por caja | Genera control sobre la acumulación de dinero |
-| Tope de un gasto pagado desde caja | Limita los gastos que se pueden registrar con ese origen |
-| Categorías permitidas desde caja | Define qué conceptos pueden pagarse desde la caja |
-| Cortesías por admin al mes | Controla la cuota de emisión marcada como cortesía |
-| Vasos por paquete y onzas por bolsa | Referencias para registrar la apertura de insumos |
-| Tolerancia de líquido | Determina alertas de pérdida estimada y no descuentos automáticos |
-| Aviso tras minutos sin sincronizar | Señala cuánto tiempo lleva el equipo sin actualizar |
-| Omitir conteo de apertura por contingencia | Permite dejarlo pendiente si el negocio habilita esa excepción |
-| Línea base | Identifica la etapa de medición del consumo de líquido |
-| Checklist de apertura y cierre | Una tarea por línea que el responsable confirma al presentar el conteo |
+| Parámetro                                  | Uso práctico                                                           |
+| ------------------------------------------ | ---------------------------------------------------------------------- |
+| Nombre del negocio                         | Identifica la operación en el contexto del local                       |
+| Tope de efectivo por caja                  | Genera control sobre la acumulación de dinero                          |
+| Tope de un gasto pagado desde caja         | Limita los gastos que se pueden registrar con ese origen               |
+| Categorías permitidas desde caja           | Define qué conceptos pueden pagarse desde la caja                      |
+| Cortesías por admin al mes                 | Controla la cuota de emisión marcada como cortesía                     |
+| Vasos por paquete y onzas por bolsa        | Referencias para registrar la apertura de insumos                      |
+| Tolerancia de líquido                      | Determina alertas de pérdida estimada y no descuentos automáticos      |
+| Aviso tras minutos sin sincronizar         | Señala cuánto tiempo lleva el equipo sin actualizar                    |
+| Omitir conteo de apertura por contingencia | Permite dejarlo pendiente si el negocio habilita esa excepción         |
+| Línea base                                 | Identifica la etapa de medición del consumo de líquido                 |
+| Checklist de apertura y cierre             | Una tarea por línea que el responsable confirma al presentar el conteo |
 
 Mientras se mide la línea base, la tolerancia puede permanecer sin configurar. Los cambios de parámetros y listas de chequeo conservan la versión utilizada en los registros anteriores.
 
@@ -519,18 +519,18 @@ Para recuperación, comprueba correo escrito, spam y vigencia del enlace. Para u
 
 ## 18 Términos y apoyo
 
-| Término | Significado en la aplicación |
-|---|---|
-| Local | Unidad de operación con su propia caja inventario y ventas |
-| Turno | Periodo de caja asociado a un responsable |
-| Base | Efectivo inicial o reservado para la siguiente apertura |
-| Remanente | Parte del efectivo del cierre que se debe entregar o consignar |
-| Saldo teórico | Resultado de movimientos registrados que se compara con lo físico |
-| Recepción a ciegas | Registro de lo recibido antes de consultar lo esperado |
-| Evidencia | Fotografía o comprobante vinculado a una operación |
-| En tránsito | Movimiento ejecutado pendiente de confirmación del receptor |
-| Por conciliar | Operación que necesita revisión antes de continuar la sincronización |
-| Mensualidad | Cobro manual del servicio por un local y un mes calendario |
+| Término            | Significado en la aplicación                                         |
+| ------------------ | -------------------------------------------------------------------- |
+| Local              | Unidad de operación con su propia caja inventario y ventas           |
+| Turno              | Periodo de caja asociado a un responsable                            |
+| Base               | Efectivo inicial o reservado para la siguiente apertura              |
+| Remanente          | Parte del efectivo del cierre que se debe entregar o consignar       |
+| Saldo teórico      | Resultado de movimientos registrados que se compara con lo físico    |
+| Recepción a ciegas | Registro de lo recibido antes de consultar lo esperado               |
+| Evidencia          | Fotografía o comprobante vinculado a una operación                   |
+| En tránsito        | Movimiento ejecutado pendiente de confirmación del receptor          |
+| Por conciliar      | Operación que necesita revisión antes de continuar la sincronización |
+| Mensualidad        | Cobro manual del servicio por un local y un mes calendario           |
 
 Para solicitar ayuda, informa local, usuario, pantalla, hora aproximada, número de pedido o referencia de operación, mensaje exacto y si hubo dinero o productos entregados. Indica si existen pendientes o fotografías en el equipo. No compartas tu contraseña, PIN ni código de autenticación.
 

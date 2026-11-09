@@ -4,7 +4,7 @@ Dexter’s Granizados
 
 Guía para el desarrollador que administra propietarios locales accesos y mensualidades del servicio
 
-Versión del manual 1   |   28 de octubre de 2026
+Versión del manual 1 | 28 de octubre de 2026
 
 Este manual explica el acceso privado del desarrollador, la gestión de negocios y locales, las mensualidades manuales y la supervisión de la operación. Su objetivo es permitirte incorporar propietarios, activar sucursales, registrar cobros y pagos y atender incidencias conservando la identidad y la información de cada local.
 
@@ -16,13 +16,13 @@ El manual de administradores y empleados acompaña este documento con el detalle
 
 El superadministrador representa al desarrollador de la plataforma. Puede consultar los locales disponibles, registrar propietarios, revisar solicitudes de nuevos locales, configurar tarifas, activar o cambiar el estado del servicio y llevar el registro manual de mensualidades y pagos. También puede trabajar sobre la operación de un local con su identidad real y cambiar de vista para consultar el funcionamiento de los roles.
 
-| Cuenta o vista | Alcance |
-|---|---|
-| Superadministrador | Gestión de propietarios locales y mensualidades y acceso a la operación del local seleccionado |
-| Administrador propietario | Operación administrativa de su negocio solicitud de locales y consulta de sus mensualidades |
-| Administrador del equipo | Administración del local asignado sin convertirse automáticamente en propietario |
-| Encargado de caja | Operación y cobro de su turno desde el equipo autorizado |
-| Apoyo de mostrador | Pedidos entregas y tareas permitidas con conexión sin cobro |
+| Cuenta o vista            | Alcance                                                                                        |
+| ------------------------- | ---------------------------------------------------------------------------------------------- |
+| Superadministrador        | Gestión de propietarios locales y mensualidades y acceso a la operación del local seleccionado |
+| Administrador propietario | Operación administrativa de su negocio solicitud de locales y consulta de sus mensualidades    |
+| Administrador del equipo  | Administración del local asignado sin convertirse automáticamente en propietario               |
+| Encargado de caja         | Operación y cobro de su turno desde el equipo autorizado                                       |
+| Apoyo de mostrador        | Pedidos entregas y tareas permitidas con conexión sin cobro                                    |
 
 El privilegio del desarrollador no representa varias personas. La identidad registrada en los cambios sigue siendo la tuya. Los tres votos que exige una salida administrativa corresponden a tres administradores distintos, y las anulaciones mantienen sus restricciones de participación en la venta.
 
@@ -143,12 +143,12 @@ La tarifa puede ser **0** para una exención explícita. **Tarifa por configurar
 
 ### Estados del local
 
-| Estado | Qué permite y cuándo utilizarlo |
-|---|---|
-| Pendiente de activación | Existe la solicitud y se consulta su información pero no se opera |
-| Activo | Admite la operación del local según los roles y permite registrar mensualidades |
-| Suspendido | Conserva el histórico de consulta y bloquea nuevas operaciones del local |
-| Archivado | Conserva la información de un local fuera de operación |
+| Estado                  | Qué permite y cuándo utilizarlo                                                 |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| Pendiente de activación | Existe la solicitud y se consulta su información pero no se opera               |
+| Activo                  | Admite la operación del local según los roles y permite registrar mensualidades |
+| Suspendido              | Conserva el histórico de consulta y bloquea nuevas operaciones del local        |
+| Archivado               | Conserva la información de un local fuera de operación                          |
 
 Para suspender o archivar, cierra y sincroniza los turnos solicitados, abiertos o provisionales. La aplicación bloquea el cambio si encuentra uno. Coordina la revisión de equipos y pendientes antes de hacerlo: un dispositivo desconectado no recibe cambios remotos hasta reconectarse.
 
@@ -213,13 +213,13 @@ La aplicación no reparte automáticamente un pago entre locales o meses. Regist
 
 ### Estados de una mensualidad
 
-| Estado | Interpretación |
-|---|---|
-| Pendiente | Tiene saldo y no registra pagos ni está vencida |
-| Pago parcial | Tiene abonos y saldo pendiente antes del vencimiento |
-| Pagada | El saldo es cero |
-| Vencida | Tiene saldo y pasó la fecha límite de pago |
-| Anulada | Se anuló el registro sin pagos conservando el histórico |
+| Estado       | Interpretación                                          |
+| ------------ | ------------------------------------------------------- |
+| Pendiente    | Tiene saldo y no registra pagos ni está vencida         |
+| Pago parcial | Tiene abonos y saldo pendiente antes del vencimiento    |
+| Pagada       | El saldo es cero                                        |
+| Vencida      | Tiene saldo y pasó la fecha límite de pago              |
+| Anulada      | Se anuló el registro sin pagos conservando el histórico |
 
 Una mensualidad con abonos también se muestra vencida si pasó su fecha límite y aún tiene saldo. **Pagada** describe la suma de registros manuales; no reemplaza la comprobación del dinero recibido.
 
