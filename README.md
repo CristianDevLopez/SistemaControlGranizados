@@ -21,7 +21,7 @@ npm ci
 npm run dev
 ```
 
-Abrir la URL que imprime Vite. La configuración pública de este equipo ya apunta al proyecto **Dexter's Granizados**, referencia `nglfyhcrpxuuqqnaeevf`, en **CristianDevLopez's Org**. Las migraciones y la función `dexter` están desplegadas. El proyecto anterior ControlApp se mantiene separado.
+Abrir la URL que imprime Vite. La configuración pública de este equipo ya apunta al proyecto **Dexter's Granizados**, referencia `nglfyhcrpxuuqqnaeevf`, en la organización **Granizados**. Las migraciones y la función `dexter` están desplegadas. El proyecto anterior ControlApp se mantiene en **CristianDevLopez's Org**, con accesos independientes.
 
 No hay sabores, usuarios ni ventas de demostración en la base real. Los precios iniciales sí provienen de la hoja Supuestos del presupuesto: 12/16/20/24 oz; con licor $14.000/$17.000/$19.500/$23.000; sin licor $10.000/$12.000/$14.500/$17.000. La nevera de 3 litros queda inactiva hasta completar su configuración.
 

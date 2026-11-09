@@ -1,6 +1,8 @@
 # Incorporación de un colaborador
 
-Verificado el 9 de noviembre de 2026. Aplicación publicada: https://dexter-granizados.vercel.app. Backend: **Dexter's Granizados**, proyecto Supabase `nglfyhcrpxuuqqnaeevf`. **ControlApp es otro proyecto**.
+Verificado el 9 de noviembre de 2026. Aplicación publicada: https://dexter-granizados.vercel.app. Backend: **Dexter's Granizados**, proyecto Supabase `nglfyhcrpxuuqqnaeevf`, en la organización **Granizados** (Free). **ControlApp permanece en otra organización**.
+
+Se envió la invitación de GitHub a **OneTwoDan** con escritura y la de Supabase a **daniel_lon@hotmail.com** como **Developer**. El colaborador debe aceptarlas; la invitación de Supabase vence en 24 horas. No se creó una cuenta dentro de la aplicación.
 
 ## Ejecutar el frontend en local
 
@@ -41,7 +43,11 @@ El archivo `.local/OneTwoDan.env.local` del equipo del titular contiene solo las
 | Panel de Supabase | Modificar SQL, migraciones o Edge Functions | Invitación por correo con rol Developer                                             |
 | Vercel            | Administrar el alojamiento o publicar       | Acceso individual al equipo si el plan lo permite; no hace falta para `npm run dev` |
 
-En Supabase, invitar desde [Team de la organización](https://supabase.com/dashboard/org/tkanuegliaftmkkgslvl/team). Los roles limitados a un proyecto requieren Team o Enterprise; un rol de organización alcanza todos sus proyectos, incluido ControlApp. Confirmar ese alcance antes de invitar. Ver [permisos oficiales](https://supabase.com/docs/guides/platform/access-control).
+En Supabase, gestionar el acceso desde [Team de Granizados](https://supabase.com/dashboard/org/fbwdegcbkhsvsyysmfrw/team). Dexter se trasladó a esta organización para separar su acceso del de ControlApp. El rol Developer permite gestionar contenido, incluidos datos, usuarios, archivos y funciones; no permite eliminar el proyecto ni cambiar su configuración. Al ser un rol de organización, también alcanzará futuros proyectos que se creen en Granizados. Ver [permisos oficiales](https://supabase.com/docs/guides/platform/access-control).
+
+El traslado conservó la referencia del proyecto. Después se verificaron HTTP 200 en la web publicada, la función `health` y Auth con la misma clave publicable; CORS siguió aceptando el origen local. No se cambiaron las variables de Vercel.
+
+La conexión actual del plugin Supabase de Codex está autorizada para la organización anterior y no tiene acceso a Granizados. Para usar sus herramientas sobre Dexter en próximas tareas, volver a autorizar esa conexión incluyendo la organización nueva.
 
 El README registra Vercel Hobby. Ese plan no incluye colaboración de equipo; si se mantiene, el titular puede publicar los cambios revisados. Ver [planes de Vercel](https://vercel.com/docs/plans/hobby). No se ha cambiado el plan ni enviado una invitación a Vercel.
 
