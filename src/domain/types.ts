@@ -319,7 +319,10 @@ export interface Audit {
   eventId: ID;
   by: ID;
   deviceId: ID;
+  /** Hora con la que se registró (ver effectiveAt). */
   at: string;
+  /** Hora que informó el dispositivo, solo cuando se corrigió. */
+  reportedAt?: string;
   receivedAt: string;
   action: string;
   referenceId?: ID;

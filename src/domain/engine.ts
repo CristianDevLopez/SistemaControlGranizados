@@ -111,6 +111,51 @@ export function articles(state: State): { id: string; name: string; unit: string
     { id: 'coronita', name: 'Coronitas', unit: 'unidades' },
   ];
 }
+
+/** Tolerancia para una operación en línea que tardó en llegar (reintentos, red lenta). */
+export const ONLINE_LAG_MS = 10 * 60_000;
+/**
+ * Hora con la que se registra y evalúa una operación. La hora del dispositivo solo se acepta hacia
+ * adelante: una operación en línea no queda más de ONLINE_LAG_MS antes de la hora del servidor; ninguna
+ * queda antes del último evento de su dispositivo, de la apertura de su turno o de la creación de su
+ * pedido; y un cierre o arqueo nunca queda antes del último movimiento de dinero que debe incluir.
+ */
+export function effectiveAt(state: State, command: Command, actor: Actor, receivedAt: string): string {
+  const reported = Date.parse(command.at);
+  let t = reported;
+  const floor = (value: string | number | undefined) => {
+    const v = typeof value === 'string' ? Date.parse(value) : value;
+    if (v !== undefined && Number.isFinite(v) && v > t) t = v;
+  };
+  if (actor.online) floor(Date.parse(receivedAt) - ONLINE_LAG_MS);
+  // Solo operaciones del negocio: los eventos de seguridad (dexter_branch_audit) usan eventId === id
+  // y llevan la hora de la base de datos, no la del dispositivo.
+  for (const a of state.audit) if (a.deviceId === command.deviceId && a.eventId !== a.id) floor(a.at);
+  const p = (command.payload ?? {}) as Record<string, unknown>;
+  const shiftId = typeof p.shiftId === 'string' ? p.shiftId : command.shiftId;
+  floor(state.shifts.find((x) => x.id === shiftId)?.openedAt);
+  if (typeof p.orderId === 'string') floor(state.orders.find((x) => x.id === p.orderId)?.createdAt);
+  if (command.type === 'finish_audit' || (command.type === 'count' && p.kind === 'closing')) {
+    const drawer = `cash:${shiftId}`;
+    for (const x of state.payments) if (x.shiftId === shiftId) floor(x.at);
+    for (const x of state.expenses) if (x.shiftId === shiftId && x.source === 'cash') floor(x.at);
+    for (const x of state.transfers)
+      if (x.from === drawer || x.to === drawer) {
+        floor(x.executedAt);
+        floor(x.confirmedAt);
+      }
+  }
+  return t === reported ? command.at : new Date(t).toISOString();
+}
+/** Mes calendario de Colombia (UTC−5, sin horario de verano), p. ej. "2026-10". */
+export function colombiaMonth(at: string): string {
+  return new Date(Date.parse(at) - 5 * 3600_000).toISOString().slice(0, 7);
+}
+/** Normaliza una fecha recibida (con o sin zona horaria) a ISO UTC para compararla como texto. */
+function isoDate(value: unknown, label: string): string {
+  assert(typeof value === 'string' && Number.isFinite(Date.parse(value)), `${label} inválida.`);
+  return new Date(Date.parse(value)).toISOString();
+}
 export function cashExpected(state: State, shiftId: string, at?: string): number {
   const shift = required(
     state.shifts.find((x) => x.id === shiftId),
@@ -239,6 +284,8 @@ export function applyCommand(
     Date.parse(command.at) <= Date.parse(receivedAt) + 300000,
     'La hora del dispositivo está adelantada.',
   );
+  const reportedAt = command.at;
+  command = { ...command, at: effectiveAt(original, command, actor, receivedAt) };
   if (actor.role === 'admin' && actor.online)
     assert(actor.aal === 'aal2', 'Completa el doble factor.', 'FORBIDDEN');
   const prior = original.audit.find((x) => x.eventId === command.id);
@@ -1672,12 +1719,9 @@ export function applyCommand(
       assert(['fixed', 'upgrade', 'nxm', 'free'].includes(p.effect), 'Efecto desconocido.');
       assert(['schedule', 'coupon'].includes(p.delivery), 'Entrega inválida.');
       assert(p.effect !== 'free' || p.delivery === 'coupon', 'Un producto gratuito requiere cupón.');
-      assert(
-        Number.isFinite(Date.parse(p.startsAt)) &&
-          Number.isFinite(Date.parse(p.endsAt)) &&
-          p.endsAt > p.startsAt,
-        'Vigencia inválida.',
-      );
+      const startsAt = isoDate(p.startsAt, 'Vigencia'),
+        endsAt = isoDate(p.endsAt, 'Vigencia');
+      assert(endsAt > startsAt, 'Vigencia inválida.');
       const promo: Promotion = {
         id: key,
         name: text(p.name, 'Nombre', 100),
@@ -1686,8 +1730,8 @@ export function applyCommand(
         sizeIds: Array.isArray(p.sizeIds) ? p.sizeIds.map((v: unknown) => id(v)) : [],
         flavorIds: Array.isArray(p.flavorIds) ? p.flavorIds.map((v: unknown) => id(v)) : [],
         alcohol: ['all', 'yes', 'no'].includes(p.alcohol) ? p.alcohol : 'all',
-        startsAt: p.startsAt,
-        endsAt: p.endsAt,
+        startsAt,
+        endsAt,
         days: Array.isArray(p.days) ? p.days : [],
         startTime: p.startTime ?? '00:00',
         endTime: p.endTime ?? '23:59',
@@ -1740,9 +1784,9 @@ export function applyCommand(
       );
       const courtesy = p.courtesy === true;
       if (courtesy) {
-        const month = command.at.slice(0, 7),
+        const month = colombiaMonth(command.at),
           issued = state.coupons.filter(
-            (x) => x.issuedBy === actor.id && x.courtesy && x.issuedAt.startsWith(month),
+            (x) => x.issuedBy === actor.id && x.courtesy && colombiaMonth(x.issuedAt) === month,
           ).length;
         if (issued >= settings.courtesyQuota) {
           const approval = state.requests.find(
@@ -1764,10 +1808,8 @@ export function applyCommand(
         'Código de cupón inválido.',
       );
       assert(!state.coupons.some((x) => x.code === p.code), 'El código ya existe.');
-      assert(
-        Number.isFinite(Date.parse(p.expiresAt)) && p.expiresAt > command.at && p.expiresAt <= promo.endsAt,
-        'Vencimiento inválido.',
-      );
+      const expiresAt = isoDate(p.expiresAt, 'Fecha de vencimiento');
+      assert(expiresAt > command.at && expiresAt <= promo.endsAt, 'Vencimiento inválido.');
       ref = makeId('coupon');
       state.coupons.push({
         id: ref,
@@ -1775,7 +1817,7 @@ export function applyCommand(
         promotionId: promo.id,
         issuedBy: actor.id,
         issuedAt: command.at,
-        expiresAt: p.expiresAt,
+        expiresAt,
         status: 'issued',
         courtesy,
         excessApprovedBy: p.excessRequestId,
@@ -1784,19 +1826,15 @@ export function applyCommand(
     }
     case 'save_goal': {
       admin(actor);
-      assert(
-        ['week', 'month'].includes(p.period) &&
-          p.endsAt > p.startsAt &&
-          Number.isFinite(Date.parse(p.startsAt)) &&
-          Number.isFinite(Date.parse(p.endsAt)),
-        'Período inválido.',
-      );
+      const startsAt = isoDate(p.startsAt, 'Fecha del período'),
+        endsAt = isoDate(p.endsAt, 'Fecha del período');
+      assert(['week', 'month'].includes(p.period) && endsAt > startsAt, 'Período inválido.');
       ref = makeId('goal');
       state.goals.push({
         id: ref,
         period: p.period,
-        startsAt: p.startsAt,
-        endsAt: p.endsAt,
+        startsAt,
+        endsAt,
         cups: quantity(p.cups, 'Meta en vasos', 1000000, true),
         amount: money(p.amount, 'Meta en pesos', true),
         by: actor.id,
@@ -1863,6 +1901,7 @@ export function applyCommand(
     by: actor.id,
     deviceId: actor.deviceId,
     at: command.at,
+    ...(reportedAt !== command.at ? { reportedAt } : {}),
     receivedAt,
     action: command.type,
     referenceId: ref,
