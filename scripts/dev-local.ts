@@ -49,6 +49,8 @@ start(
   ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(appPort), '--strictPort'],
   {
     VITE_TEST_GATEWAY: `${backendUrl}/dexter`,
+    // Cada arranque es un sandbox nuevo: el navegador borra la sesión y los datos del anterior.
+    DEXTER_SANDBOX_ID: crypto.randomUUID(),
     // Anula un .env.local con el proyecto real: en el sandbox no debe existir cliente de Supabase.
     VITE_SUPABASE_URL: '',
     VITE_SUPABASE_PUBLISHABLE_KEY: '',

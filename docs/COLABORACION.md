@@ -16,7 +16,7 @@ npm run dev:local
 Abrir http://127.0.0.1:5174 y entrar por **Administrador** con `admin@test.invalid` o, como superadministrador de prueba, `owner@test.invalid`; cualquier contraseña. No hay MFA. `Ctrl + C` detiene ambos procesos.
 
 - Usa los puertos **5174** (app) y **5180** (backend); el backend solo acepta CORS desde `http://127.0.0.1:5174`. Detener el sandbox antes de `npm run test:e2e` o `npm ci`, que usan esos puertos y archivos.
-- Los datos viven en memoria y se pierden al detenerlo. Si la app muestra una sesión anterior, abrir una ventana de incógnito.
+- Los datos viven en memoria y se pierden al detenerlo. Por eso, en cada arranque el navegador borra la sesión y los datos guardados del sandbox anterior (cabecera `Clear-Site-Data`) y se vuelve a la pantalla de acceso. Dentro de un mismo arranque, recargar conserva la sesión.
 - Aunque exista un `.env.local` con el proyecto real, el sandbox lo anula y no crea cliente de Supabase. La recuperación de contraseña no está disponible aquí.
 - La entrada de caja con PIN requiere registrar el dispositivo como hacen las pruebas e2e; para la mayoría de los flujos basta entrar como admin.
 
