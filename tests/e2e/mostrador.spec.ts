@@ -46,6 +46,39 @@ async function nav(page: Page, name: string) {
   }
   await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
 }
+test('el administrador conserva el botón de inventario inicial y puede agregar cantidades de nuevo', async ({
+  page,
+}) => {
+  await enter(page, true);
+  await nav(page, 'Inventario');
+  const button = page.getByRole('button', { name: 'Registrar inventario inicial', exact: true });
+  const row = page.getByRole('row').filter({ hasText: 'Copitas de degustación' });
+  for (const [quantity, balance] of [
+    ['10', '10'],
+    ['5', '15'],
+  ]) {
+    await button.click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('spinbutton', { name: 'Copitas de degustación', exact: true }).fill(quantity);
+    await dialog.getByRole('button', { name: 'Confirmar inventario inicial', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row.getByRole('cell').nth(2)).toHaveText(balance);
+    await expect(button).toBeVisible();
+  }
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
+  await nav(page, 'Inventario');
+  await expect(button).toBeVisible();
+  await expect(row.getByRole('cell').nth(2)).toHaveText('15');
+});
+
+test('el encargado no ve el botón de inventario inicial', async ({ page }) => {
+  await enter(page);
+  await nav(page, 'Inventario');
+  await expect(page.getByRole('heading', { name: 'Insumos en movimiento' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Registrar inventario inicial' })).toHaveCount(0);
+});
+
 test('venta sencilla en tres acciones, conserva entregas y evita cobros repetidos al recargar', async ({
   page,
 }) => {

@@ -46,6 +46,19 @@ const promo = (extra: Partial<Promotion> = {}): Promotion => ({
   ...extra,
 });
 describe('Operación del mostrador', () => {
+  it('permite agregar inventario inicial varias veces sin reemplazar saldos ni duplicar reintentos', () => {
+    let s = run(fixture(), 'initialize_stock', { items: { copita: 10, coronita: 4 } }, admin).state;
+    expect(s.settings[0].inventoryInitialized).toBe(true);
+    const previousStock = structuredClone(s.stock);
+    const command = cmd('initialize_stock', { items: { copita: 5, coronita: 0 } }, admin);
+    s = applyCommand(s, command, admin, NOW).state;
+    expect(stockBalances(s)).toMatchObject({ copita: 15, coronita: 4 });
+    expect(s.stock).toHaveLength(previousStock.length + 1);
+    expect(s.stock.slice(0, previousStock.length)).toEqual(previousStock);
+    expect(applyCommand(s, command, admin, NOW).state.stock).toEqual(s.stock);
+    for (const actor of [cashier, support, { ...admin, online: false }, { ...admin, aal: 'aal1' as const }])
+      expect(() => run(s, 'initialize_stock', { items: { copita: 1 } }, actor)).toThrow(/doble factor/);
+  });
   it('retira efectivo al ejecutarse y lo conserva en tránsito hasta la confirmación', () => {
     let s = run(fixture(), 'request_transfer', {
       from: `cash:${ids.shift}`,

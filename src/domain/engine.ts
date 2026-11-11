@@ -609,10 +609,6 @@ export function applyCommand(
     }
     case 'initialize_stock': {
       admin(actor);
-      assert(
-        !settings.inventoryInitialized,
-        'El inventario inicial ya fue registrado. Usa recepciones y ajustes aprobados.',
-      );
       for (const [article, value] of Object.entries(p.items ?? {})) {
         const amount = quantity(value, 'Inventario inicial', 1000000, true);
         if (amount) movement(article, amount, 'initial', makeId('initial'), article);

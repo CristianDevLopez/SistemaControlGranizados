@@ -264,7 +264,7 @@ Cada folio es único dentro del local y la hora original debe ser válida. La ap
 
 ### Inventario inicial
 
-El administrador abre **Inventario → Registrar inventario inicial**, cuenta las existencias reales e introduce cada cantidad en su unidad. Se realiza una sola vez; las entradas posteriores se registran mediante recepciones y los consumos mediante las operaciones de la aplicación.
+El administrador abre **Inventario → Registrar inventario inicial** e introduce las cantidades que desea agregar en su unidad. El botón permanece disponible después de cada registro: las cantidades se suman al saldo existente y los artículos en cero conservan su saldo. Los consumos se registran mediante las operaciones de la aplicación.
 
 Verifica las diferencias entre bolsas selladas, líquido en onzas, paquetes completos y vasos sueltos. Registrar la misma existencia como paquete cerrado y también como todos sus vasos sueltos duplicaría lo disponible.
 

@@ -108,7 +108,7 @@ export function Inventory() {
         title="Inventario"
         action={
           <div className="button-row">
-            {admin && !state.settings[0].inventoryInitialized && (
+            {admin && (
               <button className="button small primary" onClick={() => setInitial(true)}>
                 Registrar inventario inicial
               </button>
@@ -360,8 +360,8 @@ function InitialInventory({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Inventario físico inicial" onClose={onClose}>
       <p className="modal-intro">
-        Registra existencias reales antes de operar. Este paso se realiza una sola vez; después se usan
-        recepciones y movimientos.
+        Registra las cantidades que deseas agregar al inventario. Cada registro suma las cantidades ingresadas
+        al saldo existente; los artículos en cero conservan su saldo.
       </p>
       <form
         className="fields-form"

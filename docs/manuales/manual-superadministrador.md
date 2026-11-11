@@ -269,7 +269,7 @@ Tu cuenta no omite la restricción sobre la venta propia. El pago anterior se vi
 
 ### Inventario compras y recepciones
 
-Revisa saldos teóricos, negativos, bolsas, paquetes, degustaciones y merma aprobada. El inventario inicial se registra una sola vez; después se utilizan recepciones y movimientos reales. Una tolerancia de líquido genera control y no descuentos al empleado.
+Revisa saldos teóricos, negativos, bolsas, paquetes, degustaciones y merma aprobada. El administrador puede registrar inventario inicial varias veces: cada registro suma las cantidades ingresadas al saldo existente. También se utilizan recepciones y movimientos reales. Una tolerancia de líquido genera control y no descuentos al empleado.
 
 En Compras y gastos, registra envíos y revisa las recepciones físicas, daños y diferencias. La recepción incorpora unidades utilizables: diez recibidas con dos dañadas agregan ocho útiles. La persona que recibe registra lo físico sin tomar el esperado como respuesta.
 
