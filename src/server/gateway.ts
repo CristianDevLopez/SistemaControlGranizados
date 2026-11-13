@@ -8,7 +8,7 @@ import {
   type State,
 } from '../domain/types.ts';
 import { quoteOrder } from '../domain/pricing.ts';
-import { isShiftCashier } from '../domain/access.ts';
+import { hasPermission, isShiftCashier, permissionLabels } from '../domain/access.ts';
 import type { Access } from '../domain/platform.ts';
 import type { Backend, DeviceSecret } from './backend.ts';
 import { constantEqual, couponCode, encryptPermit, pinHash, randomToken, sha256 } from './crypto.ts';
@@ -281,7 +281,13 @@ export function createGateway(options: GatewayOptions) {
           : undefined);
       assert(branch, 'No tienes acceso a este local.', 'FORBIDDEN');
       store = store.forBranch(branch.id);
-      profile = { ...profile, role: branch.role };
+      const branchProfile = await store.profile(profile.id);
+      assert(
+        branchProfile?.active || isSuperAdmin,
+        'El usuario no tiene acceso activo al local.',
+        'FORBIDDEN',
+      );
+      profile = { ...profile, ...branchProfile, role: branch.role };
       if (profile.role === 'admin')
         assert(identity.aal === 'aal2', 'Completa el doble factor.', 'MFA_REQUIRED');
       headers['X-Branch-Id'] = branch.id;
@@ -415,13 +421,26 @@ export function createGateway(options: GatewayOptions) {
         const order = loaded.state.orders.find((o) => o.id === body.orderId && o.status === 'open');
         assert(order, 'Pedido no disponible.');
         const shift = loaded.state.shifts.find((x) => x.id === order.shiftId);
-        assert(isShiftCashier(actor, shift), 'Solo el encargado valida el cobro.', 'FORBIDDEN');
-        assert(Array.isArray(body.codes) && body.codes.length <= 10, 'Cupones inválidos.');
+        assert(
+          shift?.status === 'open' && hasPermission(actor, 'payments') && isShiftCashier(actor, shift),
+          'Solo el encargado valida el cobro con turno abierto y permiso.',
+          'FORBIDDEN',
+        );
+        assert(
+          Array.isArray(body.codes) &&
+            body.codes.length <= 10 &&
+            body.codes.every(
+              (code: unknown) => typeof code === 'string' && code.trim().length > 0 && code.length <= 80,
+            ),
+          'Cupones inválidos.',
+        );
         const quote = quotePayment(loaded.state, order, now().toISOString(), true, body.codes);
         return json({
           total: quote.total,
           lines: quote.lines,
           coupons: quote.coupons,
+          applications: quote.applications,
+          unusedCodes: quote.unusedCodes,
           configVersion: loaded.state.settings[0].version,
         });
       }
@@ -503,12 +522,25 @@ export function createGateway(options: GatewayOptions) {
           const salt = randomToken(16);
           await store.security('staff_set', { userId: target.id, salt, hash: await pinHash(body.pin, salt) });
         }
+        if (body.permissions !== undefined) {
+          assert(
+            body.permissions &&
+              typeof body.permissions === 'object' &&
+              !Array.isArray(body.permissions) &&
+              Object.entries(body.permissions).every(
+                ([key, value]) => Object.hasOwn(permissionLabels, key) && typeof value === 'boolean',
+              ),
+            'Permisos inválidos.',
+          );
+          assert(target.role !== 'admin', 'Los administradores conservan sus facultades de administración.');
+          target.permissions = body.permissions;
+        }
         await store.saveProfile(target);
         await store.securityAudit(
           profile.id,
           device.id,
           'update_user',
-          `${target.name} · activo=${target.active} · ${target.role}`,
+          `${target.name} · activo=${target.active} · ${target.role} · permisos=${JSON.stringify(target.permissions ?? {})}`,
         );
         return json({ ok: true });
       }
@@ -765,11 +797,13 @@ export function createGateway(options: GatewayOptions) {
         return json({ ok: true });
       }
       if (route === 'attachments/read') {
-        const attachment = (await store.load()).state.attachments.find(
-          (x) => x.id === url.searchParams.get('id'),
-        );
+        const loaded = await store.load();
+        const attachment = loaded.state.attachments.find((x) => x.id === url.searchParams.get('id'));
         assert(
-          attachment?.path && (profile.role === 'admin' || attachment.by === profile.id),
+          attachment?.path &&
+            (profile.role === 'admin' ||
+              attachment.by === profile.id ||
+              loaded.state.flavors.some((f) => f.imageId === attachment.id)),
           'Foto no autorizada o pendiente de subir.',
           'FORBIDDEN',
         );

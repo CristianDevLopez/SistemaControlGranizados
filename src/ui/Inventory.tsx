@@ -5,6 +5,7 @@ import { liquidReconciliation } from '../domain/liquid.ts';
 import { useApp } from '../lib/store.tsx';
 import { Badge, Empty, FieldsForm, Modal, Panel, date, type Field } from './components.tsx';
 import type { CommandType } from '../domain/types.ts';
+import { canWork } from '../domain/access.ts';
 export function Inventory() {
   const app = useApp(),
     { state, actor } = app.data!,
@@ -33,6 +34,7 @@ export function Inventory() {
         <div className="button-row">
           <button
             className="button secondary"
+            disabled={!canWork(actor, state, 'inventory')}
             onClick={() =>
               setForm({
                 title: 'Abrir paquete de vasos',
@@ -69,6 +71,7 @@ export function Inventory() {
           </button>
           <button
             className="button primary"
+            disabled={!canWork(actor, state, 'inventory')}
             onClick={() =>
               setForm({
                 title: 'Abrir bolsa de líquido',
@@ -115,6 +118,7 @@ export function Inventory() {
             )}
             <button
               className="button small secondary"
+              disabled={!canWork(actor, state, 'inventory')}
               onClick={() =>
                 setForm({
                   title: 'Reportar daño o desperdicio',
@@ -237,6 +241,7 @@ export function Inventory() {
                   </div>
                   <button
                     className="button small secondary"
+                    disabled={!canWork(actor, state, 'inventory')}
                     onClick={async () => {
                       try {
                         await app.run('exhaust_bag', { bagId: b.id });

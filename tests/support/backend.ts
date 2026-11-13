@@ -98,7 +98,9 @@ export class PgBackend implements Backend {
     if (this.branchId)
       return (await this.db.query<any>('select public.dexter_branch_profiles($1) as value', [this.branchId]))
         .rows[0].value as Profile[];
-    const r = await this.db.query<any>('select id,name,username,role,active from public.profiles');
+    const r = await this.db.query<any>(
+      'select id,name,username,role,active,permissions from public.profiles',
+    );
     return r.rows as Profile[];
   }
   async saveProfile(p: Profile) {
@@ -107,8 +109,8 @@ export class PgBackend implements Backend {
       return;
     }
     await this.db.query(
-      'insert into public.profiles(id,name,username,role,active)values($1,$2,$3,$4,$5)on conflict(id)do update set name=excluded.name,username=excluded.username,role=excluded.role,active=excluded.active',
-      [p.id, p.name, p.username ?? null, p.role, p.active],
+      'insert into public.profiles(id,name,username,role,active,permissions)values($1,$2,$3,$4,$5,$6)on conflict(id)do update set name=excluded.name,username=excluded.username,role=excluded.role,active=excluded.active,permissions=excluded.permissions',
+      [p.id, p.name, p.username ?? null, p.role, p.active, p.permissions ?? {}],
     );
   }
   async devices() {

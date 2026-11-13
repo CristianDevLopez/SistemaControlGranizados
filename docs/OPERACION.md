@@ -86,7 +86,7 @@ El cuadre de cierre registra efectivo, cobros netos del turno verificados por cu
 5. Como admin, solicitar un arqueo sorpresa seleccionando los ítems. Como responsable del turno, presentar solo los conteos solicitados; separar el efectivo posterior de la planilla. Como admin, revisar los resultados y diferencias contra el corte original e ingresar después cada folio con foto.
 6. Anular con otro admin y corregir conservando o reemplazando la entrega física según corresponda. Comprobar la diferencia de dinero real.
 7. Recibir mercancía parcial y dañada, revisar cruce; aprobar o rechazar los gastos y mermas con soporte.
-8. Cerrar con base retenida y remanente. Ejecutar entrega/consignación y confirmar con otro usuario. Abrir el siguiente día y comprobar el saldo físico.
+8. Cerrar con base retenida y remanente. Después del cierre, un administrador registra la entrega/consignación y otro administrador receptor confirma; el trabajador ya no modifica ese turno. Abrir el siguiente día y comprobar el saldo físico.
 9. Exportar CSV y ejecutar el ensayo de recuperación de respaldo antes de habilitar producción.
 
 ## Incidentes

@@ -18,7 +18,7 @@ import {
   locationBalance,
   salesByMethod,
 } from '../domain/engine.ts';
-import { isShiftCashier } from '../domain/access.ts';
+import { canWork, hasPermission, isShiftCashier } from '../domain/access.ts';
 import { transferAccountName } from './payment-labels.ts';
 import type { CommandType, Count, Shift } from '../domain/types.ts';
 import { AuditSetupDialog, CountReviewDialog } from './CashAudit.tsx';
@@ -217,7 +217,7 @@ export function Cash() {
     { state, actor, profiles } = app.data!;
   const active = state.shifts.find((x) => ['open', 'requested', 'provisional'].includes(x.status)),
     admin = actor.role === 'admin',
-    owns = isShiftCashier({ ...actor, online: app.online }, active),
+    owns = hasPermission(actor, 'shifts') && isShiftCashier({ ...actor, online: app.online }, active),
     directOpening = admin && app.online;
   const [count, setCount] = useState<'opening' | 'closing' | 'audit' | null>(null),
     [auditSetup, setAuditSetup] = useState(false),
@@ -251,7 +251,7 @@ export function Cash() {
         {!active && (admin || (actor.primary && actor.role !== 'apoyo')) && (
           <button
             className="button primary"
-            disabled={admin && !app.online && !actor.primary}
+            disabled={!hasPermission(actor, 'shifts') || (admin && !app.online && !actor.primary)}
             onClick={() =>
               directOpening
                 ? setForm({
@@ -423,7 +423,7 @@ export function Cash() {
       <Panel
         title="Entregas y consignaciones"
         action={
-          actor.role !== 'apoyo' && (
+          canWork(actor, state, 'transfers') && (
             <button
               className="button secondary"
               onClick={() =>
@@ -548,11 +548,18 @@ export function Cash() {
                             </button>
                           )}
                         {t.status === 'requested' &&
-                          (t.by === actor.id ||
-                            (admin && t.type !== 'transfer' && t.recipientId !== actor.id)) && (
+                          (t.by === actor.id || (admin && t.recipientId !== actor.id)) && (
                             <button
                               className="button small secondary"
-                              disabled={t.type !== 'transfer' && t.votes.length < 3}
+                              disabled={
+                                !canWork(
+                                  actor,
+                                  state,
+                                  'transfers',
+                                  t.shiftId ?? (t.from.startsWith('cash:') ? t.from.slice(5) : undefined),
+                                ) ||
+                                (t.type !== 'transfer' && t.votes.length < 3)
+                              }
                               onClick={() =>
                                 setForm({
                                   title: 'Registrar entrega o consignación',
@@ -590,6 +597,7 @@ export function Cash() {
                         {t.status === 'in_transit' && t.recipientId === actor.id && t.by !== actor.id && (
                           <button
                             className="button small primary"
+                            disabled={!canWork(actor, state, 'transfers', t.shiftId)}
                             onClick={() =>
                               setForm({
                                 title: 'Confirmar recepción',
@@ -691,6 +699,7 @@ export function Cash() {
                       )}
                       <button
                         className="text-button"
+                        disabled={!admin && state.shifts.find((s) => s.id === c.shiftId)?.status !== 'open'}
                         onClick={() =>
                           setForm({
                             title: 'Explicar diferencia',

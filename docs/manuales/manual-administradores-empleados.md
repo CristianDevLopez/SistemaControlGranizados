@@ -4,7 +4,9 @@ Dexter’s Granizados
 
 Guía de operación de locales para administradores propietarios encargados de caja y apoyo de mostrador
 
-Versión del manual 1 | 28 de octubre de 2026
+Versión del manual 2 | 13 de noviembre de 2026
+
+Esta versión describe los ajustes preparados en el repositorio. Su aplicación al servicio publicado requiere la migración y actualización indicadas en [la guía de aplicación](../AJUSTES-OPERATIVOS.md).
 
 Este manual explica cómo preparar un local, atender pedidos, registrar entregas y cobros, controlar mercancía y cerrar la jornada. También enseña a revisar novedades y a conservar la información cuando se pierde la conexión. Sigue el procedimiento correspondiente a tu rol y comprueba siempre el local y el turno antes de registrar una operación.
 
@@ -32,6 +34,8 @@ La aplicación tiene tres roles de operación. El propietario utiliza una cuenta
 Si eres encargado de caja, comienza por acceso, apertura, pedidos, inventario, recepción, cierre y sincronización. Si eres apoyo, lee acceso, pedidos, entregas, degustaciones, inventario y recepción. Si eres administrador, revisa el manual completo antes de preparar el primer turno.
 
 Los botones pueden aparecer ocultos o deshabilitados cuando el rol, el dispositivo, el turno o la conexión no permiten la acción. Tener rol de administrador no convierte a una persona en responsable del turno de otro usuario.
+
+En **Configuración → Equipo y accesos**, el administrador dispone de una **Guía de perfiles y permisos**. Para cada trabajador puede pulsar **Editar permisos** y habilitar o restringir pedidos, entregas/degustaciones, inventario y, según su perfil, cobros, gastos, movimientos y apertura/cierre de caja. El apoyo nunca cobra ni mueve dinero, aunque se intente habilitar ese permiso. Los administradores conservan sus facultades administrativas. Los permisos son propios de cada usuario y local y se validan también en el servidor.
 
 ## 2 Ingreso y protección de la cuenta
 
@@ -99,8 +103,10 @@ Prepara el local antes de permitir ventas: revisa catálogo y precios, parámetr
 
 ### Sabores y presentaciones
 
+El mostrador muestra las fotos disponibles, ordena los sabores alfabéticamente y permite filtrar **Todos**, **Sin licor** o **Con licor** antes de seleccionar el producto.
+
 1. Entra en **Configuración → Catálogo**.
-2. Pulsa **Agregar sabor**, escribe el nombre e indica si lleva licor y si está disponible. Guarda.
+2. Pulsa **Agregar sabor**, escribe el nombre, adjunta su imagen e indica si lleva licor y si está disponible. Guarda. Al editar puedes reemplazar la imagen o marcar **Quitar imagen actual**; dejar el archivo vacío conserva la foto anterior.
 3. En la presentación que necesites, pulsa **Configurar** y revisa precio con licor y sin licor, onzas, vasos y coronitas consumidos por unidad, y disponibilidad.
 4. Revisa el resultado en Mostrador. Un sabor o tamaño inactivo no se ofrece para una venta nueva.
 
@@ -327,7 +333,7 @@ El administrador consulta las cantidades enviadas, recepciones, daños y diferen
 
 El encargado o el administrador pulsa **Registrar gasto**, selecciona categoría, monto, origen del dinero, proveedor y soporte o nota. Cuando se utiliza efectivo de caja se exige la responsabilidad del turno, una categoría permitida y que el monto no supere el tope configurado. El apoyo no registra gastos.
 
-Usa fotografía del comprobante; si no tienes foto, agrega una nota explicativa. El administrador aprueba o rechaza el gasto desde su registro. La aplicación conserva la salida física registrada de caja aunque la aprobación sea posterior: no vuelvas a retirar o pagar el dinero solo porque el gasto esté pendiente de revisión.
+Usa fotografía del comprobante; si no tienes foto, agrega una nota explicativa. El administrador aprueba o rechaza el gasto desde su registro. El gasto queda pendiente de revisión y se descuenta del efectivo esperado cuando se aprueba. Conserva el soporte y no vuelvas a retirar o pagar dinero porque el gasto todavía esté pendiente.
 
 Cuando un administrador pagó con su bolsillo, la aprobación puede generar el trámite de reembolso correspondiente. Ese trámite sigue las aprobaciones de salida por reembolso; aprobar el gasto no equivale a haberle entregado físicamente dinero.
 
@@ -360,7 +366,7 @@ Solo un administrador conectado configura promociones y emite cupones. Se guarda
 ### Generar una cortesía completa
 
 1. En **Promociones**, pulsa **Generar cortesía**.
-2. Define el nombre, el tamaño del vaso y si aplica con licor, sin licor o a ambos tipos. Puedes limitar los sabores y permitir o excluir combinados.
+2. Define el nombre, el tamaño del vaso y si aplica con licor, sin licor o a ambos tipos. Puedes limitar los sabores y permitir o excluir combinados. Configura **Acumulable con otras cortesías en productos distintos** para decidir si puede combinarse con otros códigos en el mismo pedido.
 3. Indica el vencimiento. Cada código cubre un vaso completo a **$0**, incluidos todos sus sabores y componentes; su emisión respeta la cuota de cortesías configurada.
 4. Pulsa **Generar código de cortesía**. Se muestra el código con las condiciones y su QR; puedes copiar el código o compartirlo.
 5. Caja agrega el producto autorizado al pedido, abre **Cupón, cortesía, vuelto o entregar después**, ingresa el código y pulsa **Validar**. Comprueba que el vaso completo quede sin cobro.
@@ -374,9 +380,10 @@ El código se consume al confirmar el registro, no al generarlo ni al validarlo.
 2. En **Qué cambia**, elige precio fijo, subir uno o dos tamaños, lleva N y paga M, o producto gratis con cupón.
 3. En **Cómo se entrega**, elige automática por horario o cupón de un solo uso. Un producto gratis requiere cupón.
 4. Define nombre, inicio y final de vigencia, horario diario y días aplicables. Los días sin seleccionar representan todos.
-5. Selecciona tipo de sabor y, si corresponde, tamaños y sabores elegibles. Si no seleccionas estos últimos, aplica a todos los elegibles por las demás condiciones.
+5. Selecciona tipo de sabor, tamaños y sabores elegibles. Para un producto gratis debes seleccionar expresamente sus tamaños y sabores. En los otros efectos, dejar esos campos vacíos representa todos los productos elegibles al emitir el cupón.
 6. Completa el valor del efecto y el límite global si lo habrá. Una promoción con límite global necesita conexión para aplicar su beneficio.
-7. Pulsa **Publicar promoción** y revisa la tarjeta. Puedes editar, apagar o activar desde esa tarjeta.
+7. Configura **Acumulable con otras cortesías y promociones**: permite combinar beneficios en productos distintos; una misma unidad no recibe dos beneficios. Desmarcarlo hace que el sistema elija el beneficio exclusivo o la combinación permitida que más favorezca al pedido, sin consumir códigos no aplicados.
+8. Pulsa **Publicar promoción** y revisa la tarjeta. Puedes editar, apagar o activar desde esa tarjeta.
 
 Para lleva N y paga M, M debe ser menor que N; un ejemplo es lleva 3 y paga 2. En un upgrade selecciona uno o dos tamaños. Comprueba el total del pedido y los productos beneficiados; no sumes manualmente beneficios que el sistema no haya aplicado.
 
@@ -386,9 +393,22 @@ Para lleva N y paga M, M debe ser menor que N; un ejemplo es lleva 3 y paga 2. E
 2. Indica vencimiento en hora de Colombia y si la emisión cuenta en tu cuota de cortesías.
 3. Si agotaste la cuota, solicita **Cortesía adicional** con motivo y espera que otro administrador apruebe. Selecciona esa autorización al emitir.
 4. Guarda y abre **Ver QR y compartir** en la lista.
-5. Usa compartir o la descarga disponible. Si el navegador no permite compartir, puede copiar el texto del cupón.
+5. Usa **Compartir código**, **Compartir QR** o **Descargar QR**. Si el navegador no admite compartir archivos, descarga el QR para enviarlo junto al texto y sus condiciones.
 
 El cupón muestra código, beneficio, vencimiento y estado. El código no contiene datos personales. Compartirlo o visualizar su QR no equivale a canjearlo. El encargado lo valida con conexión durante el cobro y un código no puede consumirse dos veces.
+
+Cada cupón nuevo conserva los tamaños, sabores, tipo de licor, beneficio, acumulación y horarios ofrecidos al emitirlo. Editar después la promoción no cambia ese producto prometido. La promoción debe seguir activa y respetar sus límites globales; el cupón mantiene su vencimiento. Los cupones anteriores a esta actualización conservan sus reglas anteriores.
+
+### Canjear varias cortesías en un pedido
+
+1. En Mostrador, prepara los productos y abre **Cupón, cortesía, vuelto o entregar después**.
+2. Escribe el código o pulsa **Escanear cupón** para leer el QR con la cámara. Pulsa **Validar** después de cada código; admite hasta diez.
+3. Revisa qué código cubre cada producto, la cantidad y el total realmente pendiente. Los códigos marcados **Sin usar** no se consumen.
+4. Selecciona efectivo o la cuenta de transferencia para el saldo pendiente y confirma el cobro. El canje se confirma junto con la venta; validar o escanear no consume el cupón.
+
+Tres personas pueden usar tres cortesías acumulables para tres granizados en la misma factura, con saldo cero y sin movimiento de dinero. Si hay dos granizados y una cortesía válida, esta cubre uno y el otro se paga en efectivo o transferencia. Si presentas tres cortesías para dos productos elegibles, solo se canjean dos; la tercera queda disponible hasta su vencimiento. No produce saldo a favor, efectivo ni vuelto. El historial de Pedidos conserva los códigos y las cantidades aplicadas a cada producto.
+
+No agregues cortesías a un ticket de corrección que ya arrastra un pago anterior: el sistema lo impide para evitar convertir beneficios en devoluciones. Las correcciones que conservan cupones originales mantienen su trazabilidad y no los canjean de nuevo.
 
 ## 13 Control aprobaciones y arqueos
 
@@ -482,12 +502,16 @@ El cierre lo presenta el responsable del turno. Un administrador revisa los resu
 4. Indica cuánto efectivo quedará reservado para la siguiente apertura. No puede superar lo contado.
 5. Si hay remanente, selecciona un destino activo con un administrador receptor diferente de ti.
 6. Escribe novedades y pulsa **Registrar conteo**.
-7. Comprueba el cierre. Ejecuta la entrega o consignación real del remanente y solicita que el receptor la confirme, utilizando el procedimiento de movimientos de dinero.
+7. Comprueba el cierre. Un administrador debe registrar la ejecución real del remanente después del cierre y el receptor confirma su recepción. El trabajador ya no puede ejecutar movimientos sobre ese turno.
 8. Con conexión, comprueba que no queden operaciones ni fotos pendientes. Si cerraste offline, valida el resultado al recuperar conexión antes de dar por conciliada la jornada.
 
 **Ejemplo.** Cuentas $250.000 y reservas $50.000: el remanente es $200.000. La solicitud del remanente no demuestra que ya se entregó. Si todavía está físicamente en caja, no registres otra salida ficticia para forzar un saldo.
 
 Los cierres conservan su conteo original. Si luego se aprueba un gasto o se registra un movimiento relacionado, se conserva por separado. La siguiente apertura toma en cuenta el efectivo físico que quedó y las salidas realmente ejecutadas.
+
+En **Conteos registrados**, el administrador ve por cada medio/cuenta: contado, esperado original y diferencia. Una diferencia de cero indica que cuadra; negativa, faltante; positiva, sobrante. El esperado de una cuenta corresponde a los pagos menos devoluciones de ventas del turno, separado del efectivo; no es una conciliación del saldo bancario completo. También aparecen cuentas desactivadas que recibieron pagos durante ese turno. Los registros anteriores conservan solo los valores verificados que se capturaron.
+
+Después de cerrar, incluso si el cierre offline está provisional, los trabajadores no pueden registrar gastos, inventario, entregas, movimientos ni editar pedidos de ese turno. Abrir otro turno no desbloquea el anterior. Solo un administrador conectado con doble factor puede registrar correcciones; en **Registrar gasto → Turno a corregir** puede vincular un gasto al turno cerrado. El registro original del conteo permanece intacto.
 
 ### Lista rápida del administrador
 

@@ -13,6 +13,8 @@ import { useApp } from '../lib/store.tsx';
 import { api } from '../lib/api.ts';
 import { getMeta, setMeta, type OfflineAuthorizer } from '../lib/db.ts';
 import type { CommandType } from '../domain/types.ts';
+import { hasPermission, permissionLabels, roleGuide } from '../domain/access.ts';
+import { FlavorImage } from './FlavorImage.tsx';
 import {
   Badge,
   Empty,
@@ -148,6 +150,7 @@ export function Settings() {
                 onClick={() =>
                   businessForm('Agregar sabor', 'save_flavor', [
                     { name: 'name', label: 'Nombre del sabor', required: true },
+                    { name: 'imageId', label: 'Imagen del sabor', type: 'photo' },
                     { name: 'alcohol', label: 'Contiene licor', type: 'checkbox' },
                     { name: 'active', label: 'Disponible para vender', type: 'checkbox', value: true },
                   ])
@@ -170,39 +173,44 @@ export function Settings() {
                     </tr>
                   </thead>
                   <tbody>
-                    {state.flavors.map((f) => (
-                      <tr key={f.id}>
-                        <td>
-                          <strong>{f.name}</strong>
-                        </td>
-                        <td>{f.alcohol ? 'Con licor' : 'Sin licor'}</td>
-                        <td>
-                          <Badge tone={f.active ? 'green' : 'neutral'}>
-                            {f.active ? 'Activo' : 'Inactivo'}
-                          </Badge>
-                        </td>
-                        <td>
-                          <button
-                            className="text-button"
-                            onClick={() =>
-                              businessForm(
-                                'Editar sabor',
-                                'save_flavor',
-                                [
-                                  { name: 'name', label: 'Nombre', required: true },
-                                  { name: 'alcohol', label: 'Contiene licor', type: 'checkbox' },
-                                  { name: 'active', label: 'Activo', type: 'checkbox' },
-                                ],
-                                { ...f },
-                                { id: f.id },
-                              )
-                            }
-                          >
-                            Editar
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {[...state.flavors]
+                      .sort((a, b) => a.name.localeCompare(b.name, 'es'))
+                      .map((f) => (
+                        <tr key={f.id}>
+                          <td>
+                            <FlavorImage imageId={f.imageId} name={f.name} />
+                            <strong>{f.name}</strong>
+                          </td>
+                          <td>{f.alcohol ? 'Con licor' : 'Sin licor'}</td>
+                          <td>
+                            <Badge tone={f.active ? 'green' : 'neutral'}>
+                              {f.active ? 'Activo' : 'Inactivo'}
+                            </Badge>
+                          </td>
+                          <td>
+                            <button
+                              className="text-button"
+                              onClick={() =>
+                                businessForm(
+                                  'Editar sabor',
+                                  'save_flavor',
+                                  [
+                                    { name: 'name', label: 'Nombre', required: true },
+                                    { name: 'imageId', label: 'Reemplazar imagen (opcional)', type: 'photo' },
+                                    { name: 'removeImage', label: 'Quitar imagen actual', type: 'checkbox' },
+                                    { name: 'alcohol', label: 'Contiene licor', type: 'checkbox' },
+                                    { name: 'active', label: 'Activo', type: 'checkbox' },
+                                  ],
+                                  { ...f },
+                                  { id: f.id },
+                                )
+                              }
+                            >
+                              Editar
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
               </div>
@@ -402,6 +410,20 @@ export function Settings() {
       )}
       {tab === 'team' && (
         <>
+          <Panel title="Guía de perfiles y permisos">
+            {Object.entries(roleGuide).map(([role, guide]) => (
+              <p key={role}>
+                <strong>
+                  {role === 'admin' ? 'Administrador' : role === 'encargado' ? 'Caja principal' : 'Apoyo'}:
+                </strong>{' '}
+                {guide}
+              </p>
+            ))}
+            <p>
+              Los permisos individuales pueden restringir las funciones de cada trabajador. El apoyo nunca
+              cobra. Los administradores conservan sus facultades; solo ellos corrigen turnos cerrados.
+            </p>
+          </Panel>
           <Panel
             title="Usuarios"
             action={
@@ -476,6 +498,41 @@ export function Settings() {
                       </td>
                       <td>
                         <div className="table-actions">
+                          {p.role !== 'admin' && (
+                            <button
+                              className="button small secondary"
+                              onClick={() =>
+                                setForm({
+                                  title: `Permisos de ${p.name}`,
+                                  fields: Object.entries(permissionLabels)
+                                    .filter(
+                                      ([key]) =>
+                                        p.role !== 'apoyo' ||
+                                        ['orders', 'deliveries', 'inventory'].includes(key),
+                                    )
+                                    .map(([key, label]) => ({ name: key, label, type: 'checkbox' as const })),
+                                  initial: Object.fromEntries(
+                                    Object.keys(permissionLabels)
+                                      .filter(
+                                        (key) =>
+                                          p.role !== 'apoyo' ||
+                                          ['orders', 'deliveries', 'inventory'].includes(key),
+                                      )
+                                      .map((key) => [
+                                        key,
+                                        hasPermission(p, key as keyof typeof permissionLabels),
+                                      ]),
+                                  ),
+                                  save: async (values) => {
+                                    await api('users/update', { userId: p.id, permissions: values });
+                                    await app.load();
+                                  },
+                                })
+                              }
+                            >
+                              Editar permisos
+                            </button>
+                          )}
                           {p.role !== 'admin' && p.active && (
                             <button
                               className="button small secondary"

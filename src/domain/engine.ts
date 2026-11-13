@@ -1,5 +1,5 @@
 import { initialState } from './initial.ts';
-import { canCorrectTastings, isShiftCashier } from './access.ts';
+import { canCorrectTastings, commandPermission, hasPermission, isShiftCashier } from './access.ts';
 import { lineTotal, quoteOrder } from './pricing.ts';
 import { hasAlcohol, liquidPortions, sameFlavors } from './flavors.ts';
 import {
@@ -270,7 +270,13 @@ export function locationBalance(state: State, locationId: string): number {
   );
 }
 export function quotePayment(state: State, order: Order, at: string, online: boolean, codes: string[] = []) {
-  if (!order.carriedCouponFromId) return quoteOrder(state, order.lines, at, online, codes);
+  if (!order.carriedCouponFromId) {
+    assert(
+      !(order.paymentCredit && codes.length),
+      'No se agregan cupones a una corrección con pago anterior: no son dinero ni generan devolución.',
+    );
+    return quoteOrder(state, order.lines, at, online, codes);
+  }
   assert(online, 'La corrección de un ticket con cupón requiere conexión.', 'ONLINE_REQUIRED');
   assert(
     codes.length === 0,
@@ -364,6 +370,51 @@ export function applyCommand(
   const state = structuredClone(original),
     settings = state.settings[0],
     p = command.payload as Record<string, any>;
+  const permission = commandPermission(command.type);
+  assert(
+    !permission || hasPermission(actor, permission),
+    'No tienes permiso para esta operación.',
+    'FORBIDDEN',
+  );
+  // Resolver las referencias reales impide eludir el cierre enviando otro turno en el comando.
+  {
+    const order = state.orders.find((x) => x.id === p.orderId);
+    const count = state.counts.find((x) => x.id === p.countId);
+    const transfer = state.transfers.find((x) => x.id === p.transferId);
+    const expense = state.expenses.find((x) => x.id === p.expenseId);
+    const request = state.requests.find((x) => x.id === p.requestId);
+    const referencedOrder = state.orders.find((x) => x.id === request?.referenceId);
+    const shifts = [
+      command.shiftId,
+      p.shiftId,
+      order?.shiftId,
+      count?.shiftId,
+      expense?.shiftId,
+      referencedOrder?.shiftId,
+      transfer?.shiftId,
+      transfer?.executionShiftId,
+      transfer?.from.startsWith('cash:') ? transfer.from.slice(5) : undefined,
+      transfer?.to.startsWith('cash:') ? transfer.to.slice(5) : undefined,
+      typeof p.from === 'string' && p.from.startsWith('cash:') ? p.from.slice(5) : undefined,
+    ];
+    const closed = shifts.some((key) =>
+      state.shifts.some((s) => s.id === key && ['closed', 'provisional'].includes(s.status)),
+    );
+    if (closed) {
+      assert(
+        actor.role === 'admin',
+        'Turno cerrado: solo un administrador puede registrar movimientos o correcciones.',
+        'SHIFT_CLOSED',
+      );
+      admin(actor);
+    }
+    if (actor.role !== 'admin' && permission && command.type !== 'request_shift')
+      assert(
+        state.shifts.some((s) => s.status === 'open'),
+        'No hay turno abierto.',
+        'SHIFT_CLOSED',
+      );
+  }
   const makeId = (tag: string) => eventId(command, tag);
   let ref: string | undefined,
     message = 'Registro guardado.',
@@ -594,6 +645,12 @@ export function applyCommand(
         name: text(p.name, 'Nombre', 60),
         alcohol: p.alcohol === true,
         active: p.active !== false,
+        imageId:
+          p.removeImage === true
+            ? undefined
+            : p.imageId
+              ? evidence(p.imageId)
+              : state.flavors.find((f) => f.id === key)?.imageId,
       };
       const old = state.flavors.findIndex((x) => x.id === key);
       if (old >= 0) state.flavors[old] = flavor;
@@ -1745,8 +1802,16 @@ export function applyCommand(
       const amount = money(p.amount);
       const source = p.source;
       assert(['cash', 'treasury', 'personal'].includes(source), 'Origen del pago inválido.');
-      const shift = source === 'cash' ? operating() : undefined;
-      if (shift) cashier(actor, state, shift.id);
+      const correctionShift =
+        actor.role === 'admin' && p.shiftId
+          ? required(
+              state.shifts.find((s) => s.id === p.shiftId),
+              'Turno',
+            )
+          : undefined;
+      const shift = source === 'cash' ? (correctionShift ?? operating()) : correctionShift;
+      if (shift && !(actor.role === 'admin' && ['closed', 'provisional'].includes(shift.status)))
+        cashier(actor, state, shift.id);
       else admin(actor);
       const category = text(p.category, 'Categoría', 60);
       if (source === 'cash') {
@@ -1908,7 +1973,12 @@ export function applyCommand(
           );
           transfer.from = source.id;
         }
-      } else assert(actor.id === transfer.by, 'Solo quien entrega registra la ejecución.', 'FORBIDDEN');
+      } else
+        assert(
+          actor.id === transfer.by || actor.role === 'admin',
+          'Solo quien entrega o un admin registra la ejecución.',
+          'FORBIDDEN',
+        );
       const location = state.locations.find((x) => x.id === transfer.to);
       if (location?.type === 'bank' || transfer.type !== 'transfer')
         transfer.evidenceId = evidence(p.evidenceId ?? transfer.evidenceId);
@@ -1917,14 +1987,14 @@ export function applyCommand(
         const active = state.shifts.find((x) => x.status === 'open');
         const source = state.shifts.find((x) => `cash:${x.id}` === transfer.from);
         assert(
-          actor.primary || isShiftCashier(actor, active ?? source),
+          actor.role === 'admin' || actor.primary || isShiftCashier(actor, active ?? source),
           'Registra la salida física desde la sesión responsable de caja.',
           'FORBIDDEN',
         );
-        if (active) {
+        if (active && actor.role !== 'admin') {
           cashier(actor, state, active.id);
           transfer.executionShiftId = active.id;
-        }
+        } else transfer.executionShiftId = active?.id ?? source?.id;
       }
       transfer.status = 'in_transit';
       transfer.executedAt = command.at;
@@ -1989,7 +2059,25 @@ export function applyCommand(
         version: 1,
         by: actor.id,
         at: receivedAt,
+        stackable: p.stackable !== false,
       };
+      assert(
+        promo.sizeIds.every((key) => state.sizes.some((s) => s.id === key)) &&
+          promo.flavorIds.every((key) => state.flavors.some((f) => f.id === key)),
+        'Productos de la promoción desconocidos.',
+      );
+      const priorPromo = state.promotions.find((x) => x.id === key);
+      const legacyConditionsUnchanged =
+        priorPromo &&
+        priorPromo.effect === 'free' &&
+        JSON.stringify(priorPromo.sizeIds) === JSON.stringify(promo.sizeIds) &&
+        JSON.stringify(priorPromo.flavorIds) === JSON.stringify(promo.flavorIds) &&
+        priorPromo.alcohol === promo.alcohol;
+      if (promo.effect === 'free' && !legacyConditionsUnchanged)
+        assert(
+          promo.sizeIds.length > 0 && promo.flavorIds.length > 0,
+          'Define los tamaños y sabores exactos del producto de cortesía.',
+        );
       assert(
         promo.days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6),
         'Días inválidos.',
@@ -2034,6 +2122,10 @@ export function applyCommand(
           spec.allowMixed === undefined || typeof spec.allowMixed === 'boolean',
           'Define si la cortesía admite combinados.',
         );
+        assert(
+          spec.stackable === undefined || typeof spec.stackable === 'boolean',
+          'Define si la cortesía es acumulable.',
+        );
         const size = required(
           state.sizes.find((size) => size.id === spec.sizeId && size.active && size.ounces > 0),
           'Tamaño activo',
@@ -2077,6 +2169,7 @@ export function applyCommand(
           alcohol: spec.alcohol,
           courtesyOnly: true,
           allowMixed: spec.allowMixed !== false,
+          stackable: spec.stackable !== false,
           startsAt: command.at,
           endsAt: expiresAt,
           days: [],
@@ -2136,6 +2229,15 @@ export function applyCommand(
         status: 'issued',
         courtesy,
         excessApprovedBy: p.excessRequestId,
+        benefit: {
+          ...structuredClone(promo),
+          sizeIds: promo.sizeIds.length
+            ? [...promo.sizeIds]
+            : state.sizes.filter((s) => s.active).map((s) => s.id),
+          flavorIds: promo.flavorIds.length
+            ? [...promo.flavorIds]
+            : state.flavors.filter((f) => f.active).map((f) => f.id),
+        },
       });
       break;
     }

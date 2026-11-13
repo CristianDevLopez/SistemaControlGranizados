@@ -1,11 +1,14 @@
 export type Role = 'admin' | 'encargado' | 'apoyo';
 export type ID = string;
+export type Permission =
+  'orders' | 'deliveries' | 'payments' | 'expenses' | 'inventory' | 'transfers' | 'shifts';
 export interface Profile {
   id: ID;
   name: string;
   role: Role;
   active: boolean;
   username?: string;
+  permissions?: Partial<Record<Permission, boolean>>;
 }
 export interface Actor extends Profile {
   branchId?: ID;
@@ -21,6 +24,7 @@ export interface Flavor {
   name: string;
   alcohol: boolean;
   active: boolean;
+  imageId?: ID;
 }
 export interface Size {
   id: ID;
@@ -83,7 +87,13 @@ export interface OrderLine {
   paidSizeId?: ID;
   consumptionIds: ID[];
   recipe?: { ounces: number; cups: number; beers: number };
-  appliedRules?: { promotion: Promotion; couponId?: ID; quantity: number; unitAmount: number }[];
+  appliedRules?: {
+    promotion: Promotion;
+    couponId?: ID;
+    couponCode?: string;
+    quantity: number;
+    unitAmount: number;
+  }[];
 }
 export interface Tasting {
   id: ID;
@@ -299,6 +309,8 @@ export interface Promotion {
   version: number;
   by: ID;
   at: string;
+  /** Ausente conserva la acumulación histórica entre productos distintos. */
+  stackable?: boolean;
 }
 export interface Coupon {
   id: ID;
@@ -312,6 +324,8 @@ export interface Coupon {
   redeemedAt?: string;
   courtesy: boolean;
   excessApprovedBy?: ID;
+  /** Condiciones entregadas al cliente, independientes de futuras ediciones. */
+  benefit?: Promotion;
 }
 export interface Request {
   id: ID;

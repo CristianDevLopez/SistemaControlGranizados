@@ -2,7 +2,7 @@ import { Fragment, useState } from 'react';
 import { Check, Search, FilePlus2, Plus, Trash2, ArrowRightLeft } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
 import type { CommandType, Order, Payment } from '../domain/types.ts';
-import { isShiftCashier } from '../domain/access.ts';
+import { canWork, hasPermission, isShiftCashier } from '../domain/access.ts';
 import { paymentMethod } from '../domain/engine.ts';
 import { FlavorPortions, flavorName, portionLabel } from './FlavorDetails.tsx';
 import { transferAccountName } from './payment-labels.ts';
@@ -233,10 +233,12 @@ export function Orders() {
       },
     ];
   };
-  const canCash = isShiftCashier(
-    { ...actor, online: app.online },
-    state.shifts.find((s) => s.status === 'open'),
-  );
+  const canCash =
+    hasPermission(actor, 'payments') &&
+    isShiftCashier(
+      { ...actor, online: app.online },
+      state.shifts.find((s) => s.status === 'open'),
+    );
   const rows = [...state.orders]
     .reverse()
     .filter(
@@ -352,6 +354,7 @@ export function Orders() {
                           o.lines.some((x) => x.delivered < x.quantity) && (
                             <button
                               className="button small primary"
+                              disabled={!canWork(actor, state, 'deliveries', o.shiftId)}
                               onClick={async () => {
                                 try {
                                   await app.run('deliver', { orderId: o.id, expectedVersion: o.version });
@@ -365,7 +368,7 @@ export function Orders() {
                               Entregar pendientes
                             </button>
                           )}
-                        {o.status === 'paid' && actor.role !== 'apoyo' && (
+                        {o.status === 'paid' && canWork(actor, state, 'payments', o.shiftId) && (
                           <button
                             className="button small secondary"
                             onClick={() =>
@@ -491,6 +494,15 @@ export function Orders() {
                     {l.quantity} solicitados · {l.delivered} entregados
                   </small>
                   {l.discount > 0 && <small>Descuento: {money(l.discount)}</small>}
+                  {l.appliedRules
+                    ?.filter((r) => r.couponId)
+                    .map((r) => (
+                      <small key={r.couponId}>
+                        Cortesía/cupón{' '}
+                        {r.couponCode ?? state.coupons.find((c) => c.id === r.couponId)?.code ?? r.couponId} ·{' '}
+                        {r.quantity} producto(s) · {r.promotion.name} · Por producto {money(r.unitAmount)}
+                      </small>
+                    ))}
                 </div>
                 <strong>{money(l.listPrice * l.quantity - l.discount)}</strong>
               </div>
