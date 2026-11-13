@@ -53,10 +53,25 @@ export interface Settings {
   closingChecklist?: string[];
   inventoryInitialized?: boolean;
   auditId?: ID;
+  auditRequest?: AuditRequest;
+}
+export interface AuditRequest {
+  id: ID;
+  shiftId: ID;
+  by: ID;
+  at: string;
+  cash: boolean;
+  items: string[];
+  payments: string[];
+  expectedCash?: number;
+  expectedItems?: Record<string, number>;
+  expectedPayments?: Record<string, number>;
 }
 export interface OrderLine {
   id: ID;
   flavorId: ID;
+  /** Sabores en partes iguales. Si falta, todo el vaso corresponde a flavorId. */
+  flavorIds?: ID[];
   sizeId: ID;
   quantity: number;
   delivered: number;
@@ -152,6 +167,8 @@ export interface Shift {
   remittance?: number;
   closedAt?: string;
   offlineAuthorizedBy?: ID;
+  /** Cuentas usadas en el turno, también en la vista de caja sin importes esperados. */
+  paymentAccountIds?: ID[];
 }
 export interface Count {
   id: ID;
@@ -165,9 +182,18 @@ export interface Count {
   expectedItems?: Record<string, number>;
   difference?: number;
   differences?: Record<string, number>;
+  /** Importes verificados por medio/cuenta, separados del efectivo físico. */
+  payments?: Record<string, number>;
+  paymentLabels?: Record<string, string>;
+  expectedPayments?: Record<string, number>;
+  paymentDifferences?: Record<string, number>;
   retained?: number;
   notes: string;
   checklist?: { task: string; done: boolean }[];
+  auditId?: ID;
+  requestedBy?: ID;
+  requestedAt?: string;
+  itemLabels?: Record<string, string>;
 }
 export interface ShipmentLine {
   article: string;
@@ -255,6 +281,9 @@ export interface Promotion {
   sizeIds: ID[];
   flavorIds: ID[];
   alcohol: 'all' | 'yes' | 'no';
+  /** Beneficio fijo creado junto con un único código de cortesía. */
+  courtesyOnly?: boolean;
+  allowMixed?: boolean;
   fixedPrice?: number;
   steps?: number;
   take?: number;
@@ -454,6 +483,8 @@ export type CommandType =
   | 'create_order'
   | 'update_order'
   | 'taste'
+  | 'update_tasting'
+  | 'remove_tasting'
   | 'close_tastings'
   | 'deliver'
   | 'pay'

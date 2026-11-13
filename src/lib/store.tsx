@@ -66,6 +66,7 @@ interface AppContext {
     options?: { onlineOnly?: boolean; at?: string },
   ) => Promise<Result>;
   sync: () => Promise<void>;
+  installUpdate: (activate: () => Promise<void>) => Promise<void>;
   photo: (file: File) => Promise<string>;
   unlockOffline: (pin: string) => Promise<boolean>;
   authorizeOffline: (shiftId: string, pin: string, permitId: string) => Promise<Result>;
@@ -109,17 +110,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const preview = useRef<Role | null>(null);
   const current = useRef<Snapshot | null>(null),
     syncLock = useRef(false),
+    syncDone = useRef<Promise<void>>(Promise.resolve()),
     commandLock = useRef<Promise<unknown>>(Promise.resolve()),
     live = useRef(true),
     recentResults = useRef(new Map<string, Result>()),
     localWrites = useRef(0);
   const switchingBranch = useRef(false);
+  const installingUpdate = useRef(false);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toast = useCallback((message: string) => {
+    if (noticeTimer.current !== null) clearTimeout(noticeTimer.current);
     setNotice(message);
-    setTimeout(() => {
+    noticeTimer.current = setTimeout(() => {
+      noticeTimer.current = null;
       if (live.current) setNotice('');
     }, 4500);
   }, []);
+  useEffect(
+    () => () => {
+      if (noticeTimer.current !== null) clearTimeout(noticeTimer.current);
+    },
+    [],
+  );
   const remember = useCallback(async (value: Snapshot) => {
     if (!value.actor.superAdmin) {
       preview.current = null;
@@ -193,7 +205,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await updatePending();
   }, [remember, updatePending]);
   const sync = useCallback(async () => {
-    if (switchingBranch.current || syncLock.current || !navigator.onLine || !current.current) return;
+    if (syncLock.current) {
+      await syncDone.current;
+      return;
+    }
+    if (switchingBranch.current || !navigator.onLine || !current.current) return;
+    let finishSync!: () => void;
+    syncDone.current = new Promise<void>((resolve) => {
+      finishSync = resolve;
+    });
     syncLock.current = true;
     setSyncing(true);
     try {
@@ -257,9 +277,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } finally {
       syncLock.current = false;
-      if (live.current) {
-        setSyncing(false);
-        await updatePending();
+      try {
+        if (live.current) {
+          setSyncing(false);
+          await updatePending();
+        }
+      } finally {
+        finishSync();
       }
     }
   }, [load, toast, updatePending]);
@@ -270,6 +294,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       options: { onlineOnly?: boolean; at?: string } = {},
     ): Promise<Result> => {
       const work = async () => {
+        if (installingUpdate.current)
+          throw new Error('Espera a que termine la actualización de la aplicación.');
         if (switchingBranch.current) throw new Error('Espera a que termine el cambio de local.');
         if (preview.current) throw new Error(previewReadOnlyMessage);
         let committed = false;
@@ -383,13 +409,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
   const photo = useCallback(
     async (file: File) => {
+      if (installingUpdate.current)
+        throw new Error('Espera a que termine la actualización de la aplicación.');
       if (switchingBranch.current) throw new Error('Espera a que termine el cambio de local.');
       const branchId = current.current?.actor.branchId;
       if (preview.current) throw new Error(previewReadOnlyMessage);
       const blob = await compressPhoto(file),
         key = crypto.randomUUID();
       if (preview.current) throw new Error(previewReadOnlyMessage);
-      if (branchId !== current.current?.actor.branchId || switchingBranch.current)
+      if (branchId !== current.current?.actor.branchId || switchingBranch.current || installingUpdate.current)
         throw new Error('El local cambió. Selecciona la fotografía de nuevo.');
       await db.photos.add({
         id: key,
@@ -495,13 +523,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => (data?.actor.superAdmin && viewRole ? rolePreview(data, viewRole) : data),
     [data, viewRole],
   );
+  const installUpdate = useCallback(
+    async (activate: () => Promise<void>) => {
+      if (installingUpdate.current || switchingBranch.current || localWrites.current > 0)
+        throw new Error('Espera a que termine la operación en curso antes de actualizar.');
+      if (!navigator.onLine) throw new Error('Conéctate para sincronizar antes de actualizar.');
+      installingUpdate.current = true;
+      try {
+        await commandLock.current;
+        await sync();
+        // El primer intento puede haber esperado un envío anterior que aún no incluía el último registro.
+        await sync();
+        const snapshot = current.current;
+        if (!snapshot) throw new Error('Inicia sesión antes de actualizar.');
+        const queued = (await db.outbox.toArray()).some(
+          (entry) =>
+            belongsToBranch(entry, snapshot) && !['acknowledged', 'reconciled'].includes(entry.status),
+        );
+        const photos = (await db.photos.toArray()).some(
+          (photo) => belongsToBranch(photo, snapshot) && photo.status === 'pending',
+        );
+        if (queued || photos)
+          throw new Error(
+            'La actualización espera registros o fotos sin sincronizar. Revisa Estado de sincronización y vuelve a intentarlo.',
+          );
+        await activate();
+      } finally {
+        installingUpdate.current = false;
+      }
+    },
+    [sync],
+  );
   const switchBranch = useCallback(
     async (branchId: string) => {
       const saved = current.current;
       if (!saved || saved.actor.branchId === branchId) return;
       if (!online || !navigator.onLine) throw new Error('Cambiar de local requiere conexión.');
       if (preview.current) throw new Error('Vuelve a Superadministrador para cambiar de local.');
-      if (switchingBranch.current || syncLock.current || localWrites.current > 0)
+      if (switchingBranch.current || syncLock.current || localWrites.current > 0 || installingUpdate.current)
         throw new Error('Espera a que termine la sincronización.');
       const queued = (await db.outbox.toArray()).some(
         (x) => x.actorId === saved.actor.id && !['acknowledged', 'reconciled'].includes(x.status),
@@ -589,7 +648,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (pending.some((x) => x.status === 'pending') || photosPending > 0) void sync();
         else {
           syncLock.current = true;
-          void snapshot(current.current.revision)
+          syncDone.current = snapshot(current.current.revision)
             .then((result) => {
               setOnline(true);
               if (!('unchanged' in result)) return load();
@@ -631,6 +690,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         load,
         run,
         sync,
+        installUpdate,
         photo,
         unlockOffline,
         authorizeOffline,

@@ -3,10 +3,10 @@
  * `.` y `,` siempre son separadores de miles: "150.000", "150,000", "$ 150.000" y "150000" valen
  * 150000. Devuelve null cuando no hay dígitos (campo vacío).
  */
-export function parseMoney(text: unknown): number | null {
+export function parseMoney(text: unknown, allowNegative = false): number | null {
   const digits = String(text ?? '').replace(/\D/g, '');
   if (!digits) return null;
-  const value = Number(digits);
+  const value = Number(digits) * (allowNegative && /^\s*(?:\$\s*)?-/.test(String(text)) ? -1 : 1);
   return Number.isSafeInteger(value) ? value : null;
 }
 

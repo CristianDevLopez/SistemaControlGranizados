@@ -104,6 +104,7 @@ it.each([admin, owner])(
       'count',
       {
         kind: 'closing',
+        payments: { [`transfer:${ids.location}`]: 0 },
         shiftId,
         cash: 26000,
         retained: 10000,

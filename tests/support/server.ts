@@ -4,6 +4,7 @@ import { PgBackend } from './backend.ts';
 import { createGateway } from '../../src/server/gateway.ts';
 import { admin, cashier, owner, ids, NOW } from './fixture.ts';
 let backend = await PgBackend.create();
+let pauseCommands = false;
 const gateway = () =>
   createGateway({ backend, allowedOrigins: ['http://127.0.0.1:5174'], now: () => new Date() });
 createServer(async (req, res) => {
@@ -29,12 +30,24 @@ createServer(async (req, res) => {
       return;
     }
     if (path === '/reset' && req.method === 'POST') {
+      pauseCommands = false;
       await backend.db.close();
       backend = await PgBackend.create();
       const options = body.length ? JSON.parse(body.toString()) : {};
       if (options.emptyCash === true) await backend.db.exec('delete from public.shifts');
       res.writeHead(200, cors);
       res.end('ok');
+      return;
+    }
+    if (path === '/test/commands' && req.method === 'POST') {
+      pauseCommands = JSON.parse(body.toString()).paused === true;
+      res.writeHead(200, cors);
+      res.end('ok');
+      return;
+    }
+    if (path === '/dexter/commands' && pauseCommands) {
+      res.writeHead(503, { ...cors, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Error temporal de prueba', code: 'TEMPORARY' }));
       return;
     }
     if (path === '/dexter/test-login') {

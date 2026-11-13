@@ -1,6 +1,7 @@
 import { initialState } from './initial.ts';
-import { isShiftCashier } from './access.ts';
+import { canCorrectTastings, isShiftCashier } from './access.ts';
 import { lineTotal, quoteOrder } from './pricing.ts';
+import { hasAlcohol, liquidPortions, sameFlavors } from './flavors.ts';
 import {
   DomainError,
   type Actor,
@@ -114,6 +115,40 @@ export function articles(state: State): { id: string; name: string; unit: string
   ];
 }
 
+export function countArticles(state: State, kind: Count['kind']) {
+  if (kind === 'audit' && state.settings[0].auditRequest)
+    return articles(state).filter((x) => state.settings[0].auditRequest!.items.includes(x.id));
+  return articles(state).filter((x) =>
+    kind === 'closing' ? x.id.startsWith('cup:') : !x.id.startsWith('liquid:'),
+  );
+}
+
+export function countPaymentMethods(state: State, shiftId: ID, kind: Count['kind']) {
+  if (kind === 'closing') return closingPaymentMethods(state, shiftId);
+  if (kind !== 'audit') return [];
+  return state.locations
+    .map((account) => ({ id: `transfer:${account.id}`, account }))
+    .filter((x) => state.settings[0].auditRequest?.payments.includes(x.id));
+}
+
+/** Cuentas configuradas o usadas en el turno, aunque después se hayan desactivado. */
+export function closingPaymentMethods(state: State, shiftId: ID) {
+  const used = new Set(state.shifts.find((s) => s.id === shiftId)?.paymentAccountIds ?? []);
+  for (const p of state.payments)
+    if (p.shiftId === shiftId && paymentMethod(p) === 'transfer' && p.accountId) used.add(p.accountId);
+  return state.locations
+    .filter((x) => (x.type === 'bank' && x.active && x.receivesSales) || used.has(x.id))
+    .map((account) => ({ id: `transfer:${account.id}`, account }));
+}
+
+export function countHasDifferences(count: Count): boolean {
+  return (
+    !!count.difference ||
+    Object.values(count.differences ?? {}).some((x) => x !== 0) ||
+    Object.values(count.paymentDifferences ?? {}).some((x) => x !== 0)
+  );
+}
+
 /** Tolerancia para una operación en línea que tardó en llegar (reintentos, red lenta). */
 export const ONLINE_LAG_MS = 10 * 60_000;
 /**
@@ -137,7 +172,11 @@ export function effectiveAt(state: State, command: Command, actor: Actor, receiv
   const shiftId = typeof p.shiftId === 'string' ? p.shiftId : command.shiftId;
   floor(state.shifts.find((x) => x.id === shiftId)?.openedAt);
   if (typeof p.orderId === 'string') floor(state.orders.find((x) => x.id === p.orderId)?.createdAt);
-  if (command.type === 'finish_audit' || (command.type === 'count' && p.kind === 'closing')) {
+  if (
+    command.type === 'start_audit' ||
+    command.type === 'finish_audit' ||
+    (command.type === 'count' && p.kind === 'closing')
+  ) {
     const drawer = `cash:${shiftId}`;
     for (const x of state.payments) if (x.shiftId === shiftId) floor(x.at);
     for (const x of state.expenses) if (x.shiftId === shiftId && x.source === 'cash') floor(x.at);
@@ -432,15 +471,29 @@ export function applyCommand(
     assert(new Set(providedIds).size === providedIds.length, 'No repitas identificadores de líneas.');
     let totalUnits = 0;
     return inputs.map((input: Record<string, unknown>, index: number) => {
-      const flavor = required(
-        pricing.flavors.find((x) => x.id === input.flavorId && x.active),
-        'Sabor activo',
+      const selection = input.flavorIds === undefined ? [input.flavorId] : input.flavorIds;
+      assert(
+        Array.isArray(selection) && selection.length > 0 && selection.length <= 100,
+        'Selecciona entre 1 y 100 sabores.',
       );
+      const flavorIds = selection.map((value: unknown) => id(value, 'Sabor')).sort();
+      assert(new Set(flavorIds).size === flavorIds.length, 'No repitas sabores en el mismo vaso.');
+      assert(
+        input.flavorId === undefined || flavorIds.includes(input.flavorId as string),
+        'El sabor principal debe pertenecer a la mezcla.',
+      );
+      flavorIds.forEach((flavorId) =>
+        required(
+          pricing.flavors.find((x) => x.id === flavorId && x.active),
+          'Sabor activo',
+        ),
+      );
+      const selectionLine = { flavorId: flavorIds[0], flavorIds };
       const size = required(
         pricing.sizes.find((x) => x.id === input.sizeId && x.active),
         'Tamaño activo',
       );
-      const price = flavor.alcohol ? size.alcoholPrice : size.plainPrice;
+      const price = hasAlcohol(selectionLine, pricing.flavors) ? size.alcoholPrice : size.plainPrice;
       assert(
         price !== null && price > 0 && size.ounces > 0,
         'Este producto está pendiente de precio o composición.',
@@ -458,7 +511,8 @@ export function applyCommand(
       assert(totalUnits <= 500, 'Divide los pedidos de más de 500 productos.');
       return {
         id: input.id ? id(input.id) : makeId(`line:${index}`),
-        flavorId: flavor.id,
+        flavorId: flavorIds[0],
+        ...(flavorIds.length > 1 ? { flavorIds } : {}),
         sizeId: size.id,
         quantity: qty,
         delivered: 0,
@@ -498,7 +552,14 @@ export function applyCommand(
       });
       if (size.cups) movement(`cup:${size.id}`, -qty * size.cups, 'delivery', order.id, `${line.id}:cup`);
       if (size.beers) movement('coronita', -qty * size.beers, 'delivery', order.id, `${line.id}:beer`);
-      movement(`liquid:${line.flavorId}`, -qty * size.ounces, 'delivery', order.id, `${line.id}:liquid`);
+      for (const portion of liquidPortions(line, qty * size.ounces))
+        movement(
+          `liquid:${portion.flavorId}`,
+          -portion.ounces,
+          'delivery',
+          order.id,
+          `${line.id}:liquid:${portion.flavorId}`,
+        );
       line.delivered += qty;
       line.consumptionIds.push(deliveryId);
     }
@@ -665,7 +726,51 @@ export function applyCommand(
     case 'start_audit': {
       admin(actor);
       assert(!settings.auditId, 'Ya existe un arqueo en curso.');
+      const shift = required(
+        state.shifts.find((x) => x.id === p.shiftId && x.status === 'open'),
+        'Turno abierto',
+      );
+      const selected = (value: unknown, allowed: string[], label: string): string[] => {
+        assert(
+          Array.isArray(value) && value.every((x) => typeof x === 'string' && allowed.includes(x)),
+          `${label} inválidos.`,
+        );
+        assert(new Set(value).size === value.length, `No repitas ${label.toLowerCase()}.`);
+        return value;
+      };
+      const items = selected(
+        p.items ?? [],
+        articles(state).map((x) => x.id),
+        'Artículos',
+      );
+      const methods = closingPaymentMethods(state, shift.id);
+      const payments = selected(
+        p.payments ?? [],
+        methods.map((x) => x.id),
+        'Medios de pago',
+      );
+      assert(p.cash === undefined || typeof p.cash === 'boolean', 'Selección de efectivo inválida.');
+      const cash = p.cash === true;
+      assert(cash || items.length || payments.length, 'Selecciona al menos un ítem para contar.');
       settings.auditId = makeId('audit-cut');
+      const balances = stockBalances(state),
+        totals = salesByMethod(state, shift.id).byAccount;
+      settings.auditRequest = {
+        id: settings.auditId,
+        shiftId: shift.id,
+        by: actor.id,
+        at: command.at,
+        cash,
+        items,
+        payments,
+        expectedCash: cash ? cashExpected(state, shift.id, command.at) : undefined,
+        expectedItems: Object.fromEntries(items.map((key) => [key, balances[key] ?? 0])),
+        expectedPayments: Object.fromEntries(
+          methods
+            .filter((x) => payments.includes(x.id))
+            .map(({ id: key, account }) => [key, totals[account.id] ?? 0]),
+        ),
+      };
       ref = settings.auditId;
       break;
     }
@@ -678,8 +783,15 @@ export function applyCommand(
         'Turno',
       );
       if (kind === 'audit') {
-        admin(actor);
+        assert(command.type === 'finish_audit', 'Presenta el arqueo solicitado.');
         assert(settings.auditId, 'No hay arqueo iniciado.');
+        cashier(actor, state, shift.id);
+        assert(actor.online, 'Presentar el arqueo requiere conexión.', 'ONLINE_REQUIRED');
+        assert(p.auditId === settings.auditId, 'El arqueo cambió. Actualiza antes de contar.');
+        assert(
+          !settings.auditRequest || settings.auditRequest.shiftId === shift.id,
+          'Este arqueo corresponde a otro turno.',
+        );
       } else cashier(actor, state, shift.id);
       assert(
         !state.counts.some((x) => x.shiftId === shift.id && x.kind === kind && kind !== 'audit'),
@@ -687,17 +799,27 @@ export function applyCommand(
       );
       const skipped = kind === 'opening' && p.skip === true;
       assert(!skipped || settings.skipOpeningCount, 'El conteo de apertura no se puede omitir.');
-      const balances = stockBalances(state),
+      const auditRequest = kind === 'audit' ? settings.auditRequest : undefined;
+      const balances = auditRequest?.expectedItems ?? stockBalances(state),
         items: Record<string, number> = {};
-      for (const article of articles(state).filter((x) => !x.id.startsWith('liquid:'))) {
+      for (const article of countArticles(state, kind)) {
         if (skipped) continue;
         const value = (p.items ?? {})[article.id];
         assert(value !== undefined, `Falta contar ${article.name}.`);
         items[article.id] = quantity(value, article.name, 1000000, true);
-        assert(Number.isInteger(items[article.id]), 'Los conteos físicos deben ser enteros.');
+        if (!article.id.startsWith('liquid:'))
+          assert(Number.isInteger(items[article.id]), 'Los conteos físicos deben ser enteros.');
       }
-      const counted = skipped ? undefined : money(p.cash, 'Efectivo contado', true),
-        expected = kind === 'opening' ? shift.base : cashExpected(state, shift.id, command.at);
+      const countsCash = !skipped && (kind !== 'audit' || !auditRequest || auditRequest.cash);
+      const counted = countsCash ? money(p.cash, 'Efectivo contado', true) : undefined,
+        expected =
+          kind === 'opening'
+            ? shift.base
+            : !countsCash
+              ? undefined
+              : auditRequest
+                ? auditRequest.expectedCash
+                : cashExpected(state, shift.id, command.at);
       if (command.configVersion !== settings.version) sourcePricing();
       const archived = state.parameters.find(
         (v) => v.version === command.configVersion && v.kind === 'catalog',
@@ -722,13 +844,33 @@ export function applyCommand(
         at: command.at,
         cash: counted,
         items,
+        itemLabels: Object.fromEntries(countArticles(state, kind).map((x) => [x.id, x.name])),
         expectedCash: expected,
         expectedItems: Object.fromEntries(Object.keys(items).map((k) => [k, balances[k] ?? 0])),
-        difference: counted === undefined ? undefined : counted - expected,
+        difference: counted === undefined || expected === undefined ? undefined : counted - expected,
         differences: Object.fromEntries(Object.keys(items).map((k) => [k, items[k] - (balances[k] ?? 0)])),
         notes: String(p.notes ?? '').slice(0, 1500),
         checklist,
       };
+      if (kind === 'closing' || kind === 'audit') {
+        const methods = countPaymentMethods(state, shift.id, kind);
+        const totals = salesByMethod(state, shift.id).byAccount;
+        count.payments = {};
+        count.paymentLabels = {};
+        count.expectedPayments = {};
+        count.paymentDifferences = {};
+        for (const { id: key, account } of methods) {
+          const amount = p.payments?.[key];
+          assert(typeof amount === 'number', `Falta verificar transferencias · ${account.name}.`);
+          money(Math.abs(amount), `Transferencias verificadas · ${account.name}`, true);
+          count.payments[key] = amount;
+          count.paymentLabels[key] = account.name;
+          count.expectedPayments[key] = auditRequest
+            ? (auditRequest.expectedPayments?.[key] ?? 0)
+            : (totals[account.id] ?? 0);
+          count.paymentDifferences[key] = amount - count.expectedPayments[key];
+        }
+      }
       state.counts.push(count);
       ref = count.id;
       if (kind === 'opening') {
@@ -736,7 +878,11 @@ export function applyCommand(
         shift.openingCountId = count.id;
       }
       if (kind === 'audit') {
+        count.auditId = settings.auditId;
+        count.requestedBy = auditRequest?.by;
+        count.requestedAt = auditRequest?.at;
         settings.auditId = undefined;
+        settings.auditRequest = undefined;
       }
       if (kind === 'closing') {
         assert(!settings.auditId, 'Termina el arqueo antes de cerrar.');
@@ -787,8 +933,7 @@ export function applyCommand(
           order.version++;
         }
       }
-      if (count.difference || Object.values(count.differences ?? {}).some((x) => x !== 0))
-        notify('mermas', `Diferencias registradas en conteo de ${kind}.`);
+      if (countHasDifferences(count)) notify('mermas', `Diferencias registradas en conteo de ${kind}.`);
       break;
     }
     case 'create_order': {
@@ -836,10 +981,7 @@ export function applyCommand(
         const next = inputs.find((x) => x.id === old.id);
         if (old.delivered) {
           assert(
-            next &&
-              next.flavorId === old.flavorId &&
-              next.sizeId === old.sizeId &&
-              next.quantity >= old.delivered,
+            next && sameFlavors(next, old) && next.sizeId === old.sizeId && next.quantity >= old.delivered,
             'Lo entregado no se elimina ni cambia. Solicita una corrección.',
           );
           next.delivered = old.delivered;
@@ -886,6 +1028,56 @@ export function applyCommand(
       ref = order.id;
       break;
     }
+    case 'update_tasting':
+    case 'remove_tasting': {
+      assert(
+        actor.online || actor.primary,
+        'Esta corrección requiere conexión desde este equipo.',
+        'ONLINE_REQUIRED',
+      );
+      assert(!settings.auditId, 'Termina el arqueo antes de corregir degustaciones.', 'AUDIT_ACTIVE');
+      const order = findOrder();
+      checkVersion(order);
+      assert(
+        canCorrectTastings(
+          actor,
+          order,
+          state.shifts.find((shift) => shift.status === 'open'),
+        ),
+        'Solo un administrador puede corregir degustaciones de turnos anteriores.',
+        'FORBIDDEN',
+      );
+      const tastingId = id(p.tastingId, 'Degustación');
+      const tasting = required(
+        order.tastings.find((tasting) => tasting.id === tastingId),
+        'Degustación',
+      );
+      if (command.type === 'remove_tasting') {
+        movement('copita', 1, 'tasting_correction', order.id);
+        movement(`liquid:${tasting.flavorId}`, 1, 'tasting_correction', order.id);
+        order.tastings = order.tastings.filter((item) => item.id !== tasting.id);
+        if (
+          !order.tastings.length &&
+          (order.status === 'tasting_only' || (order.status === 'open' && !order.lines.length))
+        )
+          order.status = 'cancelled';
+        message = `Degustación ${tasting.id} eliminada; sabor ${tasting.flavorId}, registrada ${tasting.at}. Se restituyen una copita y 1 oz.`;
+      } else {
+        const flavor = required(
+          state.flavors.find((flavor) => flavor.id === p.flavorId && flavor.active),
+          'Sabor activo',
+        );
+        if (flavor.id !== tasting.flavorId) {
+          movement(`liquid:${tasting.flavorId}`, 1, 'tasting_correction', order.id, 'old-flavor');
+          movement(`liquid:${flavor.id}`, -1, 'tasting_correction', order.id, 'new-flavor');
+          message = `Degustación ${tasting.id} corregida: sabor ${tasting.flavorId} por ${flavor.id}. Se conserva la copita y 1 oz de consumo.`;
+          tasting.flavorId = flavor.id;
+        }
+      }
+      order.version++;
+      ref = order.id;
+      break;
+    }
     case 'cancel_order': {
       operating();
       const order = findOrder();
@@ -902,6 +1094,7 @@ export function applyCommand(
     case 'close_tastings': {
       operating();
       const order = findOrder();
+      checkVersion(order);
       assert(
         order.status === 'open' && !order.lines.length && order.tastings.length > 0,
         'Solo se cierra así un pedido de degustaciones.',
@@ -1269,7 +1462,7 @@ export function applyCommand(
             amount = prior.delivered;
           line.delivered = amount;
           line.consumptionIds = [...prior.consumptionIds];
-          if (amount && (line.sizeId !== prior.sizeId || line.flavorId !== prior.flavorId)) {
+          if (amount && (line.sizeId !== prior.sizeId || !sameFlavors(line, prior))) {
             const a = {
                 ...required(
                   state.sizes.find((x) => x.id === prior.sizeId),
@@ -1292,20 +1485,22 @@ export function applyCommand(
               movement('coronita', amount * a.beers, 'recipe_correction', old.id, `${line.id}:oldbeer`);
             if (b.beers)
               movement('coronita', -amount * b.beers, 'recipe_correction', old.id, `${line.id}:newbeer`);
-            movement(
-              `liquid:${prior.flavorId}`,
-              amount * a.ounces,
-              'recipe_correction',
-              old.id,
-              `${line.id}:oldliquid`,
-            );
-            movement(
-              `liquid:${line.flavorId}`,
-              -amount * b.ounces,
-              'recipe_correction',
-              old.id,
-              `${line.id}:newliquid`,
-            );
+            for (const portion of liquidPortions(prior, amount * a.ounces))
+              movement(
+                `liquid:${portion.flavorId}`,
+                portion.ounces,
+                'recipe_correction',
+                old.id,
+                `${line.id}:oldliquid:${portion.flavorId}`,
+              );
+            for (const portion of liquidPortions(line, amount * b.ounces))
+              movement(
+                `liquid:${portion.flavorId}`,
+                -portion.ounces,
+                'recipe_correction',
+                old.id,
+                `${line.id}:newliquid:${portion.flavorId}`,
+              );
           }
         });
       }
@@ -1762,6 +1957,10 @@ export function applyCommand(
       admin(actor);
       const before = catalogBefore(),
         key = p.id ? id(p.id) : makeId('promotion');
+      assert(
+        !state.promotions.some((promotion) => promotion.id === key && promotion.courtesyOnly),
+        'La cortesía ya emitida conserva sus condiciones. Genera otro código para ofrecer un beneficio diferente.',
+      );
       assert(['fixed', 'upgrade', 'nxm', 'free'].includes(p.effect), 'Efecto desconocido.');
       assert(['schedule', 'coupon'].includes(p.delivery), 'Entrega inválida.');
       assert(p.effect !== 'free' || p.delivery === 'coupon', 'Un producto gratuito requiere cupón.');
@@ -1824,11 +2023,81 @@ export function applyCommand(
     }
     case 'issue_coupon': {
       admin(actor);
-      const promo = required(
-        state.promotions.find((x) => x.id === p.promotionId && x.delivery === 'coupon' && x.active),
-        'Promoción de cupón',
-      );
-      const courtesy = p.courtesy === true;
+      let promo: Promotion;
+      if (p.courtesySpec !== undefined) {
+        const spec = p.courtesySpec;
+        assert(
+          spec && typeof spec === 'object' && !Array.isArray(spec),
+          'Define las condiciones de la cortesía.',
+        );
+        assert(
+          spec.allowMixed === undefined || typeof spec.allowMixed === 'boolean',
+          'Define si la cortesía admite combinados.',
+        );
+        const size = required(
+          state.sizes.find((size) => size.id === spec.sizeId && size.active && size.ounces > 0),
+          'Tamaño activo',
+        );
+        assert(
+          ['all', 'yes', 'no'].includes(spec.alcohol),
+          'Define si la cortesía es con licor, sin licor o de ambos tipos.',
+        );
+        const flavorInputs = spec.flavorIds ?? [];
+        assert(
+          Array.isArray(flavorInputs) && flavorInputs.length <= 100,
+          'Sabores de la cortesía inválidos.',
+        );
+        const flavorIds = flavorInputs.map((value: unknown) => id(value, 'Sabor'));
+        assert(new Set(flavorIds).size === flavorIds.length, 'No repitas sabores de la cortesía.');
+        flavorIds.forEach((flavorId: string) =>
+          required(
+            state.flavors.find((flavor) => flavor.id === flavorId && flavor.active),
+            'Sabor activo',
+          ),
+        );
+        assert(
+          state.flavors.some(
+            (flavor) =>
+              flavor.active &&
+              (!flavorIds.length || flavorIds.includes(flavor.id)) &&
+              (spec.alcohol === 'all' || flavor.alcohol === (spec.alcohol === 'yes')) &&
+              (flavor.alcohol ? size.alcoholPrice : size.plainPrice) !== null,
+          ),
+          'No hay sabores disponibles para esta cortesía.',
+        );
+        const expiresAt = isoDate(p.expiresAt, 'Fecha de vencimiento');
+        assert(expiresAt > command.at, 'Vencimiento inválido.');
+        promo = {
+          id: makeId('courtesy-promotion'),
+          name: text(spec.name ?? `Cortesía de ${size.name}`, 'Nombre de la cortesía', 100),
+          effect: 'free',
+          delivery: 'coupon',
+          sizeIds: [size.id],
+          flavorIds,
+          alcohol: spec.alcohol,
+          courtesyOnly: true,
+          allowMixed: spec.allowMixed !== false,
+          startsAt: command.at,
+          endsAt: expiresAt,
+          days: [],
+          startTime: '00:00',
+          endTime: '00:00',
+          maxRedemptions: 1,
+          redemptions: 0,
+          active: true,
+          version: 1,
+          by: actor.id,
+          at: command.at,
+        };
+        state.promotions.push(promo);
+      } else {
+        promo = required(
+          state.promotions.find((x) => x.id === p.promotionId && x.delivery === 'coupon' && x.active),
+          'Promoción de cupón',
+        );
+        assert(!promo.courtesyOnly, 'Esta cortesía ya tiene su código. Genera una nueva cortesía.');
+      }
+      const courtesy = p.courtesySpec !== undefined || p.courtesy === true;
       if (courtesy) {
         const month = colombiaMonth(command.at),
           issued = state.coupons.filter(
@@ -1975,9 +2244,37 @@ export function redactState(full: State, actor: Actor): State {
   state.orders = state.orders.filter((x) => x.shiftId === active?.id || x.sellerId === actor.id);
   state.payments = [];
   state.stock = [];
+  if (state.settings[0].auditRequest) {
+    const {
+      expectedCash: _,
+      expectedItems: __,
+      expectedPayments: ___,
+      ...request
+    } = state.settings[0].auditRequest;
+    state.settings[0].auditRequest = request;
+  }
+  for (const shift of state.shifts)
+    shift.paymentAccountIds = [
+      ...new Set([
+        ...(shift.paymentAccountIds ?? []),
+        ...full.payments
+          .filter((p) => p.shiftId === shift.id && paymentMethod(p) === 'transfer' && p.accountId)
+          .map((p) => p.accountId!),
+      ]),
+    ];
   state.counts = state.counts
     .filter((x) => x.by === actor.id)
-    .map(({ expectedCash: _, expectedItems: __, difference: ___, differences: ____, ...x }) => x);
+    .map(
+      ({
+        expectedCash: _,
+        expectedItems: __,
+        difference: ___,
+        differences: ____,
+        expectedPayments: _____,
+        paymentDifferences: ______,
+        ...x
+      }) => x,
+    );
   state.shipments = state.shipments
     .filter((x) => x.status !== 'received')
     .map((x) => ({ ...x, items: [], expenseId: undefined }));

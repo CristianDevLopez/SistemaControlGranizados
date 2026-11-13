@@ -18,6 +18,7 @@ async function count(page: Page, cash: number, retained?: number) {
     await dialog
       .getByLabel('Efectivo reservado para la siguiente apertura', { exact: false })
       .fill(pesos(retained));
+  for (const input of await dialog.locator('input[name^="transfer:"]').all()) await input.fill('0');
   for (const input of await dialog.locator('.count-list input').all()) await input.fill('0');
   for (const input of await dialog.locator('input[type="checkbox"][required]').all()) await input.check();
   await dialog.getByRole('button', { name: 'Registrar conteo', exact: true }).click();
@@ -62,6 +63,12 @@ for (const account of [
     await expect(page.getByText('Venta registrada ·', { exact: false })).toBeVisible();
     await nav(page, 'Turno y caja');
     await page.getByRole('button', { name: 'Cerrar y contar caja', exact: true }).click();
+    await expect(page.getByRole('dialog').locator('.count-list')).not.toContainText(
+      /Bolsas|Paquetes|Líquido|Coronitas|Copitas/,
+    );
+    await expect(page.getByRole('dialog').locator('.count-list')).toContainText(
+      'unidades restantes del paquete abierto',
+    );
     await count(page, 26000, 26000);
     await expect(page.getByRole('button', { name: 'Iniciar caja', exact: true })).toBeVisible();
     await page.reload();

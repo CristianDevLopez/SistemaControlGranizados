@@ -4,6 +4,9 @@ import { useApp } from '../lib/store.tsx';
 import type { CommandType, Order, Payment } from '../domain/types.ts';
 import { isShiftCashier } from '../domain/access.ts';
 import { paymentMethod } from '../domain/engine.ts';
+import { FlavorPortions, flavorName, portionLabel } from './FlavorDetails.tsx';
+import { transferAccountName } from './payment-labels.ts';
+import { TastingsEditor } from './TastingsEditor.tsx';
 import { transferAccounts } from './Pos.tsx';
 import {
   Badge,
@@ -22,6 +25,7 @@ import {
 
 export interface DraftLine {
   flavorId: string;
+  flavorIds?: string[];
   sizeId: string;
   quantity: number;
   unitPrice?: number;
@@ -39,81 +43,127 @@ export function LinesEditor({
   return (
     <div className="lines-editor">
       {value.map((line, i) => (
-        <div key={i} className="edit-line">
-          <label>
-            Sabor
-            <select
-              required
-              value={line.flavorId}
-              onChange={(e) =>
-                onChange(value.map((l, j) => (j === i ? { ...l, flavorId: e.target.value } : l)))
-              }
-            >
-              <option value="">Seleccionar…</option>
-              {state.flavors
-                .filter((x) => x.active)
-                .map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label>
-            Tamaño
-            <select
-              required
-              value={line.sizeId}
-              onChange={(e) =>
-                onChange(value.map((l, j) => (j === i ? { ...l, sizeId: e.target.value } : l)))
-              }
-            >
-              <option value="">Seleccionar…</option>
-              {state.sizes
-                .filter((x) => x.active)
-                .map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label>
-            Unidades
-            <input
-              type="number"
-              required
-              min="1"
-              max="500"
-              value={line.quantity}
-              onChange={(e) =>
-                onChange(value.map((l, j) => (j === i ? { ...l, quantity: Number(e.target.value) } : l)))
-              }
-            />
-          </label>
-          {prices && (
+        <Fragment key={i}>
+          <div className="edit-line">
             <label>
-              Precio unitario cobrado
-              <MoneyInput
+              Sabor
+              <select
                 required
-                preview={false}
-                amount={line.unitPrice ?? null}
-                onChange={(_, amount) =>
-                  onChange(value.map((l, j) => (j === i ? { ...l, unitPrice: amount ?? 0 } : l)))
+                value={line.flavorIds ? '__mix__' : line.flavorId}
+                onChange={(e) =>
+                  onChange(
+                    value.map((l, j) =>
+                      j === i
+                        ? e.target.value === '__mix__'
+                          ? { ...l, flavorIds: l.flavorId ? [l.flavorId] : [] }
+                          : { ...l, flavorId: e.target.value, flavorIds: undefined }
+                        : l,
+                    ),
+                  )
+                }
+              >
+                <option value="">Seleccionar…</option>
+                <option value="__mix__">Combinado / bomba</option>
+                {state.flavors
+                  .filter((x) => x.active)
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              Tamaño
+              <select
+                required
+                value={line.sizeId}
+                onChange={(e) =>
+                  onChange(value.map((l, j) => (j === i ? { ...l, sizeId: e.target.value } : l)))
+                }
+              >
+                <option value="">Seleccionar…</option>
+                {state.sizes
+                  .filter((x) => x.active)
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              Unidades
+              <input
+                type="number"
+                required
+                min="1"
+                max="500"
+                value={line.quantity}
+                onChange={(e) =>
+                  onChange(value.map((l, j) => (j === i ? { ...l, quantity: Number(e.target.value) } : l)))
                 }
               />
             </label>
+            {prices && (
+              <label>
+                Precio unitario cobrado
+                <MoneyInput
+                  required
+                  preview={false}
+                  amount={line.unitPrice ?? null}
+                  onChange={(_, amount) =>
+                    onChange(value.map((l, j) => (j === i ? { ...l, unitPrice: amount ?? 0 } : l)))
+                  }
+                />
+              </label>
+            )}
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="Eliminar línea"
+              disabled={value.length === 1}
+              onClick={() => onChange(value.filter((_, j) => j !== i))}
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
+          {line.flavorIds && (
+            <fieldset className="mix-editor">
+              <legend>Sabores del vaso {i + 1} · partes iguales</legend>
+              {state.flavors
+                .filter((flavor) => flavor.active)
+                .map((flavor) => (
+                  <label className="check-inline" key={flavor.id}>
+                    <input
+                      type="checkbox"
+                      checked={line.flavorIds!.includes(flavor.id)}
+                      onChange={(event) => {
+                        const flavorIds = event.target.checked
+                          ? [...line.flavorIds!, flavor.id]
+                          : line.flavorIds!.filter((id) => id !== flavor.id);
+                        onChange(
+                          value.map((l, j) =>
+                            j === i ? { ...l, flavorId: flavorIds[0] ?? '', flavorIds } : l,
+                          ),
+                        );
+                      }}
+                    />
+                    {flavor.name}
+                    {line.flavorIds!.includes(flavor.id) && (
+                      <small>
+                        {portionLabel(
+                          (state.sizes.find((size) => size.id === line.sizeId)?.ounces ?? 0) /
+                            line.flavorIds!.length,
+                          line.flavorIds!.length,
+                        )}
+                      </small>
+                    )}
+                  </label>
+                ))}
+            </fieldset>
           )}
-          <button
-            className="icon-button"
-            type="button"
-            aria-label="Eliminar línea"
-            disabled={value.length === 1}
-            onClick={() => onChange(value.filter((_, j) => j !== i))}
-          >
-            <Trash2 size={16} />
-          </button>
-        </div>
+        </Fragment>
       ))}
       <button
         type="button"
@@ -136,7 +186,7 @@ export function Orders() {
     { state, actor, profiles } = app.data!,
     [filter, setFilter] = useState('pending'),
     [query, setQuery] = useState(''),
-    [details, setDetails] = useState<Order | null>(null),
+    [detailsId, setDetailsId] = useState<string | null>(null),
     [replace, setReplace] = useState<Order | null>(null),
     [paper, setPaper] = useState(false),
     [error, setError] = useState(''),
@@ -146,12 +196,13 @@ export function Orders() {
       fields: Field[];
       extra: Record<string, unknown>;
     } | null>(null);
+  const details = state.orders.find((order) => order.id === detailsId);
   const paymentLabel = (x: Payment) =>
     paymentMethod(x) === 'cash'
       ? 'Efectivo'
       : [
           'Transferencia',
-          state.locations.find((l) => l.id === x.accountId)?.name ?? 'cuenta',
+          transferAccountName(state.locations.find((l) => l.id === x.accountId)),
           x.reference && `ref ${x.reference}`,
         ]
           .filter(Boolean)
@@ -174,7 +225,10 @@ export function Orders() {
         value,
         options: [
           { value: 'cash', label: 'Efectivo de la caja' },
-          ...accounts.map((a) => ({ value: `transfer:${a.id}`, label: `Transferencia desde ${a.name}` })),
+          ...accounts.map((a) => ({
+            value: `transfer:${a.id}`,
+            label: `Transferencia desde ${transferAccountName(a)}`,
+          })),
         ],
       },
     ];
@@ -190,7 +244,8 @@ export function Orders() {
         (filter === 'all' ||
           (filter === 'pending' &&
             (['open', 'void_requested', 'unpaid_incident'].includes(o.status) ||
-              o.lines.some((x) => x.delivered < x.quantity))) ||
+              (!['cancelled', 'tasting_only'].includes(o.status) &&
+                o.lines.some((x) => x.delivered < x.quantity)))) ||
           (filter === 'paid' && o.status === 'paid')) &&
         `${o.number} ${profiles.find((x) => x.id === o.sellerId)?.name}`
           .toLowerCase()
@@ -252,7 +307,7 @@ export function Orders() {
                 {rows.map((o) => (
                   <tr key={o.id}>
                     <td>
-                      <button className="text-button strong" onClick={() => setDetails(o)}>
+                      <button className="text-button strong" onClick={() => setDetailsId(o.id)}>
                         #{o.number}
                       </button>
                       <small>{date(o.originalAt ?? o.createdAt)}</small>
@@ -264,8 +319,12 @@ export function Orders() {
                     <td>
                       {o.lines.map((l) => (
                         <div key={l.id}>
-                          {l.quantity} × {state.flavors.find((x) => x.id === l.flavorId)?.name} ·{' '}
+                          {l.quantity} × {flavorName(l, state.flavors)} ·{' '}
                           {state.sizes.find((x) => x.id === l.sizeId)?.name}
+                          <FlavorPortions line={l} state={state} />
+                          {l.appliedRules?.some((rule) => rule.promotion.courtesyOnly) && (
+                            <small>Cortesía aplicada al vaso completo</small>
+                          )}
                           <small>
                             {l.delivered}/{l.quantity} entregados
                           </small>
@@ -390,7 +449,7 @@ export function Orders() {
         )}
       </Panel>
       {details && (
-        <Modal title={`Pedido #${details.number}`} onClose={() => setDetails(null)}>
+        <Modal title={`Pedido #${details.number}`} onClose={() => setDetailsId(null)}>
           <div className="detail-content">
             <p>
               {stateNames[details.status]} · {date(details.createdAt)}
@@ -422,9 +481,12 @@ export function Orders() {
               <div className="list-row" key={l.id}>
                 <div>
                   <strong>
-                    {state.flavors.find((x) => x.id === l.flavorId)?.name} ·{' '}
-                    {state.sizes.find((x) => x.id === l.sizeId)?.name}
+                    {flavorName(l, state.flavors)} · {state.sizes.find((x) => x.id === l.sizeId)?.name}
                   </strong>
+                  <FlavorPortions line={l} state={state} />
+                  {l.appliedRules?.some((rule) => rule.promotion.courtesyOnly) && (
+                    <small>Cortesía aplicada al vaso completo</small>
+                  )}
                   <small>
                     {l.quantity} solicitados · {l.delivered} entregados
                   </small>
@@ -433,12 +495,7 @@ export function Orders() {
                 <strong>{money(l.listPrice * l.quantity - l.discount)}</strong>
               </div>
             ))}
-            {details.tastings.map((t) => (
-              <div className="list-row" key={t.id}>
-                <span>Degustación · {state.flavors.find((x) => x.id === t.flavorId)?.name}</span>
-                <small>{date(t.at)}</small>
-              </div>
-            ))}
+            <TastingsEditor order={details} showDates />
           </div>
         </Modal>
       )}
@@ -470,7 +527,12 @@ export function Orders() {
 function ReplaceDialog({ order, onClose }: { order: Order; onClose: () => void }) {
   const app = useApp(),
     [lines, setLines] = useState<DraftLine[]>(
-      order.lines.map((l) => ({ flavorId: l.flavorId, sizeId: l.sizeId, quantity: l.quantity })),
+      order.lines.map((l) => ({
+        flavorId: l.flavorId,
+        flavorIds: l.flavorIds,
+        sizeId: l.sizeId,
+        quantity: l.quantity,
+      })),
     ),
     [same, setSame] = useState(true),
     [error, setError] = useState(''),
@@ -570,7 +632,7 @@ function PaperDialog({ onClose }: { onClose: () => void }) {
                     { value: 'cash', label: 'Efectivo' },
                     ...accounts.map((a) => ({
                       value: `transfer:${a.id}`,
-                      label: `Transferencia a ${a.name}`,
+                      label: `Transferencia a ${transferAccountName(a)}`,
                     })),
                   ],
                 } satisfies Field,

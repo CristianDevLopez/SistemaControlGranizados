@@ -1,4 +1,5 @@
 import { DomainError, type Coupon, type OrderLine, type Promotion, type State } from './types.ts';
+import { hasAlcohol, lineFlavorIds } from './flavors.ts';
 
 interface Unit {
   line: OrderLine;
@@ -44,12 +45,13 @@ export function isScheduled(p: Promotion, at: string): boolean {
 }
 
 export function eligible(p: Promotion, u: OrderLine, state: State): boolean {
-  const flavor = state.flavors.find((x) => x.id === u.flavorId);
+  const flavors = lineFlavorIds(u);
   return (
-    !!flavor &&
+    flavors.every((id) => state.flavors.some((flavor) => flavor.id === id)) &&
     (!p.sizeIds.length || p.sizeIds.includes(u.sizeId)) &&
-    (!p.flavorIds.length || p.flavorIds.includes(u.flavorId)) &&
-    (p.alcohol === 'all' || (p.alcohol === 'yes') === flavor.alcohol)
+    (p.allowMixed !== false || flavors.length === 1) &&
+    (!p.flavorIds.length || flavors.every((id) => p.flavorIds.includes(id))) &&
+    (p.alcohol === 'all' || (p.alcohol === 'yes') === hasAlcohol(u, state.flavors))
   );
 }
 
@@ -60,7 +62,7 @@ function priceFor(p: Promotion, u: Unit, state: State): number {
     const size = state.sizes.find((x) => x.id === u.line.sizeId)!;
     const paid = state.sizes.find((x) => x.rank === size.rank - (p.steps ?? 1));
     if (!paid || size.beers > 0) return u.price;
-    const alcohol = state.flavors.find((x) => x.id === u.line.flavorId)!.alcohol;
+    const alcohol = hasAlcohol(u.line, state.flavors);
     return Math.min(u.price, (alcohol ? paid.alcoholPrice : paid.plainPrice) ?? u.price);
   }
   return u.price;
@@ -148,6 +150,7 @@ export function quoteOrder(
   schedules.filter((p) => p.effect === 'nxm').forEach((p) => addOffers(p));
   schedules.filter((p) => p.effect !== 'nxm' && p.maxRedemptions !== null).forEach((p) => addOffers(p));
   if (codes.length && !online) throw new DomainError('Los cupones requieren conexión.', 'ONLINE_REQUIRED');
+  const courtesyCodes: string[] = [];
   for (const code of [...new Set(codes.map((x) => x.trim().toUpperCase()).filter(Boolean))]) {
     const coupon = state.coupons.find((x) => x.code === code);
     if (!coupon || coupon.status !== 'issued' || coupon.expiresAt <= at)
@@ -157,6 +160,13 @@ export function quoteOrder(
       throw new DomainError('La promoción del cupón no está vigente en este horario.');
     if (promotion.maxRedemptions !== null && promotion.redemptions >= promotion.maxRedemptions)
       throw new DomainError('La promoción alcanzó su límite.');
+    if (promotion.courtesyOnly) {
+      if (!lines.some((line) => eligible(promotion, line, state)))
+        throw new DomainError(
+          'La cortesía no corresponde al tamaño, tipo o sabores del pedido. Revisa los productos antes de canjearla.',
+        );
+      courtesyCodes.push(code);
+    }
     addOffers(promotion, coupon);
   }
   offers.sort((a, b) => b.gain - a.gain || a.promotion.id.localeCompare(b.promotion.id));
@@ -229,6 +239,10 @@ export function quoteOrder(
     search(i + 1, mask, coupons, picked, gain, uses);
   };
   search(0, 0n, new Set(), [], 0, {});
+  if (courtesyCodes.some((code) => !best.some((offer) => offer.coupon?.code === code)))
+    throw new DomainError(
+      'Cada código de cortesía necesita un vaso elegible distinto. Revisa los productos y códigos del pedido.',
+    );
   const finalPrices = [...base];
   const couponIds = new Map<number, string>();
   const groupUses: Record<string, number> = {};
