@@ -117,12 +117,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     localWrites = useRef(0);
   const switchingBranch = useRef(false);
   const installingUpdate = useRef(false);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toast = useCallback((message: string) => {
+    if (noticeTimer.current !== null) clearTimeout(noticeTimer.current);
     setNotice(message);
-    setTimeout(() => {
+    noticeTimer.current = setTimeout(() => {
+      noticeTimer.current = null;
       if (live.current) setNotice('');
     }, 4500);
   }, []);
+  useEffect(
+    () => () => {
+      if (noticeTimer.current !== null) clearTimeout(noticeTimer.current);
+    },
+    [],
+  );
   const remember = useCallback(async (value: Snapshot) => {
     if (!value.actor.superAdmin) {
       preview.current = null;

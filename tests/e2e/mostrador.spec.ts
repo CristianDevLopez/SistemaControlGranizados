@@ -230,7 +230,15 @@ test('cambia y elimina el sabor de una degustación conservando los productos de
   const tasting = page.getByRole('combobox', { name: 'Sabor de la degustación 1', exact: true });
   await tasting.selectOption('30000000-0000-4000-8000-000000000002');
   await expect(tasting).toHaveValue('30000000-0000-4000-8000-000000000002');
-  await expect(page.getByText('Sabor de la degustación corregido.', { exact: true })).toBeVisible();
+  await expect(tasting).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('Sincronizado');
+  const order = await page.locator('.cart-heading h2').textContent();
+  // La corrección debe persistir en el servidor, aunque su aviso temporal ya haya desaparecido.
+  await page.reload();
+  await expect(page.locator('.cart-heading h2')).toHaveText(order!);
+  await expect(tasting).toHaveValue('30000000-0000-4000-8000-000000000002');
+  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-total')).toContainText('14.000');
   await page.getByRole('button', { name: 'Eliminar degustación 1', exact: true }).click();
   await expect(page.locator('.tasting-list')).toHaveCount(0);
   await expect(page.locator('.cart-line')).toHaveCount(1);
@@ -242,6 +250,29 @@ test('cambia y elimina el sabor de una degustación conservando los productos de
   await expect(page.locator('tbody tr')).toHaveCount(1);
   await expect(page.locator('tbody')).toContainText('1/1 entregados');
   await expect(page.locator('tbody')).not.toContainText('degustaciones');
+});
+
+test('un aviso nuevo conserva su duración aunque exista un aviso anterior', async ({ page }) => {
+  await page.clock.install();
+  await enter(page);
+  await page.getByRole('button', { name: '+1 degustación', exact: true }).click();
+  await page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
+  await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('Sincronizado');
+  await page.clock.pauseAt(new Date(Date.now() + 5000));
+  const tasting = page.getByRole('combobox', { name: 'Sabor de la degustación 1', exact: true });
+  await tasting.selectOption('30000000-0000-4000-8000-000000000002');
+  await expect(page.getByRole('status')).toHaveText('Sabor de la degustación corregido.');
+  await expect(tasting).toBeEnabled();
+  await page.clock.runFor(3000);
+  await page.getByRole('button', { name: 'Eliminar degustación 1', exact: true }).click();
+  const notice = page.getByRole('status');
+  await expect(notice).toHaveText('Degustación eliminada. Se restituyeron una copita y 1 oz.');
+  await page.clock.runFor(1500);
+  await expect(notice).toHaveText('Degustación eliminada. Se restituyeron una copita y 1 oz.');
+  await page.clock.runFor(2999);
+  await expect(notice).toBeVisible();
+  await page.clock.runFor(1);
+  await expect(notice).toHaveCount(0);
 });
 
 test('corrige y elimina una degustación ya cerrada desde el detalle del historial', async ({ page }) => {
