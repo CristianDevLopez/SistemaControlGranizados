@@ -19,7 +19,8 @@ import { getMeta, setMeta } from '../lib/db.ts';
 import { lineTotal } from '../domain/pricing.ts';
 import { hasAlcohol, sameFlavors } from '../domain/flavors.ts';
 import { FlavorPortions, flavorName, portionLabel } from './FlavorDetails.tsx';
-import { isShiftCashier } from '../domain/access.ts';
+import { canWork, hasPermission, isShiftCashier } from '../domain/access.ts';
+import { FlavorImage } from './FlavorImage.tsx';
 import type { MoneyLocation, Order, OrderLine, State } from '../domain/types.ts';
 import { paymentMethod } from '../domain/engine.ts';
 import { Badge, Empty, FieldsForm, Modal, MoneyInput, money, date, stateNames } from './components.tsx';
@@ -180,6 +181,10 @@ function Checkout({
     ),
     [code, setCode] = useState(''),
     [codes, setCodes] = useState<string[]>([]),
+    [unusedCodes, setUnusedCodes] = useState<string[]>([]),
+    [applications, setApplications] = useState<
+      { code: string; lineId: string; quantity: number; unitAmount: number }[]
+    >([]),
     [total, setTotal] = useState(order.total),
     [quotedLines, setQuotedLines] = useState<OrderLine[]>(order.lines),
     [scanner, setScanner] = useState(false),
@@ -198,12 +203,10 @@ function Checkout({
       setTotal(quote.total);
       setQuotedLines(quote.lines);
       setCodes(all);
+      setUnusedCodes(quote.unusedCodes ?? []);
+      setApplications(quote.applications ?? []);
       setCode('');
-      app.toast(
-        quote.total === 0
-          ? 'Cortesía verificada. Confirma el registro para canjearla.'
-          : 'Código validado. Revisa el total antes de confirmar.',
-      );
+      app.toast('Beneficios verificados. Solo se consumen los aplicados al confirmar el cobro.');
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -262,12 +265,41 @@ function Checkout({
           {codes.length > 0 && (
             <div className="coupon-tags">
               {codes.map((c) => (
-                <Badge key={c} tone="green">
+                <Badge key={c} tone={unusedCodes.includes(c) ? 'neutral' : 'green'}>
                   <Ticket size={13} />
-                  {c}
+                  {c} {unusedCodes.includes(c) ? '· Sin usar' : '· Aplicado'}
                 </Badge>
               ))}
             </div>
+          )}
+          {applications.map((a, index) => {
+            const line = order.lines.find((l) => l.id === a.lineId);
+            return (
+              <p key={index}>
+                {a.code} → {a.quantity} × {state.flavors.find((f) => f.id === line?.flavorId)?.name} ·{' '}
+                {state.sizes.find((s) => s.id === line?.sizeId)?.name}. Por producto: {money(a.unitAmount)}
+              </p>
+            );
+          })}
+          {unusedCodes.length > 0 && (
+            <p className="notice info">
+              Sin canjear: {unusedCodes.join(', ')}. Se conservan disponibles hasta su vencimiento; no generan
+              dinero ni vuelto.
+            </p>
+          )}
+          {codes.length > 0 && (
+            <button
+              className="text-button"
+              disabled={busy}
+              onClick={() => {
+                setCodes([]);
+                setUnusedCodes([]);
+                setApplications([]);
+                setTotal(order.total);
+              }}
+            >
+              Quitar cupones y revisar de nuevo
+            </button>
           )}
         </div>
         {freeCups > 0 && (
@@ -381,12 +413,16 @@ export function Pos() {
     [tasting, setTasting] = useState(false),
     [mixing, setMixing] = useState(false),
     [mixFlavors, setMixFlavors] = useState<string[]>([]),
+    [flavorGroup, setFlavorGroup] = useState('all'),
     [payment, setPayment] = useState<PaymentChoice>(CASH);
   const active = state.shifts.find((x) => x.status === 'open'),
     order = state.orders.find((x) => x.id === orderId && x.status === 'open'),
     size = state.sizes.find((x) => x.id === sizeId),
     open = state.orders.filter((x) => x.status === 'open');
-  const canCash = isShiftCashier({ ...actor, online: app.online }, active);
+  const canCash =
+    hasPermission(actor, 'payments') && isShiftCashier({ ...actor, online: app.online }, active);
+  const canOrders = canWork(actor, state, 'orders', order?.shiftId);
+  const canDeliver = canWork(actor, state, 'deliveries', order?.shiftId);
   const canCancel = !!order && !order.replacesId && !order.lines.some((line) => line.delivered > 0);
   const mixPrice = hasAlcohol({ flavorId: mixFlavors[0], flavorIds: mixFlavors }, state.flavors)
     ? size?.alcoholPrice
@@ -521,7 +557,7 @@ export function Pos() {
             </div>
             <button
               className={`button ${tasting ? 'primary' : 'secondary'}`}
-              disabled={!active || busy}
+              disabled={!active || busy || !canDeliver}
               onClick={() => {
                 setTasting((x) => !x);
                 setMixFlavors([]);
@@ -581,10 +617,27 @@ export function Pos() {
             </h3>
             <span>{state.flavors.filter((x) => x.active).length} disponibles</span>
           </div>
+          <div className="segmented" role="group" aria-label="Filtrar sabores por licor">
+            {[
+              ['all', 'Todos'],
+              ['no', 'Sin licor'],
+              ['yes', 'Con licor'],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                className={flavorGroup === key ? 'active' : ''}
+                aria-pressed={flavorGroup === key}
+                onClick={() => setFlavorGroup(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {state.flavors.some((x) => x.active) ? (
             <div className="flavor-grid">
               {state.flavors
-                .filter((f) => f.active)
+                .filter((f) => f.active && (flavorGroup === 'all' || f.alcohol === (flavorGroup === 'yes')))
+                .sort((a, b) => a.name.localeCompare(b.name, 'es'))
                 .map((f, index) => {
                   const price = f.alcohol ? size?.alcoholPrice : size?.plainPrice;
                   return (
@@ -595,6 +648,7 @@ export function Pos() {
                       onClick={() => addFlavor(f.id)}
                       disabled={
                         busy ||
+                        (tasting ? !canDeliver : !canOrders) ||
                         !active ||
                         !!state.settings[0].auditId ||
                         (!app.online && !actor.primary) ||
@@ -602,6 +656,7 @@ export function Pos() {
                       }
                     >
                       <div className="flavor-art">
+                        <FlavorImage imageId={f.imageId} name={f.name} />
                         <span className="cup-shape">
                           <span />
                         </span>
@@ -750,6 +805,7 @@ export function Pos() {
                           aria-label="Disminuir cantidad"
                           disabled={
                             busy ||
+                            !canOrders ||
                             line.quantity <= line.delivered ||
                             (line.quantity === 1 && order.lines.length === 1 && !canCancel)
                           }
@@ -760,7 +816,7 @@ export function Pos() {
                         <span>{line.quantity}</span>
                         <button
                           aria-label="Aumentar cantidad"
-                          disabled={busy}
+                          disabled={busy || !canOrders}
                           onClick={() => adjust(line, 1)}
                         >
                           <Plus size={13} />
@@ -768,7 +824,7 @@ export function Pos() {
                       </div>
                       <button
                         className={`delivery-chip ${line.delivered === line.quantity ? 'done' : ''}`}
-                        disabled={busy || line.delivered === line.quantity}
+                        disabled={busy || !canDeliver || !active || line.delivered === line.quantity}
                         onClick={() =>
                           void action(() =>
                             app.run('deliver', {

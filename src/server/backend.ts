@@ -73,7 +73,14 @@ export class SupabaseBackend implements Backend {
     return data ? this.toProfile(data) : null;
   }
   private toProfile(p: any): Profile {
-    return { id: p.id, name: p.name, username: p.username, role: p.role, active: p.active };
+    return {
+      id: p.id,
+      name: p.name,
+      username: p.username,
+      role: p.role,
+      active: p.active,
+      permissions: p.permissions ?? {},
+    };
   }
   async profiles() {
     if (this.branchId)
@@ -90,9 +97,14 @@ export class SupabaseBackend implements Backend {
       return;
     }
     checked(
-      await this.client
-        .from('profiles')
-        .upsert({ id: p.id, name: p.name, username: p.username ?? null, role: p.role, active: p.active }),
+      await this.client.from('profiles').upsert({
+        id: p.id,
+        name: p.name,
+        username: p.username ?? null,
+        role: p.role,
+        active: p.active,
+        permissions: p.permissions ?? {},
+      }),
     );
   }
   async devices() {

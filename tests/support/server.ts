@@ -2,7 +2,7 @@
 import { createServer } from 'node:http';
 import { PgBackend } from './backend.ts';
 import { createGateway } from '../../src/server/gateway.ts';
-import { admin, cashier, owner, ids, NOW } from './fixture.ts';
+import { admin, cashier, support, owner, ids, NOW } from './fixture.ts';
 let backend = await PgBackend.create();
 let pauseCommands = false;
 const gateway = () =>
@@ -27,6 +27,17 @@ createServer(async (req, res) => {
     if (path === '/health') {
       res.writeHead(200, cors);
       res.end('ok');
+      return;
+    }
+    if (path.startsWith('/test-files/') && req.method === 'GET') {
+      const file = backend.files.get(decodeURIComponent(path.slice('/test-files/'.length)));
+      if (!file) {
+        res.writeHead(404, cors);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { ...cors, 'Content-Type': file.type });
+      res.end(Buffer.from(await file.arrayBuffer()));
       return;
     }
     if (path === '/reset' && req.method === 'POST') {
@@ -55,9 +66,11 @@ createServer(async (req, res) => {
         actor =
           input.email === 'owner@test.invalid'
             ? owner
-            : input.email === 'admin@test.invalid'
-              ? admin
-              : cashier;
+            : input.email === 'support@test.invalid'
+              ? support
+              : input.email === 'admin@test.invalid'
+                ? admin
+                : cashier;
       res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({

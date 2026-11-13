@@ -2,6 +2,10 @@
 
 PWA para uno o varios locales por propietario, con una caja operativa por local, pedidos con entregas parciales, continuidad offline del equipo principal y administración remota. React, TypeScript, Vite, Dexie y Supabase. Interfaz en español; dinero en pesos enteros, fechas UTC y visualización de Colombia.
 
+### Ajustes operativos preparados el 13 de noviembre de 2026
+
+Permisos individuales por local y guía de perfiles; pedidos de apoyo identificados en caja; bloqueo de movimientos de trabajadores tras cerrar; cuadre por efectivo y cada cuenta configurada; cortesías con condiciones conservadas, acumulación configurable, QR compartible y canje parcial de varios códigos; imágenes de sabores, orden alfabético y filtro con/sin licor. Incluye controles en interfaz, gateway y PostgreSQL. Estos cambios están preparados para revisión local, **sin desplegar ni cargar datos en producción**. Consultar [aplicación y compatibilidad](docs/AJUSTES-OPERATIVOS.md) y el [manual actualizado](docs/manuales/manual-administradores-empleados.md).
+
 ### Locales y mensualidades
 
 El propietario solicita locales desde **Locales y mensualidades → Solicitar local**. El desarrollador, con su acceso privado de Superadministrador, configura la tarifa en COP y la fecha de inicio y activa cada local desde ese mismo panel. Puede registrar otros propietarios con una cuenta nueva o existente; cada negocio comienza con un primer local pendiente de activación.
@@ -9,6 +13,8 @@ El propietario solicita locales desde **Locales y mensualidades → Solicitar lo
 Cada local separa caja, turnos, inventario, catálogo, ventas, personal, evidencias, exportaciones y sincronización. Una misma cuenta propietaria accede a todos sus locales con **Local de trabajo**. Los administradores y empleados del equipo se asignan al local donde se crean. Los cobros mensuales, abonos, referencias y saldos se registran manualmente por local; el propietario consulta sus mensualidades y el desarrollador registra los pagos.
 
 La migración conserva el negocio existente como **Local principal**, activo, sin inventar una tarifa ni generar cobros. Ver [operación, modelo de datos y despliegue](docs/MULTILOCALES.md).
+
+Manual para el equipo: [abrir el HTML interactivo](docs/manuales/manual-administradores-empleados.html), autónomo y disponible sin conexión, o consultar [la fuente Markdown](docs/manuales/manual-administradores-empleados.md).
 
 ## Probar la aplicación
 

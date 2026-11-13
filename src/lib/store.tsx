@@ -18,6 +18,7 @@ import {
   type Snapshot,
 } from '../domain/types.ts';
 import { isReadOnlyView, rolePreview } from '../domain/views.ts';
+import { commandPermission, hasPermission } from '../domain/access.ts';
 import {
   api,
   ApiError,
@@ -303,6 +304,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         try {
           const snapshot = current.current;
           if (!snapshot) throw new Error('Inicia sesión.');
+          const permission = commandPermission(type);
+          if (permission && !hasPermission(snapshot.actor, permission))
+            throw new Error('No tienes permiso para esta operación.');
           if (snapshot.branch && snapshot.branch.status !== 'active')
             throw new Error('Este local no está activo. Consulta Locales y mensualidades.');
           const isOnline = online && navigator.onLine;

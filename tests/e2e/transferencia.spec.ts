@@ -21,6 +21,7 @@ async function count(page: Page, cash: number, retained?: number) {
       .getByLabel('Efectivo reservado para la siguiente apertura', { exact: false })
       .fill(pesos(retained));
   for (const input of await dialog.locator('.count-list input').all()) await input.fill('0');
+  for (const input of await dialog.locator('.payment-counts input').all()) await input.fill('0');
   for (const input of await dialog.locator('input[type="checkbox"][required]').all()) await input.check();
   await dialog.getByRole('button', { name: 'Registrar conteo', exact: true }).click();
   await expect(dialog).toHaveCount(0);

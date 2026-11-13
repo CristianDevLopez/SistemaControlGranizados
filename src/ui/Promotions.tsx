@@ -18,6 +18,15 @@ import {
   utc,
   type Field,
 } from './components.tsx';
+const effect = (p: Promotion) =>
+  p.effect === 'fixed'
+    ? `Precio fijo: ${money(p.fixedPrice ?? 0)}`
+    : p.effect === 'upgrade'
+      ? `Upgrade de ${p.steps} tamaño${p.steps === 1 ? '' : 's'}`
+      : p.effect === 'nxm'
+        ? `Lleva ${p.take} y paga ${p.pay}`
+        : 'Producto gratis con cupón';
+
 export function Promotions() {
   const app = useApp(),
     { state, actor } = app.data!,
@@ -28,14 +37,6 @@ export function Promotions() {
     [excess, setExcess] = useState(false);
   const show = state.coupons.find((coupon) => coupon.id === showId);
   const promotions = state.promotions.filter((promotion) => !promotion.courtesyOnly);
-  const effect = (p: Promotion) =>
-    p.effect === 'fixed'
-      ? `Precio fijo: ${money(p.fixedPrice ?? 0)}`
-      : p.effect === 'upgrade'
-        ? `Upgrade de ${p.steps} tamaño${p.steps === 1 ? '' : 's'}`
-        : p.effect === 'nxm'
-          ? `Lleva ${p.take} y paga ${p.pay}`
-          : 'Producto gratis con cupón';
   return (
     <div className="page-stack">
       <div className="page-toolbar">
@@ -318,6 +319,12 @@ function CourtesyDialog({ onClose, onIssued }: { onClose: () => void; onIssued: 
               .map((flavor) => ({ value: flavor.id, label: flavor.name })),
           },
           {
+            name: 'stackable',
+            label: 'Acumulable con otras cortesías en productos distintos',
+            type: 'checkbox',
+            value: true,
+          },
+          {
             name: 'allowMixed',
             label: 'Permitir combinados de los sabores elegibles',
             type: 'checkbox',
@@ -451,16 +458,35 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
           : []),
     {
       name: 'sizeIds',
-      label: 'Tamaños elegibles (sin seleccionar: todos)',
+      label:
+        effect === 'free'
+          ? 'Tamaños del producto de cortesía (obligatorio)'
+          : 'Tamaños elegibles (sin seleccionar: todos)',
       type: 'multiselect',
       options: state.sizes.filter((x) => x.active).map((x) => ({ value: x.id, label: x.name })),
     },
     {
       name: 'flavorIds',
-      label: 'Sabores elegibles (sin seleccionar: todos)',
+      label:
+        effect === 'free'
+          ? 'Sabores del producto de cortesía (obligatorio)'
+          : 'Sabores elegibles (sin seleccionar: todos)',
       type: 'multiselect',
-      options: state.flavors.filter((x) => x.active).map((x) => ({ value: x.id, label: x.name })),
+      options: state.flavors
+        .filter((x) => x.active)
+        .sort((a, b) => a.name.localeCompare(b.name, 'es'))
+        .map((x) => ({ value: x.id, label: `${x.name} · ${x.alcohol ? 'Con licor' : 'Sin licor'}` })),
     },
+    ...(delivery === 'coupon'
+      ? [
+          {
+            name: 'stackable',
+            label: 'Acumulable con otras cortesías y promociones en el mismo pedido (en productos distintos)',
+            type: 'checkbox' as const,
+            value: true,
+          },
+        ]
+      : []),
     { name: 'active', label: 'Publicar activa', type: 'checkbox', value: true },
   ];
   const initial = promotion
@@ -470,6 +496,7 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
         endsAt: localDateTime(new Date(promotion.endsAt)),
         days: promotion.days.map(String),
         steps: String(promotion.steps ?? 1),
+        stackable: promotion.stackable !== false,
       }
     : {};
   return (
@@ -534,9 +561,14 @@ function CouponDialog({ coupon, onClose }: { coupon: Coupon; onClose: () => void
   useEffect(() => {
     void QRCode.toDataURL(coupon.code, { width: 350, margin: 3, errorCorrectionLevel: 'M' }).then(setQr);
   }, [coupon.code]);
-  const promotion = app.data!.state.promotions.find((x) => x.id === coupon.promotionId);
+  const state = app.data!.state;
+  const promotion = coupon.benefit ?? state.promotions.find((x) => x.id === coupon.promotionId);
   const name = promotion?.name;
-  const description = courtesyDescription(promotion, app.data!.state);
+  const description = courtesyDescription(promotion, state);
+  const conditions = promotion
+    ? `${effect(promotion)} · Tamaños: ${promotion.sizeIds.map((id) => state.sizes.find((s) => s.id === id)?.name).join(', ') || 'todos'} · Sabores: ${promotion.flavorIds.map((id) => state.flavors.find((f) => f.id === id)?.name).join(', ') || 'todos'} · ${promotion.stackable === false ? 'No acumulable' : 'Acumulable en productos distintos'} · ${promotion.alcohol === 'all' ? 'Con o sin licor' : promotion.alcohol === 'yes' ? 'Con licor' : 'Sin licor'} · Horario ${promotion.startTime}–${promotion.endTime} Colombia · Días: ${promotion.days.length ? promotion.days.map((d) => ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][d]).join(', ') : 'todos'}`
+    : '';
+  const shareText = `Dexter’s Granizados · ${name}\n${description ? `${description}\n` : ''}${conditions}\nCupón: ${coupon.code}\nVence: ${date(coupon.expiresAt)}. Un solo uso. No canjeable por dinero ni devolución de efectivo.`;
   return (
     <Modal title={promotion?.courtesyOnly ? 'Cortesía Dexter’s' : 'Cupón Dexter’s'} onClose={onClose}>
       <div className="coupon-preview">
@@ -545,6 +577,11 @@ function CouponDialog({ coupon, onClose }: { coupon: Coupon; onClose: () => void
         {description && <p>{description}</p>}
         {qr && <img src={qr} alt={`QR del cupón ${coupon.code}`} />}
         <strong>{coupon.code}</strong>
+        <p>{conditions}</p>
+        <p>
+          No canjeable por dinero ni devolución de efectivo. Cada código cubre únicamente el beneficio
+          definido.
+        </p>
         <p>Válido hasta {date(coupon.expiresAt)}. Un solo uso, sujeto al beneficio indicado.</p>
         <div className="button-row">
           <button
@@ -564,7 +601,7 @@ function CouponDialog({ coupon, onClose }: { coupon: Coupon; onClose: () => void
           <button
             className="button primary"
             onClick={async () => {
-              const text = `Dexter’s Granizados · ${name}${description ? `\n${description}` : ''}\nCupón: ${coupon.code}\nVence: ${date(coupon.expiresAt)}. Un solo uso.`;
+              const text = shareText;
               try {
                 if (navigator.share) await navigator.share({ title: 'Cupón Dexter’s', text });
                 else {
@@ -575,7 +612,29 @@ function CouponDialog({ coupon, onClose }: { coupon: Coupon; onClose: () => void
             }}
           >
             <Share2 size={16} />
-            Compartir
+            Compartir código
+          </button>
+          <button
+            className="button secondary"
+            disabled={!qr}
+            onClick={async () => {
+              const blob = await (await fetch(qr)).blob();
+              const file = new File([blob], `cupon-${coupon.code}.png`, { type: 'image/png' });
+              try {
+                if (navigator.canShare?.({ files: [file] }))
+                  await navigator.share({ title: 'Cupón Dexter’s', text: shareText, files: [file] });
+                else {
+                  downloadFile(blob, file.name, 'image/png');
+                  app.toast('QR descargado para compartir junto al código y sus condiciones.');
+                }
+              } catch (e) {
+                if ((e as Error).name !== 'AbortError')
+                  app.toast('No se pudo compartir. Puedes descargar el QR.');
+              }
+            }}
+          >
+            <Share2 size={16} />
+            Compartir QR
           </button>
           <button
             className="button secondary"

@@ -218,3 +218,15 @@ describe('cortesías con código y vaso completo a cero', () => {
     expect(() => issue(fixture(), conditions)).toThrow();
   });
 });
+
+it('conserva la acumulación configurada al generar cortesías directas', () => {
+  const exclusive = issue(fixture(), { stackable: false });
+  const exclusiveOrder = create(issue(exclusive, { stackable: false }, SECOND), 2);
+  const quote = quotePayment(exclusiveOrder.state, exclusiveOrder.order, NOW, true, [CODE, SECOND]);
+  expect(exclusiveOrder.state.coupons.every((c) => c.benefit?.stackable === false)).toBe(true);
+  expect(quote.coupons).toHaveLength(1);
+  expect(quote.unusedCodes).toHaveLength(1);
+  expect(quote.total).toBe(exclusiveOrder.order.lines[0].listPrice);
+  const stackableOrder = create(issue(issue(fixture()), {}, SECOND), 2);
+  expect(quotePayment(stackableOrder.state, stackableOrder.order, NOW, true, [CODE, SECOND]).total).toBe(0);
+});

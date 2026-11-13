@@ -18,6 +18,8 @@ export interface Quote {
   total: number;
   coupons: string[];
   promotionUses: Record<string, number>;
+  unusedCodes?: string[];
+  applications?: { code: string; lineId: string; quantity: number; unitAmount: number }[];
 }
 export function lineTotal(line: OrderLine): number {
   return line.listPrice * line.quantity - line.discount;
@@ -70,6 +72,51 @@ function priceFor(p: Promotion, u: Unit, state: State): number {
 
 /** Pure calculator shared by the register and the authoritative Edge Function. */
 export function quoteOrder(
+  state: State,
+  original: OrderLine[],
+  at: string,
+  online: boolean,
+  codes: string[] = [],
+): Quote {
+  const normalized = [...new Set(codes.map((x) => x.trim().toUpperCase()).filter(Boolean))];
+  if (normalized.length > 10) throw new DomainError('Máximo diez cupones por pedido.');
+  const exclusive = normalized.filter((code) => {
+    const c = state.coupons.find((c) => c.code === code);
+    return (c?.benefit ?? state.promotions.find((p) => p.id === c?.promotionId))?.stackable === false;
+  });
+  const candidates = [
+    calculateQuote(
+      state,
+      original,
+      at,
+      online,
+      normalized.filter((c) => !exclusive.includes(c)),
+    ),
+    ...exclusive.map((code) =>
+      calculateQuote(
+        { ...state, promotions: state.promotions.filter((p) => p.delivery === 'coupon') },
+        original,
+        at,
+        online,
+        [code],
+      ),
+    ),
+  ];
+  const best = candidates.reduce((a, b) => (b.total < a.total ? b : a));
+  const used = state.coupons.filter((c) => best.coupons.includes(c.id));
+  best.unusedCodes = normalized.filter((code) => !used.some((c) => c.code === code));
+  best.applications = best.lines.flatMap((line) =>
+    (line.appliedRules ?? []).flatMap((rule) => {
+      const c = used.find((c) => c.id === rule.couponId);
+      return c
+        ? [{ code: c.code, lineId: line.id, quantity: rule.quantity, unitAmount: rule.unitAmount }]
+        : [];
+    }),
+  );
+  return best;
+}
+
+function calculateQuote(
   state: State,
   original: OrderLine[],
   at: string,
@@ -155,7 +202,15 @@ export function quoteOrder(
     const coupon = state.coupons.find((x) => x.code === code);
     if (!coupon || coupon.status !== 'issued' || coupon.expiresAt <= at)
       throw new DomainError('Cupón inválido, vencido o ya redimido.', 'INVALID_COUPON');
-    const promotion = state.promotions.find((x) => x.id === coupon.promotionId);
+    const current = state.promotions.find((x) => x.id === coupon.promotionId);
+    const promotion = coupon.benefit
+      ? {
+          ...coupon.benefit,
+          active: current?.active === true,
+          redemptions: current?.redemptions ?? 0,
+          maxRedemptions: current?.maxRedemptions ?? null,
+        }
+      : current;
     if (!promotion?.active || promotion.delivery !== 'coupon' || !isScheduled(promotion, at))
       throw new DomainError('La promoción del cupón no está vigente en este horario.');
     if (promotion.maxRedemptions !== null && promotion.redemptions >= promotion.maxRedemptions)
@@ -286,6 +341,7 @@ export function quoteOrder(
         line.appliedRules.push({
           promotion: structuredClone(promotion),
           couponId,
+          couponCode: state.coupons.find((c) => c.id === couponId)?.code,
           quantity: 1,
           unitAmount: finalPrices[i],
         });
