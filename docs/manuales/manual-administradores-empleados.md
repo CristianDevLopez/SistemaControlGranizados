@@ -20,6 +20,8 @@ La aplicación tiene tres roles de operación. El propietario utiliza una cuenta
 | Cobrar pedidos                                 | Solo su propio turno conectado                                        | Solo su turno y equipo principal             | No                  |
 | Abrir caja                                     | Inicia su propia caja conectado o autoriza la solicitud del encargado | Solicita apertura desde el equipo principal  | No                  |
 | Presentar apertura y cierre                    | Cuando es responsable del turno                                       | Cuando es responsable del turno              | No                  |
+| Solicitar arqueo y seleccionar ítems           | Sí con conexión y doble factor                                        | No                                           | No                  |
+| Presentar conteo de arqueo                     | Cuando es responsable del turno                                       | Cuando es responsable del turno              | No                  |
 | Abrir bolsas y paquetes y reportar daños       | Sí durante la operación                                               | Sí durante la operación                      | Sí con conexión     |
 | Registrar recepción física de mercancía        | Sí                                                                    | Sí                                           | Sí con conexión     |
 | Registrar gastos y movimientos de dinero       | Según origen y responsabilidad de caja                                | Según permisos y límites de caja             | No                  |
@@ -210,7 +212,7 @@ El rol de administrador solo puede cobrar su propio turno conectado. El encargad
 
 ### Cobro con cupón vuelto o entrega pendiente
 
-1. En el pedido, pulsa **Cupón, vuelto o entregar después**.
+1. En el pedido, pulsa **Cupón, cortesía, vuelto o entregar después**.
 2. Si hay un cupón, escribe el código o pulsa el lector QR y autoriza la cámara. Pulsa **Validar** y verifica el total recalculado. Se necesita conexión.
 3. Si deseas calcular el vuelto, indica el efectivo recibido. Este campo ayuda a calcularlo; el registro sigue siendo un cobro en efectivo.
 4. Revisa si se entregará lo pendiente al confirmar y cambia esa opción cuando la entrega vaya a ser posterior.
@@ -220,13 +222,17 @@ Validar un cupón no lo consume todavía: se consume al confirmar el cobro acept
 
 **Ejemplo.** El total es $34.000 y recibes $50.000; el vuelto es $16.000. Si entregas solo una parte, deja correctamente registrados los pendientes. El estado pagado no demuestra que ya se entregó todo.
 
-No hay un selector de tarjetas, transferencias de clientes o pasarela bancaria en este flujo de venta. Los movimientos de cuentas del negocio y la mensualidad del servicio pertenecen a procesos diferentes.
+El medio de pago se selecciona antes de cobrar: **Efectivo**, **Nequi** u otra cuenta receptora configurada. Para habilitar Nequi, el administrador entra en **Configuración → Cuentas y custodia → Configurar Nequi**, indica el número receptor, el responsable de la cuenta y el saldo inicial que corresponda. La opción queda habilitada para recibir ventas. Sin una cuenta activa configurada para ventas, el botón Nequi permanece deshabilitado. Al seleccionar Nequi se muestra el destino y puede anotarse un comprobante opcional; confirma el cobro cuando hayas verificado que el pago llegó. El registro conserva la cuenta y el comprobante, y ese ingreso se muestra por transferencia, separado del efectivo de caja. Registrar el pago no consulta automáticamente Nequi ni inicia una transferencia.
 
 ### Degustaciones y cambios antes del cobro
 
+Para un combinado o bomba, elige el tamaño y pulsa **Combinado / bomba**. Toca los sabores que echaste, revisa las porciones y pulsa **Agregar combinado**. Se registra un solo vaso y las onzas se dividen en partes iguales: 16 oz con dos sabores son 8 oz de cada uno; con tres, 5⅓ oz de cada uno. La pantalla aproxima los decimales para lectura, pero el inventario conserva el reparto sin redondear. Si cualquiera de los sabores lleva licor, se cobra la tarifa con licor del tamaño. Para un vaso sin mezcla usa **Un sabor**. Las porciones quedan visibles en Mostrador, Pedidos y el detalle del ticket, y se descuentan al entregar. Si una promoción limita los sabores, todos los de la mezcla deben estar incluidos. Al corregir tickets o ingresar planillas, el selector de sabor también permite **Combinado / bomba**.
+
 Registra la degustación con el sabor correspondiente desde Mostrador. Cada degustación descuenta una onza y una copita. Un pedido con solo degustaciones puede finalizarse sin venta; no se debe simular un cobro para cerrarlo.
 
-Antes del cobro puedes ajustar las cantidades disponibles con los controles de la línea, conservando lo ya entregado. Mostrador impide eliminar la última línea del pedido y solicita conservar el registro: agrega primero el producto correcto o pide al administrador que revise la novedad. No se ofrece un botón independiente para borrar o cancelar un pedido desde estas pantallas. **Guardar y abrir otro pedido** conserva el actual; no lo cancela. Si ya hubo entrega física, completa el cobro o registra la novedad de pedido sin pagar o la anulación según su estado.
+Si registraste una degustación de prueba o por error, usa la papelera de esa degustación para eliminarla. Se restituyen una copita y una onza del sabor registrado. Para cambiar el sabor, selecciónalo en la misma fila: se devuelve la onza del sabor anterior y se descuenta del nuevo, conservando una sola copita. También puedes hacerlo desde el detalle del ticket en **Pedidos**, incluso cuando quedó como **Solo degustaciones**. Si eliminas la última degustación de un pedido sin productos, queda cancelado; en un ticket vendido se mantienen su cobro y sus productos. Las correcciones conservan los movimientos anteriores y agregan el ajuste al historial. El personal corrige degustaciones del turno activo; los turnos anteriores los corrige un administrador. Durante un arqueo, espera a finalizarlo. Las correcciones sin conexión se guardan desde el equipo principal y se sincronizan al reconectar.
+
+Antes del cobro puedes ajustar las cantidades disponibles con los controles de la línea, conservando lo ya entregado. Si no has cobrado ni entregado productos, pulsa **Cancelar pedido** en Mostrador; también puedes reducir a cero el último producto. El pedido sale de los pendientes y queda en el historial. Si tenía degustaciones, estas y su consumo se conservan y el registro queda como **Solo degustaciones**. Los tickets sustitutos de una venta anulada deben finalizar su corrección y no ofrecen esta cancelación. **Guardar y abrir otro pedido** conserva el actual; no lo cancela. Si ya hubo entrega física, completa el cobro o registra la novedad de pedido sin pagar o la anulación según su estado.
 
 ## 8 Consultar y corregir tickets
 
@@ -351,6 +357,17 @@ El reembolso de un ticket anulado al cliente es un procedimiento diferente, desc
 
 Solo un administrador conectado configura promociones y emite cupones. Se guardan directamente con su identidad y se conserva el histórico.
 
+### Generar una cortesía completa
+
+1. En **Promociones**, pulsa **Generar cortesía**.
+2. Define el nombre, el tamaño del vaso y si aplica con licor, sin licor o a ambos tipos. Puedes limitar los sabores y permitir o excluir combinados.
+3. Indica el vencimiento. Cada código cubre un vaso completo a **$0**, incluidos todos sus sabores y componentes; su emisión respeta la cuota de cortesías configurada.
+4. Pulsa **Generar código de cortesía**. Se muestra el código con las condiciones y su QR; puedes copiar el código o compartirlo.
+5. Caja agrega el producto autorizado al pedido, abre **Cupón, cortesía, vuelto o entregar después**, ingresa el código y pulsa **Validar**. Comprueba que el vaso completo quede sin cobro.
+6. Pulsa **Registrar cortesía y entregar** al entregar físicamente el producto. No se registra ingreso de dinero y sí se descuenta la receta completa: vaso, onzas de cada sabor y los demás insumos configurados. Si se entregará después, desmarca la entrega y registra la cortesía; el consumo se registra cuando se entregue.
+
+El código se consume al confirmar el registro, no al generarlo ni al validarlo. Un código usado o vencido no puede canjearse. Si el producto no corresponde al tamaño, tipo o sabores autorizados, se rechaza la cortesía. Los productos adicionales del pedido conservan su cobro; cada código cubre un vaso distinto. Las condiciones de una cortesía emitida se conservan; para ofrecer otro beneficio, genera otro código.
+
 ### Crear una promoción
 
 1. Abre **Promociones → Crear promoción**.
@@ -385,11 +402,12 @@ Las diferencias de conteo se explican desde **Turno y caja → Conteos registrad
 
 ### Arqueo sorpresa
 
-1. Un administrador abre **Turno y caja → Iniciar arqueo sorpresa** con un turno abierto.
+1. Un administrador abre **Turno y caja → Iniciar arqueo sorpresa** con un turno abierto, selecciona efectivo, cuentas de pago y/o artículos de inventario, y pulsa **Solicitar conteo**. Debe seleccionar al menos un ítem.
 2. La aplicación bloquea pedidos, entregas y cobros mientras dura el arqueo.
-3. Cuenta el efectivo y los artículos físicos sin mezclar movimientos posteriores al corte. Si la atención continúa en papel, identifica cada folio y conserva el dinero posterior separado.
-4. El administrador usa **Presentar arqueo y reanudar** para registrar el conteo y terminar el corte.
-5. Incorpora después las operaciones de papel desde Pedidos con folio, hora original y foto, sin duplicar ventas que ya estén registradas.
+3. El responsable del turno abre **Turno y caja → Presentar arqueo y reanudar** e ingresa únicamente las cantidades e importes solicitados, sin ver valores esperados. Los líquidos seleccionados se miden en onzas; los demás artículos se cuentan en unidades enteras. Si la atención continúa en papel, identifica cada folio y conserva el dinero posterior separado.
+4. Al presentar el conteo con conexión se reanuda la operación. Solo el usuario responsable del turno puede presentarlo, incluso si quien lo solicita es otro administrador.
+5. El administrador abre **Conteos registrados → Revisar conteo** para validar cantidades, importes y diferencias contra los valores guardados al iniciar el arqueo. Se conservan quién lo solicitó, quién contó y las horas de ambos registros.
+6. Incorpora después las operaciones de papel desde Pedidos con folio, hora original y foto, sin duplicar ventas que ya estén registradas.
 
 ### Avisos auditoría y exportación
 
@@ -452,7 +470,7 @@ Si hay que abrir sin internet, el encargado solicita el turno y utiliza **Autori
 
 La cola se detiene en el conflicto para preservar el orden. No cobres de nuevo porque aparezca una espera ni crees otra venta para sustituir un registro que todavía puede sincronizarse. Las fotografías pendientes se reintentan; exportar la cola no implica que esas fotografías ya estén respaldadas fuera del dispositivo.
 
-No borres caché, datos del sitio ni la aplicación con pendientes. Si se pierde el equipo antes de sincronizar, el servidor no puede recuperar lo que nunca recibió. La actualización de la app debe hacerse después de cerrar el turno y sincronizar; utiliza **Actualizar app** cuando esté disponible.
+No borres caché, datos del sitio ni la aplicación con pendientes. Si se pierde el equipo antes de sincronizar, el servidor no puede recuperar lo que nunca recibió. Puedes usar **Actualizar app** con el turno abierto: primero sincroniza y comprueba los pendientes y fotografías, y después recarga conservando el turno y los pedidos guardados. Si quedan registros por conciliar, la actualización espera. En una versión anterior que solo ofrece actualizar al cerrar turno, sincroniza, cierra todas las ventanas y pestañas de esta aplicación y vuelve a abrirla; no necesitas cerrar la caja.
 
 ## 16 Cierre de la jornada
 
@@ -460,7 +478,7 @@ El cierre lo presenta el responsable del turno. Un administrador revisa los resu
 
 1. Revisa Pedidos y resuelve cobros, entregas y novedades reales. Verifica que no estás dejando una situación sin documentar.
 2. Abre **Turno y caja → Cerrar y contar caja**.
-3. Confirma las tareas de la lista de cierre. Cuenta efectivo y artículos físicos e introduce los resultados.
+3. Confirma las tareas de la lista de cierre. Cuenta el efectivo y verifica por separado el total neto de cobros menos devoluciones del turno en Nequi y cada cuenta de pago configurada; introduce 0 si no hubo movimientos. No uses el saldo total de la cuenta. Cuenta únicamente los vasos restantes del paquete abierto de cada tamaño (0 si no hay vasos sueltos), sin contar paquetes cerrados, bolsas de líquido ni otros insumos.
 4. Indica cuánto efectivo quedará reservado para la siguiente apertura. No puede superar lo contado.
 5. Si hay remanente, selecciona un destino activo con un administrador receptor diferente de ti.
 6. Escribe novedades y pulsa **Registrar conteo**.

@@ -3,7 +3,7 @@ import { Download, RefreshCw, ShieldCheck, AlertTriangle, Check } from 'lucide-r
 import { useApp } from '../lib/store.tsx';
 import { api } from '../lib/api.ts';
 import { exportZip, downloadFile } from '../lib/export.ts';
-import { articles, stockBalances } from '../domain/engine.ts';
+import { articles, countHasDifferences, stockBalances } from '../domain/engine.ts';
 import { Badge, Empty, Panel, Stat, date, money, stateNames, Modal, FieldsForm } from './components.tsx';
 import { EvidenceButton } from './Purchasing.tsx';
 export function Control() {
@@ -162,8 +162,7 @@ export function Control() {
         )}
       </Panel>
       <Panel title="Diferencias para revisar">
-        {negative.length ||
-        state.counts.some((c) => c.difference || Object.values(c.differences ?? {}).some((x) => x !== 0)) ? (
+        {negative.length || state.counts.some(countHasDifferences) ? (
           <div className="anomaly-grid">
             {negative.map(([article, amount]) => (
               <div className="anomaly" key={article}>
@@ -178,20 +177,34 @@ export function Control() {
                 </div>
               </div>
             ))}
-            {state.counts
-              .filter((c) => c.difference)
-              .map((c) => (
-                <div className="anomaly" key={c.id}>
-                  <AlertTriangle size={18} />
-                  <div>
-                    <strong>Diferencia de efectivo · {date(c.at)}</strong>
+            {state.counts.filter(countHasDifferences).map((c) => (
+              <div className="anomaly" key={c.id}>
+                <AlertTriangle size={18} />
+                <div>
+                  <strong>Diferencias de conteo · {date(c.at)}</strong>
+                  {!!c.difference && (
                     <p>
                       {money(c.difference ?? 0)} en el conteo original. Las explicaciones y aprobaciones se
                       consultan por separado.
                     </p>
-                  </div>
+                  )}
+                  {Object.entries(c.paymentDifferences ?? {})
+                    .filter(([, amount]) => amount !== 0)
+                    .map(([key, amount]) => (
+                      <p key={key}>
+                        {c.paymentLabels?.[key] ?? key}: {money(amount)}
+                      </p>
+                    ))}
+                  {Object.entries(c.differences ?? {})
+                    .filter(([, amount]) => amount !== 0)
+                    .map(([key, amount]) => (
+                      <p key={key}>
+                        {articles(state).find((a) => a.id === key)?.name ?? key}: {amount} unidades
+                      </p>
+                    ))}
                 </div>
-              ))}
+              </div>
+            ))}
           </div>
         ) : (
           <Empty title="Sin diferencias registradas" />

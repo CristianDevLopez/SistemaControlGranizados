@@ -69,7 +69,14 @@ describe('hora de las operaciones', () => {
     const closed = runAt(
       s,
       'count',
-      { kind: 'closing', shiftId: ids.shift, cash: 20000, retained: 20000, items: countedItems(s) },
+      {
+        kind: 'closing',
+        payments: { [`transfer:${ids.location}`]: 0 },
+        shiftId: ids.shift,
+        cash: 20000,
+        retained: 20000,
+        items: countedItems(s),
+      },
       cashier,
       '2026-10-23T15:00:00.000Z', // el dispositivo dice 15:00
       '2026-10-23T18:00:00.000Z',
@@ -88,7 +95,14 @@ describe('hora de las operaciones', () => {
     const closed = runAt(
       s,
       'count',
-      { kind: 'closing', shiftId: ids.shift, cash: 34000, retained: 34000, items: countedItems(s) },
+      {
+        kind: 'closing',
+        payments: { [`transfer:${ids.location}`]: 0 },
+        shiftId: ids.shift,
+        cash: 34000,
+        retained: 34000,
+        items: countedItems(s),
+      },
       offline,
       '2026-10-23T15:30:00.000Z',
       '2026-10-23T20:00:00.000Z',

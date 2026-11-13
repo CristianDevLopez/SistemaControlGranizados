@@ -21,6 +21,7 @@ export function MoneyInput({
   ariaLabel,
   autoFocus,
   preview = true,
+  allowNegative = false,
 }: {
   /** Texto controlado desde afuera. */
   value?: string;
@@ -34,20 +35,22 @@ export function MoneyInput({
   ariaLabel?: string;
   autoFocus?: boolean;
   preview?: boolean;
+  allowNegative?: boolean;
 }) {
   const [own, setOwn] = useState(() => moneyText(external ?? defaultValue));
   useEffect(() => {
-    if (external !== undefined && (external ?? 0) !== (parseMoney(own) ?? 0)) setOwn(moneyText(external));
+    if (external !== undefined && (external ?? 0) !== (parseMoney(own, allowNegative) ?? 0))
+      setOwn(moneyText(external));
   }, [external]);
   const text = value ?? own,
-    amount = parseMoney(text),
+    amount = parseMoney(text, allowNegative),
     previewId = useId();
   return (
     <>
       <input
         name={name}
         type="text"
-        inputMode="numeric"
+        inputMode={allowNegative ? 'text' : 'numeric'}
         autoComplete="off"
         required={required}
         placeholder={placeholder}
@@ -57,7 +60,7 @@ export function MoneyInput({
         value={text}
         onChange={(e) => {
           setOwn(e.target.value);
-          onChange?.(e.target.value, parseMoney(e.target.value));
+          onChange?.(e.target.value, parseMoney(e.target.value, allowNegative));
         }}
       />
       {preview && (

@@ -139,6 +139,21 @@ describe('Operación del mostrador', () => {
     expect(state.orders[0].status).toBe('cancelled');
     expect(state.stock).toHaveLength(0);
   });
+  it('cancelar conserva las degustaciones y su consumo sin registrar pagos ni entregas', () => {
+    let { state, order: o } = order(fixture());
+    state = run(state, 'taste', { orderId: o.id, flavorId: ids.flavor }).state;
+    const before = structuredClone(state);
+    state = run(state, 'cancel_order', {
+      orderId: o.id,
+      expectedVersion: state.orders[0].version,
+    }).state;
+    expect(state.orders[0].status).toBe('tasting_only');
+    expect(state.orders[0].tastings).toEqual(before.orders[0].tastings);
+    expect(state.stock).toEqual(before.stock);
+    expect(stockBalances(state)).toMatchObject({ copita: -1, [`liquid:${ids.flavor}`]: -1 });
+    expect(state.payments).toHaveLength(0);
+    expect(state.deliveries).toHaveLength(0);
+  });
   it('solo el equipo principal continúa offline; cupones y admin requieren conexión', () => {
     expect(() => run(fixture(), 'taste', { flavorId: ids.flavor }, { ...support, online: false })).toThrow(
       /conexión/,
@@ -157,9 +172,14 @@ describe('Operación del mostrador', () => {
     expect(stockBalances(state)[`liquid:${ids.flavor}`]).toBe(-12);
   });
   it('pausa ventas durante un arqueo y concilia papel sin modificar el conteo', () => {
-    let s = run(fixture(), 'start_audit', {}, admin).state;
+    let s = run(fixture(), 'start_audit', { shiftId: ids.shift, cash: true, items: [] }, admin).state;
     expect(() => order(s)).toThrow(/arqueo/);
-    s = run(s, 'finish_audit', { shiftId: ids.shift, cash: 20000, items: countedItems(s) }, admin).state;
+    s = run(s, 'finish_audit', {
+      auditId: s.settings[0].auditId,
+      shiftId: ids.shift,
+      cash: 20000,
+      items: {},
+    }).state;
     const original = structuredClone(s.counts);
     s = run(
       s,
@@ -183,6 +203,7 @@ describe('Operación del mostrador', () => {
   it('cierra con base retenida y remanente solicitado sin descontarlo todavía', () => {
     let s = run(fixture(), 'count', {
       kind: 'closing',
+      payments: { [`transfer:${ids.location}`]: 0 },
       shiftId: ids.shift,
       cash: 21000,
       retained: 5000,
@@ -278,7 +299,14 @@ describe('Operación del mostrador', () => {
     const s = run(
       fixture(),
       'count',
-      { kind: 'closing', shiftId: ids.shift, cash: 20000, retained: 20000, items: countedItems(fixture()) },
+      {
+        kind: 'closing',
+        payments: { [`transfer:${ids.location}`]: 0 },
+        shiftId: ids.shift,
+        cash: 20000,
+        retained: 20000,
+        items: countedItems(fixture()),
+      },
       { ...cashier, online: false },
     ).state;
     expect(s.shifts[0].status).toBe('provisional');
@@ -493,6 +521,7 @@ it('exige el checklist configurado y conserva las tareas que se presentaron', ()
   state.settings[0].closingChecklist = ['Verifiqué el procedimiento del punto'];
   const payload = {
     kind: 'closing',
+    payments: { [`transfer:${ids.location}`]: 0 },
     shiftId: ids.shift,
     cash: 20000,
     retained: 20000,

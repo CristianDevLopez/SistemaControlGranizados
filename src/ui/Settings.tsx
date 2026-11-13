@@ -607,13 +607,43 @@ export function Settings() {
         <Panel
           title="Destinos de dinero registrados"
           action={
-            <button
-              className="button primary small"
-              onClick={() => businessForm('Registrar caja o cuenta', 'save_location', locationFields(false))}
-            >
-              <Plus size={16} />
-              Registrar destino
-            </button>
+            <div className="button-row">
+              <button
+                className="button primary small"
+                onClick={() =>
+                  businessForm(
+                    'Configurar Nequi',
+                    'save_location',
+                    locationFields(false)
+                      .filter((field) => !['type', 'bank', 'receivesSales'].includes(field.name))
+                      .map((field) =>
+                        field.name === 'account'
+                          ? { ...field, label: 'Número de Nequi', required: true }
+                          : field,
+                      ),
+                    {
+                      name: 'Nequi',
+                      custodianId: profiles.find(
+                        (profile) => profile.id === actor.id && profile.role === 'admin',
+                      )?.id,
+                    },
+                    { type: 'bank', bank: 'Nequi', receivesSales: true },
+                  )
+                }
+              >
+                <Plus size={16} />
+                Configurar Nequi
+              </button>
+              <button
+                className="button secondary small"
+                onClick={() =>
+                  businessForm('Registrar caja o cuenta', 'save_location', locationFields(false))
+                }
+              >
+                <Plus size={16} />
+                Registrar destino
+              </button>
+            </div>
           }
         >
           <div className="notice info">

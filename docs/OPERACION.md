@@ -17,7 +17,7 @@ Publicada para revisión en **https://dexter-granizados.vercel.app**, bajo `cris
 4. La función de Supabase usa el dominio publicado como `APP_URL` predeterminada y lo incluye en los orígenes permitidos. También permite los dos orígenes locales para esta etapa de revisión. Las variables de servidor `APP_URL` y `ALLOWED_ORIGINS` permiten sustituir esos valores por entorno; en producción definitiva, limitar los orígenes a los dominios usados allí. Auth tiene como Site URL `https://dexter-granizados.vercel.app` y admite el destino exacto `/recuperar-contrasena` para los enlaces de recuperación.
 5. Se verificaron HTTPS, archivos PWA y CORS: origen publicado aceptado, dominio ajeno rechazado y lectura anónima bloqueada. Falta validar acceso real con MFA/dispositivo y el ensayo completo con el equipo de caja.
 
-`vercel.json` configura las rutas de SPA, encabezados y evita cachear `sw.js`. La actualización se ofrece cuando no hay turno abierto ni pendientes locales. Las pruebas usan el modo `e2e`; **no desplegar ese modo** ni su directorio.
+`vercel.json` configura las rutas de SPA, encabezados y evita cachear `sw.js`. La actualización se ofrece también con el turno abierto. **Actualizar app** sincroniza los registros y fotografías y comprueba la cola local antes de activar la nueva versión; si quedan pendientes o conflictos, conserva la sesión y muestra el bloqueo. No cierra el turno ni borra pedidos guardados. Si una versión anterior solo ofrece actualizar al cerrar turno, sincroniza primero, cierra todas las ventanas o pestañas de la aplicación y vuelve a abrirla; el turno permanece abierto. Las pruebas usan el modo `e2e`; **no desplegar ese modo** ni su directorio.
 
 ## Migraciones y función
 
@@ -77,11 +77,13 @@ Configurar un bot del negocio y los IDs de los chats de gastos, anulaciones, mer
 
 ## Jornada de ensayo
 
+El cuadre de cierre registra efectivo, cobros netos del turno verificados por cuenta (Nequi y demás cuentas configuradas) y vasos restantes del paquete abierto de cada tamaño. No exige contar líquidos, bolsas, paquetes cerrados ni otros insumos. Las diferencias por cuenta quedan separadas del efectivo y no alteran la base retenida ni el remanente.
+
 1. Registrar y autorizar turno, contar apertura sin consultar esperados y abrir una bolsa/paquete reales de ensayo.
 2. Crear pedidos desde apoyo y caja; realizar entrega parcial, cobro y entrega pendiente; registrar degustación sin venta.
 3. Probar promoción con varios tamaños, cupón por QR/manual y segundo intento de canje rechazado.
 4. Desconectar wifi y datos, vender, cerrar y reabrir la PWA offline con PIN; conectar y comprobar un solo pago y consumo por operación.
-5. Hacer arqueo sorpresa, separar el efectivo de la planilla, presentar conteo e ingresar después cada folio con foto.
+5. Como admin, solicitar un arqueo sorpresa seleccionando los ítems. Como responsable del turno, presentar solo los conteos solicitados; separar el efectivo posterior de la planilla. Como admin, revisar los resultados y diferencias contra el corte original e ingresar después cada folio con foto.
 6. Anular con otro admin y corregir conservando o reemplazando la entrega física según corresponda. Comprobar la diferencia de dinero real.
 7. Recibir mercancía parcial y dañada, revisar cruce; aprobar o rechazar los gastos y mermas con soporte.
 8. Cerrar con base retenida y remanente. Ejecutar entrega/consignación y confirmar con otro usuario. Abrir el siguiente día y comprobar el saldo físico.

@@ -1,4 +1,8 @@
-import type { Actor, Shift } from './types.ts';
+import type { Actor, Order, Shift } from './types.ts';
+
+export function canCorrectTastings(actor: Actor, order: Order, activeShift?: Shift): boolean {
+  return actor.role === 'admin' || order.shiftId === activeShift?.id;
+}
 
 export function isShiftCashier(actor: Actor, shift: Shift | undefined): boolean {
   return (

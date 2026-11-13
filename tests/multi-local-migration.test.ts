@@ -10,7 +10,8 @@ it('la migración asigna el negocio existente al local principal sin reescribir 
     );
     const folder = new URL('../supabase/migrations/', import.meta.url);
     const migrations = (await readdir(folder)).filter((f) => f.endsWith('.sql')).sort();
-    for (const file of migrations.filter((f) => !f.includes('multi_local')))
+    const multiLocalIndex = migrations.findIndex((f) => f.includes('multi_local'));
+    for (const file of migrations.slice(0, multiLocalIndex))
       await db.exec(await readFile(new URL(file, folder), 'utf8'));
     await db.query('insert into auth.users(id,email) values($1,$2)', [admin.id, 'existing@test.invalid']);
     await db.query("insert into public.profiles(id,name,role) values($1,'Propietario existente','admin')", [
@@ -21,7 +22,7 @@ it('la migración asigna el negocio existente al local principal sin reescribir 
     await db.query('insert into public.stock(id,data,revision) values($1,$2,17)', [eventId, event]);
     await db.exec('update private.runtime set revision=17');
     const before = (await db.query<any>('select public.dexter_read_state() as value')).rows[0].value;
-    for (const file of migrations.filter((f) => f.includes('multi_local')))
+    for (const file of migrations.slice(multiLocalIndex))
       await db.exec(await readFile(new URL(file, folder), 'utf8'));
     const after = (await db.query<any>('select public.dexter_read_state() as value')).rows[0].value;
     expect(after).toEqual(before);

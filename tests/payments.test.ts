@@ -52,7 +52,7 @@ describe('pagos por transferencia', () => {
     });
   });
 
-  it('el cierre cuadra contando solo el efectivo', () => {
+  it('el cierre cuadra efectivo y transferencias por separado', () => {
     let { state } = transferSale();
     const cash = order(state);
     state = run(cash.state, 'pay', { orderId: cash.order.id, deliver: true }).state;
@@ -60,12 +60,16 @@ describe('pagos por transferencia', () => {
     expect(state.payments.find((p) => p.orderId === cash.order.id)!.method).toBe('cash');
     state = run(state, 'count', {
       kind: 'closing',
+      payments: { [`transfer:${ids.location}`]: 14000 },
       shiftId: ids.shift,
       cash: BASE + cashTotal,
       retained: BASE + cashTotal,
       items: countedItems(state),
     }).state;
-    expect(state.counts.find((c) => c.kind === 'closing')!.difference).toBe(0);
+    expect(state.counts.find((c) => c.kind === 'closing')).toMatchObject({
+      difference: 0,
+      paymentDifferences: { [`transfer:${ids.location}`]: 0 },
+    });
   });
 
   it('el reembolso usa por defecto el mismo medio y la misma cuenta de la venta', () => {

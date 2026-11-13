@@ -23,6 +23,12 @@ describe('montos escritos en pesos', () => {
     expect(parseMoney('9'.repeat(20))).toBeNull();
   });
 
+  it('conserva el signo cuando se verifica el neto de una cuenta', () => {
+    expect(parseMoney('-5.000', true)).toBe(-5000);
+    expect(parseMoney('$ -5.000', true)).toBe(-5000);
+    expect(parseMoney('0', true)).toBe(0);
+  });
+
   it('muestra los montos con punto de miles para editarlos', () => {
     expect(moneyText(150000)).toBe('150.000');
     expect(moneyText('20000')).toBe('20.000');

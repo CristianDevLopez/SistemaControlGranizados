@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import { Plus, Ticket, Gift, Download, Share2, CalendarClock, Power } from 'lucide-react';
+import { Plus, Ticket, Gift, Download, Share2, CalendarClock, Power, Copy } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
-import type { Coupon, Promotion, PromoEffect } from '../domain/types.ts';
+import type { Coupon, Promotion, PromoEffect, State } from '../domain/types.ts';
+import { colombiaMonth } from '../domain/engine.ts';
 import { downloadFile } from '../lib/export.ts';
 import {
   Badge,
@@ -22,8 +23,11 @@ export function Promotions() {
     { state, actor } = app.data!,
     [edit, setEdit] = useState<Promotion | null | undefined>(undefined),
     [issue, setIssue] = useState(false),
-    [show, setShow] = useState<Coupon | null>(null),
+    [courtesy, setCourtesy] = useState(false),
+    [showId, setShowId] = useState<string | null>(null),
     [excess, setExcess] = useState(false);
+  const show = state.coupons.find((coupon) => coupon.id === showId);
+  const promotions = state.promotions.filter((promotion) => !promotion.courtesyOnly);
   const effect = (p: Promotion) =>
     p.effect === 'fixed'
       ? `Precio fijo: ${money(p.fixedPrice ?? 0)}`
@@ -40,18 +44,22 @@ export function Promotions() {
           <p>Promociones por horario y cupones de un solo uso.</p>
         </div>
         <div className="button-row">
+          <button className="button primary" disabled={!app.online} onClick={() => setCourtesy(true)}>
+            <Gift size={17} />
+            Generar cortesía
+          </button>
           <button className="button secondary" onClick={() => setIssue(true)}>
             <Ticket size={17} />
             Emitir cupón
           </button>
-          <button className="button primary" onClick={() => setEdit(null)}>
+          <button className="button secondary" onClick={() => setEdit(null)}>
             <Plus size={17} />
             Crear promoción
           </button>
         </div>
       </div>
       <div className="promo-grid">
-        {state.promotions.map((p) => (
+        {promotions.map((p) => (
           <Panel key={p.id} className="promo-card">
             <div className="promo-card-head">
               <span className="promo-icon">
@@ -93,10 +101,10 @@ export function Promotions() {
             </div>
           </Panel>
         ))}
-        {!state.promotions.length && (
+        {!promotions.length && (
           <Panel>
             <Empty
-              title="Crea el primer beneficio"
+              title="Crea una promoción general"
               description="Combina producto, efecto, vigencia y forma de entrega. Cada publicación queda en el histórico."
               action={
                 <button className="button primary" onClick={() => setEdit(null)}>
@@ -108,7 +116,7 @@ export function Promotions() {
         )}
       </div>
       <Panel
-        title="Cupones emitidos"
+        title="Cortesías y cupones emitidos"
         action={
           <button className="text-button" onClick={() => setExcess(true)}>
             Solicitar cortesía adicional
@@ -134,7 +142,15 @@ export function Promotions() {
                       <code>{c.code}</code>
                       {c.courtesy && <small>Cortesía</small>}
                     </td>
-                    <td>{state.promotions.find((x) => x.id === c.promotionId)?.name}</td>
+                    <td>
+                      {state.promotions.find((x) => x.id === c.promotionId)?.name}
+                      <small>
+                        {courtesyDescription(
+                          state.promotions.find((x) => x.id === c.promotionId),
+                          state,
+                        )}
+                      </small>
+                    </td>
                     <td>{date(c.expiresAt)}</td>
                     <td>
                       <Badge
@@ -152,7 +168,7 @@ export function Promotions() {
                       </Badge>
                     </td>
                     <td>
-                      <button className="button small secondary" onClick={() => setShow(c)}>
+                      <button className="button small secondary" onClick={() => setShowId(c.id)}>
                         Ver QR y compartir
                       </button>
                     </td>
@@ -169,6 +185,15 @@ export function Promotions() {
         )}
       </Panel>
       {edit !== undefined && <PromotionDialog promotion={edit} onClose={() => setEdit(undefined)} />}
+      {courtesy && (
+        <CourtesyDialog
+          onClose={() => setCourtesy(false)}
+          onIssued={(id) => {
+            setCourtesy(false);
+            setShowId(id);
+          }}
+        />
+      )}
       {issue && (
         <Modal title="Emitir cupón" onClose={() => setIssue(false)}>
           <FieldsForm
@@ -179,7 +204,7 @@ export function Promotions() {
                 type: 'select',
                 required: true,
                 options: state.promotions
-                  .filter((x) => x.active && x.delivery === 'coupon')
+                  .filter((x) => x.active && x.delivery === 'coupon' && !x.courtesyOnly)
                   .map((x) => ({ value: x.id, label: x.name })),
               },
               {
@@ -211,6 +236,7 @@ export function Promotions() {
                 excessRequestId: v.excessRequestId || undefined,
               });
               setIssue(false);
+              setShowId(result.referenceId ?? null);
               app.toast('Cupón generado. Puedes abrir su QR en la lista.');
             }}
           />
@@ -228,8 +254,112 @@ export function Promotions() {
           />
         </Modal>
       )}
-      {show && <CouponDialog coupon={show} onClose={() => setShow(null)} />}
+      {show && <CouponDialog coupon={show} onClose={() => setShowId(null)} />}
     </div>
+  );
+}
+function courtesyDescription(promotion: Promotion | undefined, state: State): string | null {
+  if (!promotion?.courtesyOnly) return null;
+  const size = state.sizes.find((size) => size.id === promotion.sizeIds[0])?.name ?? 'tamaño definido';
+  const flavors = promotion.flavorIds.length
+    ? promotion.flavorIds
+        .map((id) => state.flavors.find((flavor) => flavor.id === id)?.name ?? 'Sabor')
+        .join(', ')
+    : 'Todos los sabores';
+  return `1 vaso de ${size} sin cobro · ${promotion.alcohol === 'yes' ? 'Con licor' : promotion.alcohol === 'no' ? 'Sin licor' : 'Con o sin licor'} · ${flavors} · ${promotion.allowMixed === false ? 'Un solo sabor' : 'Admite combinados'}`;
+}
+
+function CourtesyDialog({ onClose, onIssued }: { onClose: () => void; onIssued: (id: string) => void }) {
+  const app = useApp(),
+    { state, actor } = app.data!;
+  const month = colombiaMonth(new Date().toISOString());
+  const issued = state.coupons.filter(
+    (coupon) => coupon.issuedBy === actor.id && coupon.courtesy && colombiaMonth(coupon.issuedAt) === month,
+  ).length;
+  return (
+    <Modal title="Generar cortesía" onClose={onClose}>
+      <p className="modal-intro">
+        Cada código cubre un vaso y se canjea una sola vez. Caja registra el vaso sin cobro; los insumos se
+        descuentan al entregarlo. Cuota disponible este mes:{' '}
+        {Math.max(0, state.settings[0].courtesyQuota - issued)}.
+      </p>
+      <FieldsForm
+        submit="Generar código de cortesía"
+        onCancel={onClose}
+        fields={[
+          { name: 'name', label: 'Nombre de la cortesía', required: true, value: 'Cortesía' },
+          {
+            name: 'sizeId',
+            label: 'Tamaño del vaso',
+            type: 'select',
+            required: true,
+            options: state.sizes
+              .filter((size) => size.active && size.ounces > 0)
+              .map((size) => ({ value: size.id, label: size.name })),
+          },
+          {
+            name: 'alcohol',
+            label: 'Tipo de cortesía',
+            type: 'select',
+            required: true,
+            value: 'all',
+            options: [
+              { value: 'all', label: 'Con o sin licor' },
+              { value: 'yes', label: 'Con licor' },
+              { value: 'no', label: 'Sin licor' },
+            ],
+          },
+          {
+            name: 'flavorIds',
+            label: 'Sabores permitidos (sin seleccionar: todos)',
+            type: 'multiselect',
+            options: state.flavors
+              .filter((flavor) => flavor.active)
+              .map((flavor) => ({ value: flavor.id, label: flavor.name })),
+          },
+          {
+            name: 'allowMixed',
+            label: 'Permitir combinados de los sabores elegibles',
+            type: 'checkbox',
+            value: true,
+          },
+          {
+            name: 'expiresAt',
+            label: 'Vence (hora de Colombia)',
+            type: 'datetime-local',
+            required: true,
+            value: localDateTime(new Date(Date.now() + 15 * 86400000)),
+          },
+          {
+            name: 'excessRequestId',
+            label: 'Autorización adicional (si se agotó la cuota)',
+            type: 'select',
+            options: state.requests
+              .filter(
+                (request) =>
+                  request.type === 'courtesy_excess' &&
+                  request.by === actor.id &&
+                  request.status === 'approved',
+              )
+              .map((request) => ({ value: request.id, label: `Autorizada · ${date(request.reviewedAt)}` })),
+          },
+        ]}
+        onSubmit={async ({ expiresAt, excessRequestId, ...courtesySpec }) => {
+          const result = await app.run('issue_coupon', {
+            courtesy: true,
+            courtesySpec,
+            expiresAt: utc(expiresAt),
+            excessRequestId: excessRequestId || undefined,
+          });
+          if (!result.referenceId)
+            throw new Error(
+              'La emisión está pendiente de confirmación. Revisa la lista de códigos antes de repetirla.',
+            );
+          onIssued(result.referenceId);
+          app.toast('Cortesía generada. Comparte el código para canjearlo en caja.');
+        }}
+      />
+    </Modal>
   );
 }
 function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; onClose: () => void }) {
@@ -404,20 +534,37 @@ function CouponDialog({ coupon, onClose }: { coupon: Coupon; onClose: () => void
   useEffect(() => {
     void QRCode.toDataURL(coupon.code, { width: 350, margin: 3, errorCorrectionLevel: 'M' }).then(setQr);
   }, [coupon.code]);
-  const name = app.data!.state.promotions.find((x) => x.id === coupon.promotionId)?.name;
+  const promotion = app.data!.state.promotions.find((x) => x.id === coupon.promotionId);
+  const name = promotion?.name;
+  const description = courtesyDescription(promotion, app.data!.state);
   return (
-    <Modal title="Cupón Dexter’s" onClose={onClose}>
+    <Modal title={promotion?.courtesyOnly ? 'Cortesía Dexter’s' : 'Cupón Dexter’s'} onClose={onClose}>
       <div className="coupon-preview">
         <Gift size={28} />
         <h3>{name}</h3>
+        {description && <p>{description}</p>}
         {qr && <img src={qr} alt={`QR del cupón ${coupon.code}`} />}
         <strong>{coupon.code}</strong>
         <p>Válido hasta {date(coupon.expiresAt)}. Un solo uso, sujeto al beneficio indicado.</p>
         <div className="button-row">
           <button
+            className="button secondary"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(coupon.code);
+                app.toast('Código copiado.');
+              } catch {
+                app.toast('Selecciona el código para copiarlo desde tu navegador.');
+              }
+            }}
+          >
+            <Copy size={16} />
+            Copiar código
+          </button>
+          <button
             className="button primary"
             onClick={async () => {
-              const text = `Dexter’s Granizados · ${name}\nCupón: ${coupon.code}\nVence: ${date(coupon.expiresAt)}. Un solo uso.`;
+              const text = `Dexter’s Granizados · ${name}${description ? `\n${description}` : ''}\nCupón: ${coupon.code}\nVence: ${date(coupon.expiresAt)}. Un solo uso.`;
               try {
                 if (navigator.share) await navigator.share({ title: 'Cupón Dexter’s', text });
                 else {

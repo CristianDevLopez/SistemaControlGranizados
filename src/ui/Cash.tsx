@@ -11,9 +11,17 @@ import {
 } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
 import { parseMoney } from '../lib/money.ts';
-import { articles, cashExpected, locationBalance, salesByMethod } from '../domain/engine.ts';
+import {
+  countArticles,
+  countPaymentMethods,
+  cashExpected,
+  locationBalance,
+  salesByMethod,
+} from '../domain/engine.ts';
 import { isShiftCashier } from '../domain/access.ts';
-import type { CommandType, Shift } from '../domain/types.ts';
+import { transferAccountName } from './payment-labels.ts';
+import type { CommandType, Count, Shift } from '../domain/types.ts';
+import { AuditSetupDialog, CountReviewDialog } from './CashAudit.tsx';
 import {
   Badge,
   Empty,
@@ -41,7 +49,10 @@ export function CountDialog({
   const [error, setError] = useState(''),
     [busy, setBusy] = useState(false),
     [skip, setSkip] = useState(false);
-  const list = articles(state).filter((x) => !x.id.startsWith('liquid:'));
+  const list = countArticles(state, kind);
+  const paymentMethods = countPaymentMethods(state, shift.id, kind);
+  const countsCash =
+    kind !== 'audit' || !state.settings[0].auditRequest || state.settings[0].auditRequest.cash;
   const checklist =
     kind === 'audit'
       ? []
@@ -56,6 +67,8 @@ export function CountDialog({
     >
       <p className="modal-intro">
         Cuenta antes de ver lo esperado. Se conservará este registro original y cualquier revisión posterior.
+        {kind === 'closing' &&
+          ' Verifica los cobros del turno por cada cuenta, no el saldo total de la cuenta. Cuenta solo los vasos restantes del paquete abierto de cada tamaño; si no hay vasos sueltos, registra 0.'}
       </p>
       <form
         className="fields-form"
@@ -69,8 +82,16 @@ export function CountDialog({
             await app.run(kind === 'audit' ? 'finish_audit' : 'count', {
               kind,
               shiftId: shift.id,
-              cash: skip ? undefined : parseMoney(form.get('cash')),
+              ...(kind === 'audit' ? { auditId: state.settings[0].auditId } : {}),
+              cash: skip || !countsCash ? undefined : parseMoney(form.get('cash')),
               items,
+              ...(kind === 'closing' || kind === 'audit'
+                ? {
+                    payments: Object.fromEntries(
+                      paymentMethods.map(({ id }) => [id, parseMoney(form.get(id), true)]),
+                    ),
+                  }
+                : {}),
               skip,
               retained: parseMoney(form.get('retained')) ?? 0,
               locationId: form.get('locationId') || undefined,
@@ -102,24 +123,42 @@ export function CountDialog({
         )}
         {!skip && (
           <>
-            <label className="field">
-              <span>Efectivo contado *</span>
-              <MoneyInput name="cash" required placeholder="Cuenta el efectivo real" />
-            </label>
+            {countsCash && (
+              <label className="field">
+                <span>Efectivo contado *</span>
+                <MoneyInput name="cash" required placeholder="Cuenta el efectivo real" />
+              </label>
+            )}
+            {paymentMethods.map(({ id, account }) => (
+              <label className="field" key={id}>
+                <span>Transferencias verificadas · {transferAccountName(account)} *</span>
+                <MoneyInput
+                  name={id}
+                  ariaLabel={`Transferencias verificadas · ${transferAccountName(account)} *`}
+                  required
+                  allowNegative
+                  placeholder="Total neto del turno verificado en la cuenta"
+                />
+                <small>
+                  Revisa los cobros y resta las devoluciones del turno en esta cuenta. Si no hubo movimientos,
+                  registra 0; si devolviste más de lo cobrado, usa un valor negativo.
+                </small>
+              </label>
+            ))}
             <div className="count-list">
               {list.map((x) => (
                 <label key={x.id}>
                   <span>
                     {x.name}
-                    <small>{x.unit}</small>
+                    <small>{kind === 'closing' ? 'unidades restantes del paquete abierto' : x.unit}</small>
                   </span>
                   <input
                     aria-label={x.name}
                     name={x.id}
                     type="number"
                     min="0"
-                    step="1"
-                    inputMode="numeric"
+                    step={x.id.startsWith('liquid:') ? '0.01' : '1'}
+                    inputMode={x.id.startsWith('liquid:') ? 'decimal' : 'numeric'}
                     required
                     placeholder="Contado"
                   />
@@ -181,6 +220,8 @@ export function Cash() {
     owns = isShiftCashier({ ...actor, online: app.online }, active),
     directOpening = admin && app.online;
   const [count, setCount] = useState<'opening' | 'closing' | 'audit' | null>(null),
+    [auditSetup, setAuditSetup] = useState(false),
+    [reviewCount, setReviewCount] = useState<Count | null>(null),
     [form, setForm] = useState<{
       title: string;
       fields: Field[];
@@ -294,17 +335,29 @@ export function Cash() {
                 </>
               )}
               {active.status === 'open' && admin && !state.settings[0].auditId && (
-                <button className="button secondary" onClick={() => void act('start_audit')}>
+                <button
+                  className="button secondary"
+                  disabled={!app.online}
+                  onClick={() => setAuditSetup(true)}
+                >
                   <ClipboardCheck size={17} />
                   Iniciar arqueo sorpresa
                 </button>
               )}
-              {state.settings[0].auditId && admin && (
-                <button className="button primary" onClick={() => setCount('audit')}>
+              {state.settings[0].auditId && owns && (
+                <button className="button primary" disabled={!app.online} onClick={() => setCount('audit')}>
                   Presentar arqueo y reanudar
                 </button>
               )}
             </div>
+            {state.settings[0].auditId && (
+              <div className="notice warning">
+                Arqueo sorpresa en curso.{' '}
+                {owns
+                  ? 'Ingresa los conteos solicitados por el administrador.'
+                  : 'El responsable del turno debe presentar el conteo solicitado.'}
+              </div>
+            )}
             {active.status === 'open' && !active.openingCountId && (
               <div className="notice warning">Conteo de apertura pendiente.</div>
             )}
@@ -333,7 +386,7 @@ export function Cash() {
                           Object.entries(sales.byAccount)
                             .map(
                               ([id, amount]) =>
-                                `${state.locations.find((x) => x.id === id)?.name ?? 'Cuenta'}: ${money(amount)}`,
+                                `${transferAccountName(state.locations.find((x) => x.id === id))}: ${money(amount)}`,
                             )
                             .join(' · ') || 'Sin transferencias en este turno'
                         }
@@ -579,7 +632,7 @@ export function Cash() {
               <thead>
                 <tr>
                   <th>Conteo</th>
-                  <th>Contado</th>
+                  <th>Contado / verificado</th>
                   {admin && (
                     <>
                       <th>Esperado original</th>
@@ -597,15 +650,45 @@ export function Cash() {
                       {c.kind === 'opening' ? 'Apertura' : c.kind === 'closing' ? 'Cierre' : 'Arqueo'}
                       <small>{date(c.at)}</small>
                     </td>
-                    <td>{c.cash === undefined ? 'Omitido' : money(c.cash)}</td>
+                    <td>
+                      {c.cash === undefined
+                        ? c.kind === 'audit'
+                          ? 'Efectivo no solicitado'
+                          : 'Omitido'
+                        : money(c.cash)}
+                      {Object.entries(c.payments ?? {}).map(([key, amount]) => (
+                        <small key={key}>
+                          {c.paymentLabels?.[key] ?? key}: {money(amount)}
+                        </small>
+                      ))}
+                    </td>
                     {admin && (
                       <>
-                        <td>{money(c.expectedCash ?? 0)}</td>
-                        <td className={c.difference ? 'negative' : ''}>{money(c.difference ?? 0)}</td>
+                        <td>
+                          {c.expectedCash === undefined ? '—' : money(c.expectedCash)}
+                          {Object.entries(c.expectedPayments ?? {}).map(([key, amount]) => (
+                            <small key={key}>
+                              {c.paymentLabels?.[key] ?? key}: {money(amount)}
+                            </small>
+                          ))}
+                        </td>
+                        <td className={c.difference ? 'negative' : ''}>
+                          {c.difference === undefined ? '—' : money(c.difference)}
+                          {Object.entries(c.paymentDifferences ?? {}).map(([key, amount]) => (
+                            <small key={key} className={amount ? 'negative' : ''}>
+                              {c.paymentLabels?.[key] ?? key}: {money(amount)}
+                            </small>
+                          ))}
+                        </td>
                       </>
                     )}
                     <td>{profiles.find((x) => x.id === c.by)?.name}</td>
                     <td>
+                      {admin && (
+                        <button className="text-button" onClick={() => setReviewCount(c)}>
+                          Revisar conteo
+                        </button>
+                      )}
                       <button
                         className="text-button"
                         onClick={() =>
@@ -632,7 +715,18 @@ export function Cash() {
           <Empty title="Aún no hay conteos" />
         )}
       </Panel>
-      {count && active && <CountDialog kind={count} shift={active} onClose={() => setCount(null)} />}
+      {count && active && (count !== 'audit' || (state.settings[0].auditId && owns)) && (
+        <CountDialog
+          key={count === 'audit' ? state.settings[0].auditId : count}
+          kind={count}
+          shift={active}
+          onClose={() => setCount(null)}
+        />
+      )}
+      {auditSetup && active && admin && (
+        <AuditSetupDialog shift={active} onClose={() => setAuditSetup(false)} />
+      )}
+      {reviewCount && admin && <CountReviewDialog count={reviewCount} onClose={() => setReviewCount(null)} />}
       {form && (
         <Modal title={form.title} onClose={() => setForm(null)}>
           <FieldsForm

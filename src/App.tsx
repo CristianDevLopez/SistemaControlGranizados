@@ -56,6 +56,8 @@ export function App() {
     [mobile, setMobile] = useState(false),
     [syncOpen, setSyncOpen] = useState(false),
     [exit, setExit] = useState(false);
+  const [updating, setUpdating] = useState(false),
+    [updateError, setUpdateError] = useState('');
   const [recovery, setRecovery] = useState<'request' | 'reset' | null>(() =>
     window.location.pathname === recoveryPath ? 'reset' : null,
   );
@@ -100,9 +102,8 @@ export function App() {
     ),
     active = nav.find((p) => p.id === page) ?? pages[0],
     pending = app.pending.filter((p) => p.status === 'pending').length + app.photosPending,
-    conflicts = app.pending.filter((p) => p.status === 'conflict').length,
-    shift = state.shifts.find((s) => s.status === 'open');
-  const canUpdate = !app.pending.length && !app.photosPending && !shift;
+    conflicts = app.pending.filter((p) => p.status === 'conflict').length;
+  const canUpdate = app.online && !app.syncing && !updating;
   const sessionActor = app.sessionActor ?? actor;
   const changeView = (role: Role | null) => {
     if (app.changeView(role)) {
@@ -121,7 +122,7 @@ export function App() {
     setExit(false);
   };
   return (
-    <div className="app-shell">
+    <div className="app-shell" inert={updating}>
       {mobile && (
         <button className="nav-backdrop" aria-label="Cerrar menú" onClick={() => setMobile(false)} />
       )}
@@ -365,16 +366,30 @@ export function App() {
           {needRefresh && (
             <div className="notice info">
               <span>
-                Hay una actualización disponible.{' '}
-                {canUpdate
-                  ? 'Puedes instalarla ahora.'
-                  : 'Se instalará al terminar el turno y sincronizar los pendientes.'}
+                Hay una actualización disponible. Puedes actualizar sin cerrar el turno. Se sincronizarán los
+                registros antes de recargar; tus pedidos guardados se conservan.
               </span>
-              {canUpdate && (
-                <button className="button small secondary" onClick={() => void updateServiceWorker(true)}>
-                  Actualizar app
-                </button>
-              )}
+              <button
+                className="button small secondary"
+                disabled={!canUpdate}
+                onClick={async () => {
+                  setUpdating(true);
+                  setUpdateError('');
+                  try {
+                    await app.installUpdate(() => updateServiceWorker(true));
+                  } catch (error) {
+                    setUpdateError((error as Error).message);
+                    setUpdating(false);
+                  }
+                }}
+              >
+                {updating ? 'Sincronizando y actualizando…' : 'Actualizar app'}
+              </button>
+            </div>
+          )}
+          {updateError && (
+            <div className="notice warning" role="alert">
+              {updateError}
             </div>
           )}
           {app.data.branch && app.data.branch.status !== 'active' && (

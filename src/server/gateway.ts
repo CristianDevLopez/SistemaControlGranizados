@@ -683,6 +683,8 @@ export function createGateway(options: GatewayOptions) {
                 'pay',
                 'count',
                 'taste',
+                'update_tasting',
+                'remove_tasting',
                 'authorize_shift',
                 'replace_order',
                 'refund_order',
