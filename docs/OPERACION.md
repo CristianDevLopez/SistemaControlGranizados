@@ -9,6 +9,8 @@
 
 ## Vercel
 
+Actualización del 14 de noviembre de 2026: migraciones de permisos y revisión de cierres aplicadas, función `dexter` versión 13 activa y frontend de producción publicado. Se verificaron el dominio, el bundle con los controles nuevos, el backend correcto y la actualización PWA. Los registros del negocio conservan sus huellas antes y después del despliegue. Ver [cuadres e inventario](CUADRES.md) y [validación](VALIDACION.md).
+
 Publicada para revisión en **https://dexter-granizados.vercel.app**, bajo `cristiandevlopez@gmail.com`, equipo `crisdevlopez` (Dev), proyecto `dexter-granizados`. El titular eligió Hobby gratuito; no se activó ningún plan de pago. [Vercel restringe Hobby al uso personal no comercial](https://vercel.com/docs/limits/fair-use-guidelines). Resolver esa condición de alojamiento antes de operar el negocio.
 
 1. La CLI ya está conectada y este directorio está vinculado al proyecto. En otro equipo, iniciar sesión con `npx vercel login` y vincular con `npx vercel link --yes --scope crisdevlopez --project dexter-granizados`.

@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { BinaryBitmap, HybridBinarizer, QRCodeReader, RGBLuminanceSource } from '@zxing/library';
+import { decodeGeneratedQr } from '../support/qr.ts';
 import { admin, cashier, support, cmd, ids } from '../support/fixture.ts';
 import type { CommandType } from '../../src/domain/types.ts';
 
@@ -304,14 +304,9 @@ test('comparte un QR legible y canjea dos de tres cortesías sin consumir la sob
       values: Array.from({ length: canvas.width * canvas.height }, (_, i) => data[i * 4]),
     };
   });
-  const decoded = new QRCodeReader().decode(
-    new BinaryBitmap(
-      new HybridBinarizer(
-        new RGBLuminanceSource(Uint8ClampedArray.from(pixels.values), pixels.width, pixels.height),
-      ),
-    ),
+  expect(decodeGeneratedQr(Uint8ClampedArray.from(pixels.values), pixels.width, pixels.height)).toBe(
+    coupons[0].code,
   );
-  expect(decoded.getText()).toBe(coupons[0].code);
   const context = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
   try {
     const cash = await context.newPage();

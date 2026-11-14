@@ -1,6 +1,6 @@
 # Revisión de cuadre e inventario — 14 de noviembre de 2026
 
-Backend publicado el 14 de noviembre de 2026: migraciones de permisos y revisión de cierre aplicadas, función `dexter` versión 13 activa. La web de producción queda pendiente de iniciar sesión en Vercel. Se verificó que los registros de pedidos, pagos, inventario, conteos y turnos no cambiaron durante la publicación.
+Publicado el 14 de noviembre de 2026: migraciones de permisos y revisión de cierre aplicadas, función `dexter` versión 13 activa y frontend de producción disponible en [Dexter’s Granizados](https://dexter-granizados.vercel.app). Se verificó que los registros de pedidos, pagos, inventario, conteos y turnos no cambiaron durante la publicación.
 
 ## Empleado
 
