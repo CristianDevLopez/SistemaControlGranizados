@@ -97,6 +97,7 @@ const ONLINE_TYPES = new Set<CommandType>([
   'request_courtesy_excess',
   'start_audit',
   'finish_audit',
+  'approve_closing',
 ]);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<Snapshot | null>(null),
@@ -313,6 +314,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const requiresOnline =
             options.onlineOnly ||
             ONLINE_TYPES.has(type) ||
+            (type === 'count' && payload.preview !== undefined) ||
             (type === 'request_shift' && snapshot.actor.role === 'admin' && isOnline) ||
             snapshot.actor.role === 'apoyo' ||
             type === 'redeem_coupon' ||

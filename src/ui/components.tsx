@@ -205,6 +205,7 @@ export interface Field {
   min?: number;
   max?: number;
   step?: string;
+  allowNegative?: boolean;
   options?: { value: string; label: string }[];
 }
 function FormField({ field, children }: { field: Field; children: ReactNode }) {
@@ -226,6 +227,7 @@ export function FieldsForm({
   children,
   onCancel,
   initial = {},
+  onValuesChange,
 }: {
   fields: Field[];
   onSubmit: (values: Record<string, any>) => Promise<unknown>;
@@ -233,6 +235,7 @@ export function FieldsForm({
   children?: ReactNode;
   onCancel?: () => void;
   initial?: Record<string, unknown>;
+  onValuesChange?: (values: Record<string, any>) => void;
 }) {
   const app = useApp();
   const [values, setValues] = useState<Record<string, any>>(() =>
@@ -245,7 +248,11 @@ export function FieldsForm({
     ),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
-  const change = (field: Field, value: unknown) => setValues((v) => ({ ...v, [field.name]: value }));
+  const change = (field: Field, value: unknown) => {
+    const next = { ...values, [field.name]: value };
+    setValues(next);
+    onValuesChange?.(next);
+  };
   return (
     <form
       className="fields-form"
@@ -258,7 +265,7 @@ export function FieldsForm({
           for (const f of fields) {
             if (f.type === 'number') ready[f.name] = values[f.name] === '' ? null : Number(values[f.name]);
             if (f.type === 'money') {
-              const amount = parseMoney(values[f.name]);
+              const amount = parseMoney(values[f.name], f.allowNegative);
               if (amount === null && String(values[f.name] ?? '').trim())
                 throw new Error(`${f.label}: escribe un monto en pesos.`);
               if (amount !== null && f.min !== undefined && amount < f.min)
@@ -340,11 +347,13 @@ export function FieldsForm({
               <input
                 type="checkbox"
                 checked={!!values[f.name]}
+                required={f.required}
                 onChange={(e) => change(f, e.target.checked)}
               />
             ) : f.type === 'money' ? (
               <MoneyInput
                 required={f.required}
+                allowNegative={f.allowNegative}
                 value={
                   typeof values[f.name] === 'number' ? moneyText(values[f.name]) : (values[f.name] ?? '')
                 }

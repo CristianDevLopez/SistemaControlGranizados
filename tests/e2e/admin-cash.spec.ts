@@ -22,7 +22,20 @@ async function count(page: Page, cash: number, retained?: number) {
   for (const input of await dialog.locator('.count-list input').all()) await input.fill('0');
   for (const input of await dialog.locator('.payment-counts input').all()) await input.fill('0');
   for (const input of await dialog.locator('input[type="checkbox"][required]').all()) await input.check();
-  await dialog.getByRole('button', { name: 'Registrar conteo', exact: true }).click();
+  if (retained === undefined)
+    await dialog.getByRole('button', { name: 'Registrar conteo', exact: true }).click();
+  else {
+    await dialog.getByRole('button', { name: 'Revisar cuadre', exact: true }).click();
+    await expect(
+      dialog.getByRole('heading', { name: 'Revisión previa del cuadre', exact: true }),
+    ).toBeVisible();
+    const confirmation = dialog.getByLabel(
+      'Revisé el conteo y deseo enviarlo provisionalmente al administrador',
+      { exact: true },
+    );
+    if (await confirmation.isVisible()) await confirmation.check();
+    await dialog.getByRole('button', { name: /Enviar (provisional|cuadre)/ }).click();
+  }
   await expect(dialog).toHaveCount(0);
 }
 

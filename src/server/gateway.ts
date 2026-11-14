@@ -1,4 +1,4 @@
-import { applyCommand, assert, id, redactState, quotePayment } from '../domain/engine.ts';
+import { applyCommand, assert, id, redactState, quotePayment, closingPreview } from '../domain/engine.ts';
 import {
   DomainError,
   type Actor,
@@ -414,6 +414,17 @@ export function createGateway(options: GatewayOptions) {
           'Este local no está activo. Puedes consultar su información y gestionar la solicitud en Locales y mensualidades.',
           'BRANCH_INACTIVE',
         );
+      }
+      if (route === 'closing-preview') {
+        const loaded = await store.load();
+        const shift = loaded.state.shifts.find((s) => s.id === body.shiftId);
+        assert(shift && !loaded.state.settings[0].auditId, 'Turno no disponible o arqueo en curso.');
+        assert(
+          shift.status === 'open' && hasPermission(actor, 'shifts') && isShiftCashier(actor, shift),
+          'Solo el responsable de la caja puede revisar su cierre abierto.',
+          'FORBIDDEN',
+        );
+        return json(closingPreview(loaded.state, shift.id));
       }
       if (route === 'quote') {
         await rate(`coupon-quote:${profile.id}`, 20, 60);

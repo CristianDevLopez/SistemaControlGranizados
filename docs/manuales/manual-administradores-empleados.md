@@ -4,9 +4,9 @@ Dexter’s Granizados
 
 Guía de operación de locales para administradores propietarios encargados de caja y apoyo de mostrador
 
-Versión del manual 2 | 13 de noviembre de 2026
+Versión del manual 3 | 14 de noviembre de 2026
 
-Esta versión describe los ajustes preparados en el repositorio. Su aplicación al servicio publicado requiere la migración y actualización indicadas en [la guía de aplicación](../AJUSTES-OPERATIVOS.md).
+Esta versión describe los ajustes preparados en el repositorio. Su aplicación al servicio publicado requiere las migraciones y actualizaciones indicadas en [la guía de aplicación](../AJUSTES-OPERATIVOS.md) y [la revisión de cuadres](../CUADRES.md).
 
 Este manual explica cómo preparar un local, atender pedidos, registrar entregas y cobros, controlar mercancía y cerrar la jornada. También enseña a revisar novedades y a conservar la información cuando se pierde la conexión. Sigue el procedimiento correspondiente a tu rol y comprueba siempre el local y el turno antes de registrar una operación.
 
@@ -186,7 +186,7 @@ Con conexión y doble factor, abre **Turno y caja → Iniciar caja**, indica la 
 
 Si existe efectivo físico anterior registrado, la aplicación utiliza ese saldo para la apertura en lugar de reemplazarlo libremente. Si ya hay un turno solicitado, abierto o provisional del local, resuélvelo o ciérralo antes de abrir otro.
 
-Los conteos se presentan a ciegas: introduce lo que contaste físicamente antes de comparar con el sistema. No copies una cifra esperada para eliminar una diferencia. El encargado consulta sus conteos originales, mientras el administrador revisa los valores esperados y las diferencias.
+Introduce lo que contaste físicamente antes de comparar con el sistema. El cierre permite una revisión previa de efectivo, cuentas y vasos antes de enviarlo. La apertura y el arqueo sorpresa conservan el conteo ciego. No copies una cifra esperada para eliminar una diferencia real.
 
 Si el negocio habilitó **Omitir por contingencia y dejar pendiente**, la opción aparece en la apertura. Utilízala solo cuando corresponda y deja la novedad; no implica que se haya presentado el conteo.
 
@@ -288,6 +288,8 @@ Verifica las diferencias entre bolsas selladas, líquido en onzas, paquetes comp
 4. Guarda y verifica su aparición entre los paquetes abiertos.
 
 Abrir un paquete descuenta un paquete cerrado y agrega sus vasos sueltos. Si se declara vacío el anterior cuando todavía se esperaba un saldo, se conserva la diferencia para revisión.
+
+Si el saldo teórico de vasos del tamaño elegido se agota, **Mostrador** ofrece **Registrar apertura de paquete**. Puedes registrarlo allí mismo, con 20 vasos por defecto o las unidades configuradas, sin cambiar de pantalla. No registres otra apertura si ya quedó guardada.
 
 ### Abrir y agotar una bolsa
 
@@ -501,9 +503,10 @@ El cierre lo presenta el responsable del turno. Un administrador revisa los resu
 3. Confirma las tareas de la lista de cierre. Cuenta el efectivo y verifica por separado el total neto de cobros menos devoluciones del turno en Nequi y cada cuenta de pago configurada; introduce 0 si no hubo movimientos. No uses el saldo total de la cuenta. Cuenta únicamente los vasos restantes del paquete abierto de cada tamaño (0 si no hay vasos sueltos), sin contar paquetes cerrados, bolsas de líquido ni otros insumos.
 4. Indica cuánto efectivo quedará reservado para la siguiente apertura. No puede superar lo contado.
 5. Si hay remanente, selecciona un destino activo con un administrador receptor diferente de ti.
-6. Escribe novedades y pulsa **Registrar conteo**.
-7. Comprueba el cierre. Un administrador debe registrar la ejecución real del remanente después del cierre y el receptor confirma su recepción. El trabajador ya no puede ejecutar movimientos sobre ese turno.
-8. Con conexión, comprueba que no queden operaciones ni fotos pendientes. Si cerraste offline, valida el resultado al recuperar conexión antes de dar por conciliada la jornada.
+6. Escribe novedades y pulsa **Revisar cuadre**. Compara lo registrado con lo esperado y cuánto falta o sobra en efectivo, cada cuenta y los vasos de cada tamaño. Si corriges un campo, vuelve a revisar.
+7. Pulsa **Enviar cuadre a revisión** cuando coincida. Si las diferencias continúan, confirma que revisaste el conteo y pulsa **Enviar provisional a revisión**. Todo cierre requiere aprobación administrativa, incluso cuando coincide. Sin conexión se envía provisionalmente y se verifica al sincronizar.
+8. Un administrador entra en **Cierres pendientes de aprobación → Revisar y aprobar cierre**, reconfirma lo físico y los comprobantes, documenta las correcciones y aprueba. Se conserva el original y se agrega la revisión. La diferencia de vasos ajusta el inventario una sola vez para que no vuelva a faltar en el turno siguiente. El valor a reportar al empleado es un registro manual; no ejecuta descuentos de nómina.
+9. Comprueba el cierre. Un administrador registra la ejecución real del remanente y el receptor confirma su recepción. La aprobación no confirma por sí sola una entrega ni una consignación. El trabajador ya no puede ejecutar movimientos sobre ese turno. Con conexión, comprueba que no queden operaciones ni fotos pendientes.
 
 **Ejemplo.** Cuentas $250.000 y reservas $50.000: el remanente es $200.000. La solicitud del remanente no demuestra que ya se entregó. Si todavía está físicamente en caja, no registres otra salida ficticia para forzar un saldo.
 

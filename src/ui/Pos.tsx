@@ -22,7 +22,7 @@ import { FlavorPortions, flavorName, portionLabel } from './FlavorDetails.tsx';
 import { canWork, hasPermission, isShiftCashier } from '../domain/access.ts';
 import { FlavorImage } from './FlavorImage.tsx';
 import type { MoneyLocation, Order, OrderLine, State } from '../domain/types.ts';
-import { paymentMethod } from '../domain/engine.ts';
+import { paymentMethod, cupBalances } from '../domain/engine.ts';
 import { Badge, Empty, FieldsForm, Modal, MoneyInput, money, date, stateNames } from './components.tsx';
 import { parseMoney } from '../lib/money.ts';
 import { isNequiAccount, paymentNote, paymentOptionLabel, transferAccountName } from './payment-labels.ts';
@@ -409,6 +409,7 @@ export function Pos() {
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [checkout, setCheckout] = useState(false),
+    [packageSize, setPackageSize] = useState<string | null>(null),
     [showOrders, setShowOrders] = useState(false),
     [tasting, setTasting] = useState(false),
     [mixing, setMixing] = useState(false),
@@ -548,6 +549,26 @@ export function Pos() {
             : 'Registra pedidos desde el equipo de caja mientras vuelve la conexión.'}
         </div>
       )}
+      {active &&
+        !state.settings[0].auditId &&
+        size &&
+        size.cups > 0 &&
+        (cupBalances(state)[`cup:${size.id}`] ?? 0) <= 0 && (
+          <div className="notice warning" aria-live="polite">
+            <span>
+              Según el sistema no quedan vasos sueltos de {size.name}. ¿Deseas registrar la apertura de un
+              paquete? Cada paquete agrega {state.settings[0].cupPackageUnits} vasos. Si ya lo abriste,
+              regístralo para evitar faltantes.
+            </span>
+            {canWork(actor, state, 'inventory') ? (
+              <button className="button secondary" disabled={busy} onClick={() => setPackageSize(size.id)}>
+                Registrar apertura de paquete
+              </button>
+            ) : (
+              <span>Pide al responsable de inventario que registre la apertura.</span>
+            )}
+          </div>
+        )}
       <div className="pos-layout">
         <div className="catalog-pane">
           <div className="section-heading">
@@ -966,6 +987,44 @@ export function Pos() {
             select(null);
           }}
         />
+      )}
+      {packageSize && (
+        <Modal title="Abrir paquete de vasos" onClose={() => setPackageSize(null)}>
+          <p>
+            Registra el paquete de {state.sizes.find((s) => s.id === packageSize)?.name} que estás usando.
+          </p>
+          <FieldsForm
+            fields={[
+              {
+                name: 'units',
+                label: 'Unidades del paquete',
+                type: 'number',
+                value: state.settings[0].cupPackageUnits,
+                min: 1,
+                max: 1000,
+                step: '1',
+                required: true,
+              },
+              ...(state.packages.some((p) => p.sizeId === packageSize && !p.closedAt)
+                ? [
+                    {
+                      name: 'confirmEmpty',
+                      label: 'Confirmo que el paquete anterior está vacío',
+                      type: 'checkbox' as const,
+                      required: true,
+                    },
+                  ]
+                : []),
+            ]}
+            submit="Registrar apertura"
+            onCancel={() => setPackageSize(null)}
+            onSubmit={async (values) => {
+              await app.run('open_package', { sizeId: packageSize, ...values });
+              setPackageSize(null);
+              app.toast('Apertura registrada. Los vasos ya están disponibles en inventario.');
+            }}
+          />
+        </Modal>
       )}
     </>
   );

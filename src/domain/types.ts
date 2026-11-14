@@ -179,6 +179,15 @@ export interface Shift {
   offlineAuthorizedBy?: ID;
   /** Cuentas usadas en el turno, también en la vista de caja sin importes esperados. */
   paymentAccountIds?: ID[];
+  closingReview?: {
+    status: 'pending' | 'approved';
+    countId?: ID;
+    by?: ID;
+    at?: string;
+    notes?: string;
+    /** Registro administrativo; no ejecuta descuentos de nómina. */
+    employeeCharge?: number;
+  };
 }
 export interface Count {
   id: ID;
@@ -204,6 +213,17 @@ export interface Count {
   requestedBy?: ID;
   requestedAt?: string;
   itemLabels?: Record<string, string>;
+  revisesId?: ID;
+  cutoffAt?: string;
+  receivedAt?: string;
+  /** Eventos en el límite del corte; evita ambigüedad cuando comparten la misma hora. */
+  stockEventIds?: ID[];
+}
+export interface ClosingPreview {
+  expectedCash: number;
+  expectedItems: Record<string, number>;
+  expectedPayments: Record<string, number>;
+  paymentLabels: Record<string, string>;
 }
 export interface ShipmentLine {
   article: string;
@@ -268,7 +288,7 @@ export interface Transfer {
   from: string;
   to: ID;
   amount: number;
-  status: 'requested' | 'in_transit' | 'confirmed' | 'disputed';
+  status: 'requested' | 'in_transit' | 'confirmed' | 'disputed' | 'cancelled';
   at: string;
   executedAt?: string;
   confirmedAt?: string;
@@ -424,6 +444,8 @@ export interface Outage {
   until?: string;
 }
 export interface State {
+  /** Proyección operativa para mostrador, sin movimientos privados de inventario. */
+  cupBalances?: Record<string, number>;
   settings: Settings[];
   flavors: Flavor[];
   sizes: Size[];
@@ -492,6 +514,7 @@ export type CommandType =
   | 'request_shift'
   | 'authorize_shift'
   | 'count'
+  | 'approve_closing'
   | 'start_audit'
   | 'finish_audit'
   | 'create_order'

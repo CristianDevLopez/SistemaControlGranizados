@@ -97,6 +97,7 @@ const schema: Record<string, string[]> = {
     'remittance',
     'closedAt',
     'offlineAuthorizedBy',
+    'closingReview',
   ],
   counts: [
     'id',
@@ -121,6 +122,10 @@ const schema: Record<string, string[]> = {
     'requestedBy',
     'requestedAt',
     'itemLabels',
+    'revisesId',
+    'cutoffAt',
+    'receivedAt',
+    'stockEventIds',
   ],
   shipments: ['id', 'by', 'from', 'supplier', 'items', 'expenseId', 'at', 'status', 'notes'],
   receipts: [
