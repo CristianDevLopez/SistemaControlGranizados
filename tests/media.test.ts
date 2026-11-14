@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, it, expect } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { PgBackend } from './support/backend.ts';
-import { cashier, support, cmd, NOW } from './support/fixture.ts';
+import { admin, cashier, support, cmd, ids, NOW } from './support/fixture.ts';
 import { createGateway } from '../src/server/gateway.ts';
 import { sha256 } from '../src/server/crypto.ts';
 let backend: PgBackend, gateway: ReturnType<typeof createGateway>;
@@ -64,4 +64,32 @@ it('rechaza contenido que no es imagen y rutas ajenas al usuario', async () => {
   backend.files.set(target.data.path, new Blob(['no es una imagen'], { type: 'image/jpeg' }));
   expect((await request('attachments/complete', { id, path: target.data.path })).status).toBe(400);
   expect((await request('attachments/complete', { id, path: 'otro/archivo.jpg' })).status).toBe(400);
+});
+it('permite al apoyo leer una imagen publicada de sabor sin exponer evidencias ajenas', async () => {
+  const s = (await backend.load()).state;
+  const photo = s.attachments.find((a) => a.status === 'uploaded')!;
+  expect((await request(`attachments/read?id=${photo.id}`, {}, support)).status).toBe(403);
+  const result = await request(
+    'commands',
+    {
+      commands: [
+        cmd(
+          'save_flavor',
+          {
+            id: ids.flavor,
+            name: 'Maracuyá',
+            alcohol: true,
+            imageId: photo.id,
+          },
+          admin,
+          { configVersion: s.settings[0].version },
+        ),
+      ],
+    },
+    admin,
+  );
+  expect(result.data.results[0].status).toBe('accepted');
+  expect((await request(`attachments/read?id=${photo.id}`, {}, support)).status).toBe(200);
+  const evidence = s.attachments.find((a) => a.id !== photo.id)!;
+  expect((await request(`attachments/read?id=${evidence.id}`, {}, support)).status).toBe(403);
 });

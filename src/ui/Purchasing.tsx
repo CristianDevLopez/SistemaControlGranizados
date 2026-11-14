@@ -3,6 +3,7 @@ import { Plus, Truck, ReceiptText, Camera, Check, Trash2 } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
 import { photoBlob } from '../lib/db.ts';
 import { articles } from '../domain/engine.ts';
+import { canWork } from '../domain/access.ts';
 import type { Shipment } from '../domain/types.ts';
 import {
   Badge,
@@ -28,6 +29,19 @@ export function Purchasing() {
     .filter((x) => x.active)
     .map((x) => ({ value: x.id, label: x.name }));
   const expenseFields: Field[] = [
+    ...(admin
+      ? [
+          {
+            name: 'shiftId',
+            label: 'Turno a corregir (opcional; solo administrador)',
+            type: 'select' as const,
+            options: state.shifts.map((s) => ({
+              value: s.id,
+              label: `${date(s.openedAt ?? s.requestedAt)} · ${s.status}`,
+            })),
+          },
+        ]
+      : []),
     {
       name: 'category',
       label: 'Categoría',
@@ -87,7 +101,7 @@ export function Purchasing() {
           <p>El costo, el pago y la recepción quedan relacionados.</p>
         </div>
         <div className="button-row">
-          {actor.role !== 'apoyo' && (
+          {canWork(actor, state, 'expenses') && (
             <button className="button secondary" onClick={() => setExpense(true)}>
               <Plus size={17} />
               Registrar gasto
@@ -144,7 +158,11 @@ export function Purchasing() {
                     </td>
                     <td>
                       {s.status !== 'received' && (
-                        <button className="button small secondary" onClick={() => setReceive(s)}>
+                        <button
+                          className="button small secondary"
+                          disabled={!canWork(actor, state, 'inventory')}
+                          onClick={() => setReceive(s)}
+                        >
                           Recibir a ciegas
                         </button>
                       )}

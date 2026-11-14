@@ -48,8 +48,10 @@ it('exige turno abierto, selección válida y al menos un ítem', () => {
 
 it('solo el responsable del turno puede ingresar el conteo; ser admin no permite sustituirlo', () => {
   const state = start();
-  for (const actor of [admin, other, support, { ...cashier, deviceId: ids.remote }])
+  for (const actor of [admin, other, { ...cashier, deviceId: ids.remote }])
     expect(() => submit(state, {}, actor)).toThrow(/encargado y equipo/);
+  expect(() => submit(state, {}, support)).toThrow(/permiso/);
+  expect(() => submit(state, {}, { ...cashier, permissions: { shifts: false } })).toThrow(/permiso/);
   expect(() => submit(state, {}, { ...cashier, online: false })).toThrow(/conexión/);
   expect(submit(state).counts[0].by).toBe(cashier.id);
 });

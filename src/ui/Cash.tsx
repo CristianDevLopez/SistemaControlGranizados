@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Plus,
   ClipboardCheck,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
 import { parseMoney } from '../lib/money.ts';
+import { api } from '../lib/api.ts';
 import {
   countArticles,
   countPaymentMethods,
@@ -18,10 +19,16 @@ import {
   locationBalance,
   salesByMethod,
 } from '../domain/engine.ts';
-import { isShiftCashier } from '../domain/access.ts';
+import { canWork, hasPermission, isShiftCashier } from '../domain/access.ts';
 import { transferAccountName } from './payment-labels.ts';
-import type { CommandType, Count, Shift } from '../domain/types.ts';
+import type { ClosingPreview, CommandType, Count, Shift } from '../domain/types.ts';
 import { AuditSetupDialog, CountReviewDialog } from './CashAudit.tsx';
+import {
+  ClosingApprovalDialog,
+  ClosingComparison,
+  closingHasDifferences,
+  type ClosingValues,
+} from './ClosingReview.tsx';
 import {
   Badge,
   Empty,
@@ -48,7 +55,11 @@ export function CountDialog({
     { state, actor } = app.data!;
   const [error, setError] = useState(''),
     [busy, setBusy] = useState(false),
-    [skip, setSkip] = useState(false);
+    [skip, setSkip] = useState(false),
+    [draft, setDraft] = useState<ClosingValues | null>(null),
+    [preview, setPreview] = useState<ClosingPreview | null>(null);
+  const changes = useRef(0);
+  const differences = !!draft && !!preview && closingHasDifferences(draft, preview);
   const list = countArticles(state, kind);
   const paymentMethods = countPaymentMethods(state, shift.id, kind);
   const countsCash =
@@ -66,12 +77,20 @@ export function CountDialog({
       onClose={onClose}
     >
       <p className="modal-intro">
-        Cuenta antes de ver lo esperado. Se conservará este registro original y cualquier revisión posterior.
+        {kind === 'closing'
+          ? 'Ingresa el conteo y revisa la comparación antes de enviarlo al administrador.'
+          : 'Cuenta antes de ver lo esperado. Se conservará este registro original y cualquier revisión posterior.'}
         {kind === 'closing' &&
           ' Verifica los cobros del turno por cada cuenta, no el saldo total de la cuenta. Cuenta solo los vasos restantes del paquete abierto de cada tamaño; si no hay vasos sueltos, registra 0.'}
       </p>
       <form
         className="fields-form"
+        onChange={(e) => {
+          if ((e.target as unknown as HTMLInputElement).name === 'confirmDifferences') return;
+          changes.current++;
+          setDraft(null);
+          setPreview(null);
+        }}
         onSubmit={async (e) => {
           e.preventDefault();
           setBusy(true);
@@ -79,6 +98,24 @@ export function CountDialog({
           const form = new FormData(e.currentTarget);
           try {
             const items = Object.fromEntries(list.map((x) => [x.id, Number(form.get(x.id))]));
+            if (kind === 'closing' && !draft) {
+              const values = {
+                cash: parseMoney(form.get('cash')) ?? 0,
+                items,
+                payments: Object.fromEntries(
+                  paymentMethods.map(({ id }) => [id, parseMoney(form.get(id), true) ?? 0]),
+                ),
+              };
+              const version = changes.current;
+              if (app.online) {
+                await app.sync();
+                const expected = await api<ClosingPreview>('closing-preview', { shiftId: shift.id });
+                if (changes.current !== version) return;
+                setPreview(expected);
+              }
+              setDraft(values);
+              return;
+            }
             await app.run(kind === 'audit' ? 'finish_audit' : 'count', {
               kind,
               shiftId: shift.id,
@@ -99,11 +136,18 @@ export function CountDialog({
               checklist: Object.fromEntries(
                 checklist.map((_, index) => [index, form.get(`check:${index}`) === 'on']),
               ),
+              ...(kind === 'closing' && preview ? { preview } : {}),
             });
-            app.toast('Conteo registrado. Las diferencias quedan para revisión.');
+            app.toast(
+              kind === 'closing'
+                ? 'Cuadre enviado. Pendiente de aprobación administrativa.'
+                : 'Conteo registrado. Las diferencias quedan para revisión.',
+            );
             onClose();
           } catch (e) {
             setError((e as Error).message);
+            setDraft(null);
+            setPreview(null);
           } finally {
             setBusy(false);
           }
@@ -195,6 +239,36 @@ export function CountDialog({
           <span>Novedades</span>
           <textarea name="notes" maxLength={1500} placeholder="Explica cualquier contingencia del conteo" />
         </label>
+        {draft && kind === 'closing' && (
+          <div className="closing-review wide">
+            <h3>Revisión previa del cuadre</h3>
+            {preview ? (
+              <>
+                <ClosingComparison
+                  values={draft}
+                  preview={preview}
+                  labels={Object.fromEntries(list.map((a) => [a.id, a.name]))}
+                />
+                <p>
+                  {differences
+                    ? 'Revisa los valores y corrige los campos si hace falta. Puedes enviarlo provisionalmente si las diferencias continúan.'
+                    : 'Todo coincide. El administrador debe verificar y aprobar el cierre.'}
+                </p>
+              </>
+            ) : (
+              <p className="notice warning">
+                Sin conexión: no se pueden verificar los saldos del sistema. El cierre será provisional y se
+                revisará al sincronizar.
+              </p>
+            )}
+            {(differences || !preview) && (
+              <label className="check-inline">
+                <input type="checkbox" name="confirmDifferences" required />
+                Revisé el conteo y deseo enviarlo provisionalmente al administrador
+              </label>
+            )}
+          </div>
+        )}
         {error && (
           <div className="form-error" role="alert">
             {error}
@@ -205,7 +279,15 @@ export function CountDialog({
             Cancelar
           </button>
           <button className="button primary" disabled={busy}>
-            {busy ? 'Guardando…' : 'Registrar conteo'}
+            {busy
+              ? 'Procesando…'
+              : kind !== 'closing'
+                ? 'Registrar conteo'
+                : !draft
+                  ? 'Revisar cuadre'
+                  : differences || !preview
+                    ? 'Enviar provisional a revisión'
+                    : 'Enviar cuadre a revisión'}
           </button>
         </div>
       </form>
@@ -217,11 +299,12 @@ export function Cash() {
     { state, actor, profiles } = app.data!;
   const active = state.shifts.find((x) => ['open', 'requested', 'provisional'].includes(x.status)),
     admin = actor.role === 'admin',
-    owns = isShiftCashier({ ...actor, online: app.online }, active),
+    owns = hasPermission(actor, 'shifts') && isShiftCashier({ ...actor, online: app.online }, active),
     directOpening = admin && app.online;
   const [count, setCount] = useState<'opening' | 'closing' | 'audit' | null>(null),
     [auditSetup, setAuditSetup] = useState(false),
     [reviewCount, setReviewCount] = useState<Count | null>(null),
+    [approvalCount, setApprovalCount] = useState<Count | null>(null),
     [form, setForm] = useState<{
       title: string;
       fields: Field[];
@@ -251,7 +334,7 @@ export function Cash() {
         {!active && (admin || (actor.primary && actor.role !== 'apoyo')) && (
           <button
             className="button primary"
-            disabled={admin && !app.online && !actor.primary}
+            disabled={!hasPermission(actor, 'shifts') || (admin && !app.online && !actor.primary)}
             onClick={() =>
               directOpening
                 ? setForm({
@@ -408,6 +491,32 @@ export function Cash() {
           />
         )}
       </Panel>
+      {admin && state.shifts.some((s) => s.closingCountId && s.closingReview?.status !== 'approved') && (
+        <Panel title="Cierres pendientes de aprobación">
+          {state.shifts
+            .filter((s) => s.closingCountId && s.closingReview?.status !== 'approved')
+            .map((s) => {
+              const original = state.counts.find((c) => c.id === s.closingCountId);
+              return (
+                original && (
+                  <div className="notice info" key={s.id}>
+                    <span>
+                      {profiles.find((p) => p.id === s.cashierId)?.name} · {date(s.closedAt)} · Pendiente de
+                      aprobación
+                    </span>
+                    <button
+                      className="button secondary"
+                      disabled={!app.online}
+                      onClick={() => setApprovalCount(original)}
+                    >
+                      Revisar y aprobar cierre
+                    </button>
+                  </div>
+                )
+              );
+            })}
+        </Panel>
+      )}
       {admin && (
         <div className="stats-grid">
           {state.locations.map((location) => (
@@ -423,7 +532,7 @@ export function Cash() {
       <Panel
         title="Entregas y consignaciones"
         action={
-          actor.role !== 'apoyo' && (
+          canWork(actor, state, 'transfers') && (
             <button
               className="button secondary"
               onClick={() =>
@@ -548,11 +657,18 @@ export function Cash() {
                             </button>
                           )}
                         {t.status === 'requested' &&
-                          (t.by === actor.id ||
-                            (admin && t.type !== 'transfer' && t.recipientId !== actor.id)) && (
+                          (t.by === actor.id || (admin && t.recipientId !== actor.id)) && (
                             <button
                               className="button small secondary"
-                              disabled={t.type !== 'transfer' && t.votes.length < 3}
+                              disabled={
+                                !canWork(
+                                  actor,
+                                  state,
+                                  'transfers',
+                                  t.shiftId ?? (t.from.startsWith('cash:') ? t.from.slice(5) : undefined),
+                                ) ||
+                                (t.type !== 'transfer' && t.votes.length < 3)
+                              }
                               onClick={() =>
                                 setForm({
                                   title: 'Registrar entrega o consignación',
@@ -590,6 +706,7 @@ export function Cash() {
                         {t.status === 'in_transit' && t.recipientId === actor.id && t.by !== actor.id && (
                           <button
                             className="button small primary"
+                            disabled={!canWork(actor, state, 'transfers', t.shiftId)}
                             onClick={() =>
                               setForm({
                                 title: 'Confirmar recepción',
@@ -649,6 +766,16 @@ export function Cash() {
                     <td>
                       {c.kind === 'opening' ? 'Apertura' : c.kind === 'closing' ? 'Cierre' : 'Arqueo'}
                       <small>{date(c.at)}</small>
+                      {c.kind === 'closing' && (
+                        <small>
+                          {c.revisesId
+                            ? 'Revisión administrativa'
+                            : state.shifts.find((s) => s.closingCountId === c.id)?.closingReview?.status ===
+                                'approved'
+                              ? 'Aprobado'
+                              : 'Pendiente de aprobación'}
+                        </small>
+                      )}
                     </td>
                     <td>
                       {c.cash === undefined
@@ -691,6 +818,7 @@ export function Cash() {
                       )}
                       <button
                         className="text-button"
+                        disabled={!admin && state.shifts.find((s) => s.id === c.shiftId)?.status !== 'open'}
                         onClick={() =>
                           setForm({
                             title: 'Explicar diferencia',
@@ -727,6 +855,9 @@ export function Cash() {
         <AuditSetupDialog shift={active} onClose={() => setAuditSetup(false)} />
       )}
       {reviewCount && admin && <CountReviewDialog count={reviewCount} onClose={() => setReviewCount(null)} />}
+      {approvalCount && admin && (
+        <ClosingApprovalDialog count={approvalCount} onClose={() => setApprovalCount(null)} />
+      )}
       {form && (
         <Modal title={form.title} onClose={() => setForm(null)}>
           <FieldsForm

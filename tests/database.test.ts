@@ -146,8 +146,8 @@ it('resuelve dos canjes concurrentes con un solo ganador', async () => {
       name: 'Cupón de prueba',
       effect: 'free',
       delivery: 'coupon',
-      sizeIds: [],
-      flavorIds: [],
+      sizeIds: [state.sizes[0].id],
+      flavorIds: [ids.flavor],
       startsAt: '2026-01-01T00:00:00Z',
       endsAt: '2027-01-01T00:00:00Z',
     },
@@ -255,7 +255,7 @@ it('persiste el arqueo solicitado por admin y permite presentarlo solo a la caja
         status: 'accepted',
         message: '',
       }),
-    ).rejects.toThrow(/CASHIER_REQUIRED/);
+    ).rejects.toThrow(actor.role === 'apoyo' ? /PERMISSION_DENIED/ : /CASHIER_REQUIRED/);
   }
   const finish = cmd('finish_audit', { shiftId: ids.shift, auditId, items: { [cup]: 3 } }, cashier, {
     configVersion: loaded.state.settings[0].version,

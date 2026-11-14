@@ -69,10 +69,9 @@ it('guarda diferencias por cuenta sin alterar la base ni sumar transferencias al
   expect(countHasDifferences(closed.counts[0])).toBe(true);
   expect(closed.notifications.some((n) => n.channel === 'mermas')).toBe(true);
   const snapshot = structuredClone(closed.counts);
-  const later = run(closed, 'explain_difference', {
-    countId: snapshot[0].id,
-    notes: 'Revisar comprobante',
-  }).state;
+  const explanation = { countId: snapshot[0].id, notes: 'Revisar comprobante' };
+  expect(() => run(closed, 'explain_difference', explanation)).toThrow(/Turno cerrado/);
+  const later = run(closed, 'explain_difference', explanation, admin).state;
   expect(later.counts).toEqual(snapshot);
 });
 

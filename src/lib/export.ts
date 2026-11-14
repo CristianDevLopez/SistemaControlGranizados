@@ -40,7 +40,7 @@ const schema: Record<string, string[]> = {
     'auditId',
     'auditRequest',
   ],
-  flavors: ['id', 'name', 'alcohol', 'active'],
+  flavors: ['id', 'name', 'alcohol', 'active', 'imageId'],
   sizes: ['id', 'name', 'ounces', 'alcoholPrice', 'plainPrice', 'cups', 'beers', 'active', 'rank'],
   orders: [
     'id',
@@ -97,6 +97,7 @@ const schema: Record<string, string[]> = {
     'remittance',
     'closedAt',
     'offlineAuthorizedBy',
+    'closingReview',
   ],
   counts: [
     'id',
@@ -121,6 +122,10 @@ const schema: Record<string, string[]> = {
     'requestedBy',
     'requestedAt',
     'itemLabels',
+    'revisesId',
+    'cutoffAt',
+    'receivedAt',
+    'stockEventIds',
   ],
   shipments: ['id', 'by', 'from', 'supplier', 'items', 'expenseId', 'at', 'status', 'notes'],
   receipts: [
@@ -187,6 +192,7 @@ const schema: Record<string, string[]> = {
     'id',
     'name',
     'effect',
+    'stackable',
     'delivery',
     'sizeIds',
     'flavorIds',
@@ -221,6 +227,7 @@ const schema: Record<string, string[]> = {
     'redeemedAt',
     'courtesy',
     'excessApprovedBy',
+    'benefit',
   ],
   requests: [
     'id',
@@ -277,7 +284,7 @@ const schema: Record<string, string[]> = {
     'appliedRules',
   ],
   tastings: ['orderId', 'id', 'flavorId', 'at'],
-  profiles: ['id', 'name', 'role', 'active', 'username'],
+  profiles: ['id', 'name', 'role', 'active', 'username', 'permissions'],
   devices: ['id', 'userId', 'name', 'active', 'primary', 'lastSeen'],
 };
 export function exportZip(input: {

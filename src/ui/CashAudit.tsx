@@ -152,6 +152,16 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
         </table>
       </div>
       {count.notes && <p>Novedades: {count.notes}</p>}
+      {count.revisesId && (
+        <p>
+          Revisión administrativa; se conserva el conteo original. Faltante reportado al empleado:{' '}
+          {money(
+            state.shifts.find((s) => s.closingReview?.countId === count.id)?.closingReview?.employeeCharge ??
+              0,
+          )}
+          . Este registro no ejecuta descuentos de nómina.
+        </p>
+      )}
       <div className="form-actions">
         <button className="button secondary" onClick={onClose}>
           Cerrar revisión

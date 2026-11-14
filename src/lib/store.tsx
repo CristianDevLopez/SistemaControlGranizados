@@ -18,6 +18,7 @@ import {
   type Snapshot,
 } from '../domain/types.ts';
 import { isReadOnlyView, rolePreview } from '../domain/views.ts';
+import { commandPermission, hasPermission } from '../domain/access.ts';
 import {
   api,
   ApiError,
@@ -96,6 +97,7 @@ const ONLINE_TYPES = new Set<CommandType>([
   'request_courtesy_excess',
   'start_audit',
   'finish_audit',
+  'approve_closing',
 ]);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<Snapshot | null>(null),
@@ -303,12 +305,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         try {
           const snapshot = current.current;
           if (!snapshot) throw new Error('Inicia sesión.');
+          const permission = commandPermission(type);
+          if (permission && !hasPermission(snapshot.actor, permission))
+            throw new Error('No tienes permiso para esta operación.');
           if (snapshot.branch && snapshot.branch.status !== 'active')
             throw new Error('Este local no está activo. Consulta Locales y mensualidades.');
           const isOnline = online && navigator.onLine;
           const requiresOnline =
             options.onlineOnly ||
             ONLINE_TYPES.has(type) ||
+            (type === 'count' && payload.preview !== undefined) ||
             (type === 'request_shift' && snapshot.actor.role === 'admin' && isOnline) ||
             snapshot.actor.role === 'apoyo' ||
             type === 'redeem_coupon' ||

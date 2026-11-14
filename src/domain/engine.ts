@@ -1,5 +1,5 @@
 import { initialState } from './initial.ts';
-import { canCorrectTastings, isShiftCashier } from './access.ts';
+import { canCorrectTastings, commandPermission, hasPermission, isShiftCashier } from './access.ts';
 import { lineTotal, quoteOrder } from './pricing.ts';
 import { hasAlcohol, liquidPortions, sameFlavors } from './flavors.ts';
 import {
@@ -7,6 +7,7 @@ import {
   type Actor,
   type Audit,
   type Command,
+  type ClosingPreview,
   type Count,
   type Expense,
   type Flavor,
@@ -149,6 +150,117 @@ export function countHasDifferences(count: Count): boolean {
   );
 }
 
+export function cupBalances(state: State): Record<string, number> {
+  return (
+    state.cupBalances ??
+    Object.fromEntries(Object.entries(stockBalances(state)).filter(([key]) => key.startsWith('cup:')))
+  );
+}
+
+/** Un cierre revisado sigue comparando el corte original, no el stock de otro turno. */
+export function closingPreview(state: State, shiftId: ID, original?: Count): ClosingPreview {
+  const methods = original
+    ? [
+        ...new Set([
+          ...Object.keys(original.payments ?? {}),
+          ...state.payments
+            .filter((p) => p.shiftId === shiftId && paymentMethod(p) === 'transfer' && p.accountId)
+            .map((p) => `transfer:${p.accountId}`),
+        ]),
+      ].map((key) => ({
+        id: key,
+        account: {
+          id: key.slice(9),
+          name:
+            original.paymentLabels?.[key] ?? state.locations.find((l) => l.id === key.slice(9))?.name ?? key,
+        },
+      }))
+    : closingPaymentMethods(state, shiftId);
+  const totals = salesByMethod(state, shiftId).byAccount;
+  const expectedItems = original
+    ? Object.fromEntries(
+        Object.entries(original.expectedItems ?? {}).filter(([key]) => key.startsWith('cup:')),
+      )
+    : Object.fromEntries(countArticles(state, 'closing').map((a) => [a.id, stockBalances(state)[a.id] ?? 0]));
+  if (original) {
+    const included = new Set(original.stockEventIds ?? []);
+    const eventTimes = new Map(state.audit.map((a) => [a.eventId, a.receivedAt]));
+    const closes = new Map(state.counts.map((c) => [c.id, c]));
+    const beforeOriginal = (count: Count) => {
+      const left = count.receivedAt ?? count.at,
+        right = original.receivedAt ?? original.at;
+      return left < right || (left === right && count.at <= original.at);
+    };
+    const previousShifts = new Set(
+      state.shifts
+        .filter(
+          (s) =>
+            s.id === shiftId ||
+            (s.closingCountId &&
+              closes.has(s.closingCountId) &&
+              beforeOriginal(closes.get(s.closingCountId)!)),
+        )
+        .map((s) => s.id),
+    );
+    const orders = new Set(state.orders.filter((o) => previousShifts.has(o.shiftId)).map((o) => o.id));
+    for (const movement of state.stock) {
+      if (!movement.article.startsWith('cup:')) continue;
+      if (original.stockEventIds ? included.has(movement.eventId) : movement.at <= original.at) continue;
+      const received = eventTimes.get(movement.eventId);
+      if (original.receivedAt && received && received < original.receivedAt) continue;
+      const prior = state.counts.find((c) => c.id === movement.referenceId);
+      const priorShift = state.shifts.find((s) => s.closingCountId === prior?.id);
+      const previousClosing =
+        movement.reason === 'closing_adjustment' &&
+        prior &&
+        priorShift &&
+        priorShift.id !== shiftId &&
+        previousShifts.has(priorShift.id);
+      const damage =
+        movement.reason === 'approved_damage' &&
+        state.requests.some((r) => r.id === movement.referenceId && r.at <= original.at);
+      if (orders.has(movement.referenceId) || previousClosing || damage)
+        expectedItems[movement.article] = (expectedItems[movement.article] ?? 0) + movement.quantity;
+    }
+  }
+  // El remanente entregado después del corte no es un faltante de ese cierre.
+  const expectedCash = original
+    ? cashExpected(state, shiftId, original.at) +
+      state.payments
+        .filter((p) => p.shiftId === shiftId && paymentMethod(p) === 'cash' && p.at > original.at)
+        .reduce((n, p) => n + p.amount, 0) -
+      state.expenses
+        .filter(
+          (e) =>
+            e.shiftId === shiftId && e.source === 'cash' && e.status === 'approved' && e.at > original.at,
+        )
+        .reduce((n, e) => n + e.amount, 0)
+    : cashExpected(state, shiftId);
+  return {
+    expectedCash,
+    expectedItems,
+    expectedPayments: Object.fromEntries(
+      methods.map(({ id: key, account }) => [key, totals[account.id] ?? 0]),
+    ),
+    paymentLabels: Object.fromEntries(methods.map(({ id: key, account }) => [key, account.name])),
+  };
+}
+
+function matchesClosingPreview(preview: any, expected: ClosingPreview): boolean {
+  const same = (a: Record<string, unknown> = {}, b: Record<string, unknown>) =>
+    a &&
+    typeof a === 'object' &&
+    Object.keys(a).length === Object.keys(b).length &&
+    Object.entries(b).every(([key, value]) => a[key] === value);
+  return (
+    !!preview &&
+    preview.expectedCash === expected.expectedCash &&
+    same(preview.expectedItems, expected.expectedItems) &&
+    same(preview.expectedPayments, expected.expectedPayments) &&
+    same(preview.paymentLabels, expected.paymentLabels)
+  );
+}
+
 /** Tolerancia para una operación en línea que tardó en llegar (reintentos, red lenta). */
 export const ONLINE_LAG_MS = 10 * 60_000;
 /**
@@ -232,7 +344,7 @@ export function openingExpectedCash(state: State): number | null {
       x.shiftId === last.shiftId &&
       x.from === `cash:${last.shiftId}` &&
       x.executedAt &&
-      x.executedAt >= last.at,
+      x.executedAt >= (last.cutoffAt ?? last.at),
   );
   return last.cash - executed.reduce((n, x) => n + x.amount, 0);
 }
@@ -270,7 +382,13 @@ export function locationBalance(state: State, locationId: string): number {
   );
 }
 export function quotePayment(state: State, order: Order, at: string, online: boolean, codes: string[] = []) {
-  if (!order.carriedCouponFromId) return quoteOrder(state, order.lines, at, online, codes);
+  if (!order.carriedCouponFromId) {
+    assert(
+      !(order.paymentCredit && codes.length),
+      'No se agregan cupones a una corrección con pago anterior: no son dinero ni generan devolución.',
+    );
+    return quoteOrder(state, order.lines, at, online, codes);
+  }
   assert(online, 'La corrección de un ticket con cupón requiere conexión.', 'ONLINE_REQUIRED');
   assert(
     codes.length === 0,
@@ -364,6 +482,51 @@ export function applyCommand(
   const state = structuredClone(original),
     settings = state.settings[0],
     p = command.payload as Record<string, any>;
+  const permission = commandPermission(command.type);
+  assert(
+    !permission || hasPermission(actor, permission),
+    'No tienes permiso para esta operación.',
+    'FORBIDDEN',
+  );
+  // Resolver las referencias reales impide eludir el cierre enviando otro turno en el comando.
+  {
+    const order = state.orders.find((x) => x.id === p.orderId);
+    const count = state.counts.find((x) => x.id === p.countId);
+    const transfer = state.transfers.find((x) => x.id === p.transferId);
+    const expense = state.expenses.find((x) => x.id === p.expenseId);
+    const request = state.requests.find((x) => x.id === p.requestId);
+    const referencedOrder = state.orders.find((x) => x.id === request?.referenceId);
+    const shifts = [
+      command.shiftId,
+      p.shiftId,
+      order?.shiftId,
+      count?.shiftId,
+      expense?.shiftId,
+      referencedOrder?.shiftId,
+      transfer?.shiftId,
+      transfer?.executionShiftId,
+      transfer?.from.startsWith('cash:') ? transfer.from.slice(5) : undefined,
+      transfer?.to.startsWith('cash:') ? transfer.to.slice(5) : undefined,
+      typeof p.from === 'string' && p.from.startsWith('cash:') ? p.from.slice(5) : undefined,
+    ];
+    const closed = shifts.some((key) =>
+      state.shifts.some((s) => s.id === key && ['closed', 'provisional'].includes(s.status)),
+    );
+    if (closed) {
+      assert(
+        actor.role === 'admin',
+        'Turno cerrado: solo un administrador puede registrar movimientos o correcciones.',
+        'SHIFT_CLOSED',
+      );
+      admin(actor);
+    }
+    if (actor.role !== 'admin' && permission && command.type !== 'request_shift')
+      assert(
+        state.shifts.some((s) => s.status === 'open'),
+        'No hay turno abierto.',
+        'SHIFT_CLOSED',
+      );
+  }
   const makeId = (tag: string) => eventId(command, tag);
   let ref: string | undefined,
     message = 'Registro guardado.',
@@ -395,6 +558,8 @@ export function applyCommand(
       by: actor.id,
       eventId: command.id,
     });
+    if (state.cupBalances && article.startsWith('cup:'))
+      state.cupBalances[article] = (state.cupBalances[article] ?? 0) + amount;
   };
   const evidence = (value: unknown) => {
     const key = id(value, 'Foto');
@@ -594,6 +759,12 @@ export function applyCommand(
         name: text(p.name, 'Nombre', 60),
         alcohol: p.alcohol === true,
         active: p.active !== false,
+        imageId:
+          p.removeImage === true
+            ? undefined
+            : p.imageId
+              ? evidence(p.imageId)
+              : state.flavors.find((f) => f.id === key)?.imageId,
       };
       const old = state.flavors.findIndex((x) => x.id === key);
       if (old >= 0) state.flavors[old] = flavor;
@@ -886,6 +1057,12 @@ export function applyCommand(
       }
       if (kind === 'closing') {
         assert(!settings.auditId, 'Termina el arqueo antes de cerrar.');
+        if (p.preview !== undefined && actor.online && !state.cupBalances)
+          assert(
+            matchesClosingPreview(p.preview, closingPreview(state, shift.id)),
+            'El sistema cambió. Revisa de nuevo el cuadre antes de enviarlo.',
+            'CLOSING_CHANGED',
+          );
         const retained = money(p.retained, 'Efectivo reservado', true);
         assert(retained <= counted!, 'La base no puede superar el efectivo contado.');
         count.retained = retained;
@@ -894,6 +1071,20 @@ export function applyCommand(
         shift.closingCountId = count.id;
         shift.closedAt = command.at;
         shift.status = actor.online ? 'closed' : 'provisional';
+        shift.closingReview = { status: 'pending' };
+        count.receivedAt = receivedAt;
+        const eventTimes = new Map(state.audit.map((a) => [a.eventId, a.receivedAt]));
+        count.stockEventIds = [
+          ...new Set(
+            state.stock
+              .filter(
+                (m) =>
+                  m.article.startsWith('cup:') &&
+                  (!eventTimes.has(m.eventId) || eventTimes.get(m.eventId)! >= receivedAt),
+              )
+              .map((m) => m.eventId),
+          ),
+        ];
         settings.lastRetainedCash = retained;
         settings.lastCountId = count.id;
         if (shift.remittance > 0) {
@@ -934,6 +1125,128 @@ export function applyCommand(
         }
       }
       if (countHasDifferences(count)) notify('mermas', `Diferencias registradas en conteo de ${kind}.`);
+      break;
+    }
+    case 'approve_closing': {
+      admin(actor);
+      const shift = required(
+        state.shifts.find((s) => s.id === p.shiftId),
+        'Turno',
+      );
+      assert(['closed', 'provisional'].includes(shift.status), 'Primero presenta el cierre.');
+      assert(shift.closingReview?.status !== 'approved', 'Este cierre ya fue aprobado.');
+      const original = required(
+        state.counts.find((c) => c.id === shift.closingCountId),
+        'Cierre original',
+      );
+      const expected = closingPreview(state, shift.id, original);
+      assert(
+        matchesClosingPreview(p.preview, expected),
+        'El sistema cambió. Vuelve a revisar el cierre antes de aprobarlo.',
+        'CLOSING_CHANGED',
+      );
+      assert(p.verified === true, 'Confirma la verificación del efectivo y las cuentas.');
+      const notes = text(p.notes, 'Resultado de la revisión', 1500);
+      const cash = money(p.cash, 'Efectivo reconfirmado', true);
+      const retained = money(p.retained ?? original.retained ?? 0, 'Base reservada reconfirmada', true);
+      assert(cash >= retained, 'El efectivo reconfirmado no cubre la base reservada.');
+      const items: Record<string, number> = {},
+        payments: Record<string, number> = {};
+      for (const key of Object.keys(expected.expectedItems)) {
+        items[key] = quantity(p.items?.[key], original.itemLabels?.[key] ?? 'Vasos', 1000000, true);
+        assert(Number.isInteger(items[key]), 'Los vasos deben ser enteros.');
+      }
+      for (const key of Object.keys(expected.expectedPayments)) {
+        const amount = p.payments?.[key];
+        assert(typeof amount === 'number', 'Falta verificar una cuenta.');
+        money(Math.abs(amount), 'Transferencias reconfirmadas', true);
+        payments[key] = amount;
+      }
+      const charge = money(p.employeeCharge ?? 0, 'Faltante reportado al empleado', true);
+      const differences = Object.fromEntries(
+        Object.keys(items).map((k) => [k, items[k] - expected.expectedItems[k]]),
+      );
+      const paymentDifferences = Object.fromEntries(
+        Object.keys(payments).map((k) => [k, payments[k] - expected.expectedPayments[k]]),
+      );
+      assert(
+        charge === 0 ||
+          cash < expected.expectedCash ||
+          Object.values(differences).some((n) => n < 0) ||
+          Object.values(paymentDifferences).some((n) => n < 0),
+        'No hay faltantes para reportar al empleado.',
+      );
+      ref = makeId('closing-review');
+      const reviewed: Count = {
+        ...original,
+        id: ref,
+        by: actor.id,
+        at: command.at,
+        cutoffAt: original.at,
+        revisesId: original.id,
+        cash,
+        retained,
+        items,
+        payments,
+        ...expected,
+        difference: cash - expected.expectedCash,
+        differences,
+        paymentDifferences,
+        notes,
+      };
+      state.counts.push(reviewed);
+      for (const [article, delta] of Object.entries(differences))
+        if (delta) movement(article, delta, 'closing_adjustment', original.id);
+      shift.closingReview = {
+        status: 'approved',
+        countId: ref,
+        by: actor.id,
+        at: receivedAt,
+        notes,
+        employeeCharge: charge,
+      };
+      shift.status = 'closed';
+      shift.retained = retained;
+      shift.remittance = cash - retained;
+      if (settings.lastCountId === original.id) {
+        settings.lastCountId = ref;
+        settings.lastRetainedCash = retained;
+      }
+      // Solo la solicitud pendiente puede corregirse; nunca se reescribe una entrega ejecutada.
+      const pending = state.transfers.find(
+        (t) => t.shiftId === shift.id && t.notes === 'Remanente de cierre' && t.status === 'requested',
+      );
+      const remittances = state.transfers.filter(
+        (t) => t.shiftId === shift.id && t.notes === 'Remanente de cierre',
+      );
+      const remaining = Math.max(
+        0,
+        shift.remittance - remittances.filter((t) => t.executedAt).reduce((n, t) => n + t.amount, 0),
+      );
+      if (pending) {
+        if (remaining > 0) pending.amount = remaining;
+        else pending.status = 'cancelled';
+      } else if (remaining > 0) {
+        const location = required(
+          state.locations.find((l) => l.active && l.id === (p.locationId || remittances[0]?.to)),
+          'Destino del remanente',
+        );
+        state.transfers.push({
+          id: makeId('review-transfer'),
+          by: actor.id,
+          recipientId: location.custodianId,
+          from: `cash:${shift.id}`,
+          to: location.id,
+          amount: remaining,
+          status: 'requested',
+          at: command.at,
+          notes: 'Remanente de cierre',
+          shiftId: shift.id,
+          type: 'transfer',
+          votes: [],
+        });
+      }
+      message = 'Cierre aprobado. Inventario ajustado y revisión conservada.';
       break;
     }
     case 'create_order': {
@@ -1696,7 +2009,7 @@ export function applyCommand(
       let difference = 0;
       if (previous) {
         assert(p.confirmEmpty === true, 'Confirma que el paquete anterior quedó vacío.');
-        difference = stockBalances(state)[`cup:${size.id}`] ?? 0;
+        difference = cupBalances(state)[`cup:${size.id}`] ?? 0;
         previous.closedAt = command.at;
       }
       ref = makeId('package');
@@ -1745,8 +2058,16 @@ export function applyCommand(
       const amount = money(p.amount);
       const source = p.source;
       assert(['cash', 'treasury', 'personal'].includes(source), 'Origen del pago inválido.');
-      const shift = source === 'cash' ? operating() : undefined;
-      if (shift) cashier(actor, state, shift.id);
+      const correctionShift =
+        actor.role === 'admin' && p.shiftId
+          ? required(
+              state.shifts.find((s) => s.id === p.shiftId),
+              'Turno',
+            )
+          : undefined;
+      const shift = source === 'cash' ? (correctionShift ?? operating()) : correctionShift;
+      if (shift && !(actor.role === 'admin' && ['closed', 'provisional'].includes(shift.status)))
+        cashier(actor, state, shift.id);
       else admin(actor);
       const category = text(p.category, 'Categoría', 60);
       if (source === 'cash') {
@@ -1908,7 +2229,12 @@ export function applyCommand(
           );
           transfer.from = source.id;
         }
-      } else assert(actor.id === transfer.by, 'Solo quien entrega registra la ejecución.', 'FORBIDDEN');
+      } else
+        assert(
+          actor.id === transfer.by || actor.role === 'admin',
+          'Solo quien entrega o un admin registra la ejecución.',
+          'FORBIDDEN',
+        );
       const location = state.locations.find((x) => x.id === transfer.to);
       if (location?.type === 'bank' || transfer.type !== 'transfer')
         transfer.evidenceId = evidence(p.evidenceId ?? transfer.evidenceId);
@@ -1917,14 +2243,14 @@ export function applyCommand(
         const active = state.shifts.find((x) => x.status === 'open');
         const source = state.shifts.find((x) => `cash:${x.id}` === transfer.from);
         assert(
-          actor.primary || isShiftCashier(actor, active ?? source),
+          actor.role === 'admin' || actor.primary || isShiftCashier(actor, active ?? source),
           'Registra la salida física desde la sesión responsable de caja.',
           'FORBIDDEN',
         );
-        if (active) {
+        if (active && actor.role !== 'admin') {
           cashier(actor, state, active.id);
           transfer.executionShiftId = active.id;
-        }
+        } else transfer.executionShiftId = active?.id ?? source?.id;
       }
       transfer.status = 'in_transit';
       transfer.executedAt = command.at;
@@ -1989,7 +2315,25 @@ export function applyCommand(
         version: 1,
         by: actor.id,
         at: receivedAt,
+        stackable: p.stackable !== false,
       };
+      assert(
+        promo.sizeIds.every((key) => state.sizes.some((s) => s.id === key)) &&
+          promo.flavorIds.every((key) => state.flavors.some((f) => f.id === key)),
+        'Productos de la promoción desconocidos.',
+      );
+      const priorPromo = state.promotions.find((x) => x.id === key);
+      const legacyConditionsUnchanged =
+        priorPromo &&
+        priorPromo.effect === 'free' &&
+        JSON.stringify(priorPromo.sizeIds) === JSON.stringify(promo.sizeIds) &&
+        JSON.stringify(priorPromo.flavorIds) === JSON.stringify(promo.flavorIds) &&
+        priorPromo.alcohol === promo.alcohol;
+      if (promo.effect === 'free' && !legacyConditionsUnchanged)
+        assert(
+          promo.sizeIds.length > 0 && promo.flavorIds.length > 0,
+          'Define los tamaños y sabores exactos del producto de cortesía.',
+        );
       assert(
         promo.days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6),
         'Días inválidos.',
@@ -2034,6 +2378,10 @@ export function applyCommand(
           spec.allowMixed === undefined || typeof spec.allowMixed === 'boolean',
           'Define si la cortesía admite combinados.',
         );
+        assert(
+          spec.stackable === undefined || typeof spec.stackable === 'boolean',
+          'Define si la cortesía es acumulable.',
+        );
         const size = required(
           state.sizes.find((size) => size.id === spec.sizeId && size.active && size.ounces > 0),
           'Tamaño activo',
@@ -2077,6 +2425,7 @@ export function applyCommand(
           alcohol: spec.alcohol,
           courtesyOnly: true,
           allowMixed: spec.allowMixed !== false,
+          stackable: spec.stackable !== false,
           startsAt: command.at,
           endsAt: expiresAt,
           days: [],
@@ -2136,6 +2485,15 @@ export function applyCommand(
         status: 'issued',
         courtesy,
         excessApprovedBy: p.excessRequestId,
+        benefit: {
+          ...structuredClone(promo),
+          sizeIds: promo.sizeIds.length
+            ? [...promo.sizeIds]
+            : state.sizes.filter((s) => s.active).map((s) => s.id),
+          flavorIds: promo.flavorIds.length
+            ? [...promo.flavorIds]
+            : state.flavors.filter((f) => f.active).map((f) => f.id),
+        },
       });
       break;
     }
@@ -2244,6 +2602,7 @@ export function redactState(full: State, actor: Actor): State {
   state.orders = state.orders.filter((x) => x.shiftId === active?.id || x.sellerId === actor.id);
   state.payments = [];
   state.stock = [];
+  state.cupBalances = state.settings[0].auditId ? undefined : cupBalances(full);
   if (state.settings[0].auditRequest) {
     const {
       expectedCash: _,

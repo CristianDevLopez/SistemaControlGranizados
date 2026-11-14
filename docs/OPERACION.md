@@ -9,6 +9,8 @@
 
 ## Vercel
 
+Actualización del 14 de noviembre de 2026: migraciones de permisos y revisión de cierres aplicadas, función `dexter` versión 13 activa y frontend de producción publicado. Se verificaron el dominio, el bundle con los controles nuevos, el backend correcto y la actualización PWA. Los registros del negocio conservan sus huellas antes y después del despliegue. Ver [cuadres e inventario](CUADRES.md) y [validación](VALIDACION.md).
+
 Publicada para revisión en **https://dexter-granizados.vercel.app**, bajo `cristiandevlopez@gmail.com`, equipo `crisdevlopez` (Dev), proyecto `dexter-granizados`. El titular eligió Hobby gratuito; no se activó ningún plan de pago. [Vercel restringe Hobby al uso personal no comercial](https://vercel.com/docs/limits/fair-use-guidelines). Resolver esa condición de alojamiento antes de operar el negocio.
 
 1. La CLI ya está conectada y este directorio está vinculado al proyecto. En otro equipo, iniciar sesión con `npx vercel login` y vincular con `npx vercel link --yes --scope crisdevlopez --project dexter-granizados`.
@@ -86,7 +88,7 @@ El cuadre de cierre registra efectivo, cobros netos del turno verificados por cu
 5. Como admin, solicitar un arqueo sorpresa seleccionando los ítems. Como responsable del turno, presentar solo los conteos solicitados; separar el efectivo posterior de la planilla. Como admin, revisar los resultados y diferencias contra el corte original e ingresar después cada folio con foto.
 6. Anular con otro admin y corregir conservando o reemplazando la entrega física según corresponda. Comprobar la diferencia de dinero real.
 7. Recibir mercancía parcial y dañada, revisar cruce; aprobar o rechazar los gastos y mermas con soporte.
-8. Cerrar con base retenida y remanente. Ejecutar entrega/consignación y confirmar con otro usuario. Abrir el siguiente día y comprobar el saldo físico.
+8. Cerrar con base retenida y remanente. Después del cierre, un administrador registra la entrega/consignación y otro administrador receptor confirma; el trabajador ya no modifica ese turno. Abrir el siguiente día y comprobar el saldo físico.
 9. Exportar CSV y ejecutar el ensayo de recuperación de respaldo antes de habilitar producción.
 
 ## Incidentes

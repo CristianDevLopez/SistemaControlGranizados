@@ -123,7 +123,7 @@ describe('Operación del mostrador', () => {
   it('rechaza cobrar desde apoyo, admin remoto u otro equipo', () => {
     const { state, order: o } = order(fixture());
     for (const actor of [support, admin, { ...cashier, deviceId: ids.remote }])
-      expect(() => run(state, 'pay', { orderId: o.id }, actor)).toThrow(/encargado/);
+      expect(() => run(state, 'pay', { orderId: o.id }, actor)).toThrow(/encargado|permiso/);
   });
   it('conserva degustaciones sin venta y descuenta una copita y una onza', () => {
     let s = run(fixture(), 'taste', { flavorId: ids.flavor }).state;
@@ -213,7 +213,10 @@ describe('Operación del mostrador', () => {
     expect(s.counts[0].difference).toBe(1000);
     expect(s.transfers[0].amount).toBe(16000);
     expect(openingExpectedCash(s)).toBe(21000);
-    s = run(s, 'execute_transfer', { transferId: s.transfers[0].id, evidenceId: ids.photo }).state;
+    expect(() =>
+      run(s, 'execute_transfer', { transferId: s.transfers[0].id, evidenceId: ids.photo }),
+    ).toThrow(/cerrado/);
+    s = run(s, 'execute_transfer', { transferId: s.transfers[0].id, evidenceId: ids.photo }, admin).state;
     expect(openingExpectedCash(s)).toBe(5000);
     s = run(s, 'confirm_transfer', { transferId: s.transfers[0].id, receivedAmount: 16000 }, admin).state;
     expect(s.transfers[0].status).toBe('confirmed');

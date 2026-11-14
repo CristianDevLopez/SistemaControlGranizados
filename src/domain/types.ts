@@ -1,11 +1,14 @@
 export type Role = 'admin' | 'encargado' | 'apoyo';
 export type ID = string;
+export type Permission =
+  'orders' | 'deliveries' | 'payments' | 'expenses' | 'inventory' | 'transfers' | 'shifts';
 export interface Profile {
   id: ID;
   name: string;
   role: Role;
   active: boolean;
   username?: string;
+  permissions?: Partial<Record<Permission, boolean>>;
 }
 export interface Actor extends Profile {
   branchId?: ID;
@@ -21,6 +24,7 @@ export interface Flavor {
   name: string;
   alcohol: boolean;
   active: boolean;
+  imageId?: ID;
 }
 export interface Size {
   id: ID;
@@ -83,7 +87,13 @@ export interface OrderLine {
   paidSizeId?: ID;
   consumptionIds: ID[];
   recipe?: { ounces: number; cups: number; beers: number };
-  appliedRules?: { promotion: Promotion; couponId?: ID; quantity: number; unitAmount: number }[];
+  appliedRules?: {
+    promotion: Promotion;
+    couponId?: ID;
+    couponCode?: string;
+    quantity: number;
+    unitAmount: number;
+  }[];
 }
 export interface Tasting {
   id: ID;
@@ -169,6 +179,15 @@ export interface Shift {
   offlineAuthorizedBy?: ID;
   /** Cuentas usadas en el turno, también en la vista de caja sin importes esperados. */
   paymentAccountIds?: ID[];
+  closingReview?: {
+    status: 'pending' | 'approved';
+    countId?: ID;
+    by?: ID;
+    at?: string;
+    notes?: string;
+    /** Registro administrativo; no ejecuta descuentos de nómina. */
+    employeeCharge?: number;
+  };
 }
 export interface Count {
   id: ID;
@@ -194,6 +213,17 @@ export interface Count {
   requestedBy?: ID;
   requestedAt?: string;
   itemLabels?: Record<string, string>;
+  revisesId?: ID;
+  cutoffAt?: string;
+  receivedAt?: string;
+  /** Eventos en el límite del corte; evita ambigüedad cuando comparten la misma hora. */
+  stockEventIds?: ID[];
+}
+export interface ClosingPreview {
+  expectedCash: number;
+  expectedItems: Record<string, number>;
+  expectedPayments: Record<string, number>;
+  paymentLabels: Record<string, string>;
 }
 export interface ShipmentLine {
   article: string;
@@ -258,7 +288,7 @@ export interface Transfer {
   from: string;
   to: ID;
   amount: number;
-  status: 'requested' | 'in_transit' | 'confirmed' | 'disputed';
+  status: 'requested' | 'in_transit' | 'confirmed' | 'disputed' | 'cancelled';
   at: string;
   executedAt?: string;
   confirmedAt?: string;
@@ -299,6 +329,8 @@ export interface Promotion {
   version: number;
   by: ID;
   at: string;
+  /** Ausente conserva la acumulación histórica entre productos distintos. */
+  stackable?: boolean;
 }
 export interface Coupon {
   id: ID;
@@ -312,6 +344,8 @@ export interface Coupon {
   redeemedAt?: string;
   courtesy: boolean;
   excessApprovedBy?: ID;
+  /** Condiciones entregadas al cliente, independientes de futuras ediciones. */
+  benefit?: Promotion;
 }
 export interface Request {
   id: ID;
@@ -410,6 +444,8 @@ export interface Outage {
   until?: string;
 }
 export interface State {
+  /** Proyección operativa para mostrador, sin movimientos privados de inventario. */
+  cupBalances?: Record<string, number>;
   settings: Settings[];
   flavors: Flavor[];
   sizes: Size[];
@@ -478,6 +514,7 @@ export type CommandType =
   | 'request_shift'
   | 'authorize_shift'
   | 'count'
+  | 'approve_closing'
   | 'start_audit'
   | 'finish_audit'
   | 'create_order'
