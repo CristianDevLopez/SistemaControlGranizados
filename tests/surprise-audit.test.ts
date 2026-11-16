@@ -21,8 +21,8 @@ function submit(state: State, extra = {}, actor: Actor = cashier) {
   ).state;
 }
 
-it('solo un administrador con conexión y doble factor puede solicitar el arqueo', () => {
-  for (const actor of [cashier, support, { ...admin, online: false }, { ...admin, aal: 'aal1' as const }])
+it('solo un administrador con conexión puede solicitar el arqueo', () => {
+  for (const actor of [cashier, support, { ...admin, online: false }])
     expect(() => run(fixture(), 'start_audit', { shiftId: ids.shift, cash: true }, actor)).toThrow(
       /administrador|factor/,
     );

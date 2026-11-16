@@ -3,7 +3,7 @@ import { ArrowRight, KeyRound, ShieldCheck } from 'lucide-react';
 import { configured, recoveryLinkError, supabase } from '../lib/api.ts';
 import {
   recoveryConfirmation,
-  recoveryFactor,
+  validateRecoverySession,
   requestPasswordRecovery,
   updateRecoveredPassword,
 } from '../lib/recovery.ts';
@@ -19,11 +19,10 @@ export function PasswordRecovery({
   onClose: () => void;
   onChanged: () => void;
 }) {
-  const [phase, setPhase] = useState<
-    'request' | 'sent' | 'checking' | 'mfa' | 'password' | 'done' | 'invalid'
-  >(reset ? 'checking' : 'request');
+  const [phase, setPhase] = useState<'request' | 'sent' | 'checking' | 'password' | 'done' | 'invalid'>(
+    reset ? 'checking' : 'request',
+  );
   const [email, setEmail] = useState(initialEmail),
-    [factorId, setFactorId] = useState(''),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   useEffect(() => {
@@ -42,11 +41,10 @@ export function PasswordRecovery({
       setPhase('invalid');
       return;
     }
-    void recoveryFactor(supabase)
-      .then((factor) => {
+    void validateRecoverySession(supabase)
+      .then(() => {
         if (!active) return;
-        setFactorId(factor ?? '');
-        setPhase(factor ? 'mfa' : 'password');
+        setPhase('password');
       })
       .catch((e) => {
         if (active) {
@@ -69,13 +67,6 @@ export function PasswordRecovery({
       if (phase === 'request') {
         await requestPasswordRecovery(supabase, email, window.location.origin);
         setPhase('sent');
-      } else if (phase === 'mfa') {
-        const { error } = await supabase.auth.mfa.challengeAndVerify({
-          factorId,
-          code: String(form.get('code')),
-        });
-        if (error) throw new Error('Código incorrecto o vencido. Escribe el código actual de tu aplicación.');
-        setPhase('password');
       } else if (phase === 'password') {
         await updateRecoveredPassword(
           supabase,
@@ -119,7 +110,6 @@ export function PasswordRecovery({
               request: 'Recuperar contraseña',
               sent: 'Revisa tu correo',
               checking: 'Verificando el enlace',
-              mfa: 'Verifica tu identidad',
               password: 'Elige tu nueva contraseña',
               done: 'Contraseña actualizada',
               invalid: 'Solicita un nuevo enlace',
@@ -133,14 +123,13 @@ export function PasswordRecovery({
                 'Escribe el correo de tu cuenta de administrador. Te enviaremos un enlace de recuperación.',
               sent: recoveryConfirmation,
               checking: 'Espera un momento mientras comprobamos tu acceso.',
-              mfa: 'Escribe el código de tu aplicación de autenticación. Tu doble factor se conserva.',
               password: 'Usa entre 14 y 200 caracteres. No necesitas recordar la contraseña anterior.',
-              done: 'Ya puedes ingresar como Administrador con tu nueva contraseña y el doble factor habitual.',
+              done: 'Ya puedes ingresar como Administrador con tu nueva contraseña.',
               invalid: 'El enlace puede haber vencido o ya haberse utilizado.',
             }[phase]
           }
         </p>
-        {['request', 'mfa', 'password'].includes(phase) && (
+        {['request', 'password'].includes(phase) && (
           <form className="login-form" onSubmit={submit}>
             {phase === 'request' && (
               <label>
@@ -152,20 +141,6 @@ export function PasswordRecovery({
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                />
-              </label>
-            )}
-            {phase === 'mfa' && (
-              <label>
-                Código de seis dígitos
-                <input
-                  name="code"
-                  required
-                  inputMode="numeric"
-                  pattern="[0-9]{6}"
-                  maxLength={6}
-                  autoComplete="one-time-code"
-                  autoFocus
                 />
               </label>
             )}
@@ -205,9 +180,7 @@ export function PasswordRecovery({
                 ? 'Verificando…'
                 : phase === 'request'
                   ? 'Enviar enlace de recuperación'
-                  : phase === 'mfa'
-                    ? 'Verificar código'
-                    : 'Guardar nueva contraseña'}
+                  : 'Guardar nueva contraseña'}
               <ArrowRight size={18} />
             </button>
           </form>
@@ -232,7 +205,7 @@ export function PasswordRecovery({
         </div>
         <div className="login-security">
           <ShieldCheck size={15} />
-          <span>La recuperación conserva tus permisos y tu doble factor.</span>
+          <span>La recuperación conserva tu cuenta y tus permisos.</span>
         </div>
       </section>
     </div>

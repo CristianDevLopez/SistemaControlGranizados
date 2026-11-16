@@ -2,7 +2,7 @@
 
 ## Operación
 
-La cuenta propietaria puede gestionar varios locales con el mismo correo, contraseña y MFA. Cada local conserva su catálogo, inventario, caja, turnos, personal, ventas, compras, promociones, metas, evidencias e histórico. Se permite una caja operativa a la vez **en cada local**. Los destinos de dinero de **Cuentas y custodia** pertenecen al local seleccionado.
+La cuenta propietaria puede gestionar varios locales con Google o su correo y contraseña. Cada local conserva su catálogo, inventario, caja, turnos, personal, ventas, compras, promociones, metas, evidencias e histórico. Se permite una caja operativa a la vez **en cada local**. Los destinos de dinero de **Cuentas y custodia** pertenecen al local seleccionado.
 
 El selector **Local de trabajo** cambia de local. Las pestañas del navegador mantienen su selección de forma independiente. Cambiar exige conexión y terminar la sincronización; los conflictos y fotografías pendientes deben resolverse antes. La aplicación registra un acceso de administración por local cuando hace falta. El personal entra con los equipos y permisos del local al que fue asignado.
 
@@ -32,7 +32,7 @@ Una mensualidad sin pagos puede anularse indicando el motivo; se conserva el reg
 - `private.businesses`: propietario de cada negocio; `private.branches`: locales y condiciones de cobro; `private.branch_members`: roles y acceso por local.
 - Cada tabla de operación, dispositivo y recibo de comando tiene `branch_id`. Los UUID siguen siendo únicos globalmente. Las relaciones entre pedidos, turnos, pagos, entregas, recepciones y líneas usan claves foráneas compuestas con el local.
 - `private.branch_runtime` mantiene una revisión y bloqueo independientes por local. La apertura de turnos, el dispositivo principal, folios y códigos de cupón se restringen por local.
-- El gateway verifica la identidad, MFA, pertenencia al local y dispositivo antes de operar. El encabezado `X-Branch-Id` selecciona el contexto; no concede permisos. Los comandos nuevos también incluyen `branchId` y se rechazan si pertenecen a otro local. Los comandos previos sin ese campo solo pueden sincronizarse en el local migrado.
+- El gateway verifica la identidad, pertenencia al local y dispositivo antes de operar. El encabezado `X-Branch-Id` selecciona el contexto; no concede permisos. Los comandos nuevos también incluyen `branchId` y se rechazan si pertenecen a otro local. Los comandos previos sin ese campo solo pueden sincronizarse en el local migrado.
 - Las RPC `dexter_branch_*` solo admiten `service_role`, mantienen `SECURITY INVOKER` y verifican el contexto. Las tablas públicas siguen bloqueadas para `anon` y `authenticated`; todas las tablas nuevas de plataforma tienen RLS y residen en el esquema privado. No se usan metadatos editables del usuario para autorizar.
 - IndexedDB v2 conserva los datos anteriores, asocia su cola al local principal y separa colas, fotografías, caché y PIN por local y usuario. El último contexto del navegador se guarda como preferencia; cada pestaña mantiene su propia selección. El privilegio de desarrollador y la lista global de clientes no se guardan en el caché offline.
 - La exportación ZIP conserva los CSV operativos y añade el local al `manifest.json`, con versión de esquema 2. El respaldo completo existente incluye todos los locales, propietarios, suscripciones y evidencias porque respalda `public`, `private` y el bucket privado.

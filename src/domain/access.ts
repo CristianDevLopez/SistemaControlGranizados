@@ -15,7 +15,7 @@ export const permissionLabels: Record<Permission, string> = {
 };
 export const roleGuide = {
   admin:
-    'Administra catálogo, usuarios, permisos y cortesías; autoriza turnos y corrige registros cerrados. Requiere conexión y doble factor.',
+    'Administra catálogo, usuarios, permisos y cortesías; autoriza turnos y corrige registros cerrados. Requiere conexión.',
   encargado:
     'La caja principal crea y edita pedidos, cobra y realiza el cuadre de su turno. Recibe los pedidos del apoyo con el nombre de quien los tomó.',
   apoyo:
@@ -51,7 +51,6 @@ export function isShiftCashier(actor: Actor, shift: Shift | undefined): boolean 
     !!shift &&
     actor.role !== 'apoyo' &&
     shift.cashierId === actor.id &&
-    ((actor.primary && shift.deviceId === actor.deviceId) ||
-      (actor.role === 'admin' && actor.online && actor.aal === 'aal2'))
+    ((actor.primary && shift.deviceId === actor.deviceId) || (actor.role === 'admin' && actor.online))
   );
 }

@@ -165,12 +165,12 @@ describe('cortesías con código y vaso completo a cero', () => {
     expect(() => quotePayment(state, order, NOW, true, [CODE])).toThrow(/vencido/);
   });
 
-  it('solo un administrador conectado con doble factor puede emitir la cortesía', () => {
+  it('solo un administrador conectado puede emitir la cortesía', () => {
     const state = fixture();
-    for (const actor of [cashier, support, { ...admin, online: false }, { ...admin, aal: 'aal1' as const }])
+    for (const actor of [cashier, support, { ...admin, online: false }])
       expect(() =>
         run(state, 'issue_coupon', { courtesySpec: spec(state), code: CODE, expiresAt: EXPIRES }, actor),
-      ).toThrow(/administrador|doble factor/);
+      ).toThrow(/administrador|administrador/);
   });
 
   it('respeta la cuota aunque se envíe courtesy false y no deja beneficios parciales al rechazar la emisión', () => {

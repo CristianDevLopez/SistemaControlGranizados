@@ -73,9 +73,9 @@ it('ajusta faltantes y sobrantes una vez, con referencia al conteo, y la siguien
   expect(closingPreview(approved, ids.shift).expectedItems[cup]).toBe(16);
 });
 
-it('la revisión solo corresponde a un administrador conectado con doble factor', () => {
+it('la revisión solo corresponde a un administrador conectado', () => {
   const state = close(fixture());
-  for (const actor of [cashier, support, { ...admin, online: false }, { ...admin, aal: 'aal1' as const }])
+  for (const actor of [cashier, support, { ...admin, online: false }])
     expect(() => run(state, 'approve_closing', approval(state), actor)).toThrow();
   expect(() => run(state, 'approve_closing', approval(state, ids.shift, { verified: false }), admin)).toThrow(
     /verificación/,

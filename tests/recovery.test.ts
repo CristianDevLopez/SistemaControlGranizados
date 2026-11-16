@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   hasRecoveryLinkError,
-  recoveryFactor,
+  validateRecoverySession,
   requestPasswordRecovery,
   updateRecoveredPassword,
   validateNewPassword,
@@ -65,15 +65,14 @@ it('identifica enlaces vencidos o rechazados tanto en fragmento como en query', 
 it('rechaza una sesión ausente en el enlace de recuperación', async () => {
   const c = client();
   c.auth.getUser.mockResolvedValue({ data: { user: null }, error: { status: 401 } });
-  await expect(recoveryFactor(c.client)).rejects.toThrow('El enlace venció o no es válido');
+  await expect(validateRecoverySession(c.client)).rejects.toThrow('El enlace venció o no es válido');
 });
-it('mantiene el doble factor y bloquea la contraseña hasta verificarlo', async () => {
+it('recupera la contraseña sin pedir Authenticator ni consultar factores anteriores', async () => {
   const c = client(true);
-  expect(await recoveryFactor(c.client)).toBe('totp');
-  await expect(
-    updateRecoveredPassword(c.client, 'nueva-contraseña-larga', 'nueva-contraseña-larga'),
-  ).rejects.toThrow('Verifica el doble factor');
-  expect(c.auth.updateUser).not.toHaveBeenCalled();
+  await updateRecoveredPassword(c.client, 'nueva-contraseña-larga', 'nueva-contraseña-larga');
+  expect(c.auth.mfa.listFactors).not.toHaveBeenCalled();
+  expect(c.auth.mfa.getAuthenticatorAssuranceLevel).not.toHaveBeenCalled();
+  expect(c.auth.updateUser).toHaveBeenCalledWith({ password: 'nueva-contraseña-larga' });
 });
 it('cambia la contraseña de una sesión ya verificada sin modificar su MFA ni sus permisos', async () => {
   const c = client(true, true);

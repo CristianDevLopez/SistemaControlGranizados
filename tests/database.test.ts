@@ -55,16 +55,28 @@ it('aplica límites de intentos de forma atómica', async () => {
   const values = await Promise.all([1, 2, 3, 4].map(() => db.rate('test-rate', 3)));
   expect(values).toEqual([true, true, true, false]);
 });
-it('la API no revela conteos esperados y rechaza accesos sin MFA', async () => {
+it('la API no revela conteos esperados al cajero y acepta administradores sin MFA', async () => {
   const response = await request('snapshot', {});
   expect(response.status).toBe(200);
   expect(response.body.state.stock).toEqual([]);
   db.tokens.set(admin.id, { id: admin.id, aal: 'aal1' });
   try {
-    expect((await request('snapshot', {}, admin)).status).toBe(403);
+    expect((await request('snapshot', {}, admin)).status).toBe(200);
   } finally {
     db.tokens.set(admin.id, { id: admin.id, aal: 'aal2' });
   }
+});
+it('una sesión de Auth sin perfil o con perfil desactivado no obtiene acceso administrativo', async () => {
+  const unknown = crypto.randomUUID();
+  db.tokens.set(unknown, { id: unknown, aal: 'aal1' });
+  expect((await request('access', {}, { ...admin, id: unknown })).status).toBe(403);
+  await db.saveProfile({ ...admin, active: false });
+  try {
+    expect((await request('access', {}, admin)).status).toBe(403);
+  } finally {
+    await db.saveProfile(admin);
+  }
+  db.tokens.delete(unknown);
 });
 it('reintenta un mismo comando sin duplicar pagos ni consumos', async () => {
   const state = (await db.load()).state,

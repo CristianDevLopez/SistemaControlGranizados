@@ -35,27 +35,8 @@ async function mockAuth(page: Page, mfa = false) {
     }
     if (path.endsWith('/user') && method === 'GET') return reply(user);
     if (path.endsWith('/user') && method === 'PUT') {
-      if (mfa) {
-        const payload = JSON.parse(
-          Buffer.from(request.headers().authorization.split('.')[1], 'base64url').toString(),
-        );
-        if (payload.aal !== 'aal2') return reply({ code: 'insufficient_aal', message: 'MFA required' }, 403);
-      }
       changed.push(request.postDataJSON());
       return reply(user);
-    }
-    if (path.endsWith('/challenge'))
-      return reply({ id: 'challenge', expires_at: Math.floor(Date.now() / 1000) + 120, type: 'totp' });
-    if (path.endsWith('/verify')) {
-      if (request.postDataJSON().code !== '123456')
-        return reply({ message: 'Invalid code', code: 'mfa_verification_failed' }, 422);
-      return reply({
-        access_token: sessionToken('aal2'),
-        refresh_token: 'isolated-refresh',
-        token_type: 'bearer',
-        expires_in: 3600,
-        user,
-      });
     }
     return route.abort();
   });
@@ -96,17 +77,10 @@ test('solicita recuperación desde administrador sin revelar si el correo existe
   ]);
   expect(auth.changed).toHaveLength(0);
 });
-test('el enlace exige MFA y confirmación antes de actualizar la contraseña', async ({ page }) => {
+test('el enlace permite cambiar la contraseña sin Authenticator y exige confirmación', async ({ page }) => {
   const auth = await mockAuth(page, true);
   await page.goto(auth.link);
-  await expect(page.getByRole('heading', { name: 'Verifica tu identidad' })).toBeVisible();
-  await expect(page.getByLabel('Nueva contraseña', { exact: true })).toHaveCount(0);
-  await page.getByLabel('Código de seis dígitos').fill('111111');
-  await page.getByRole('button', { name: 'Verificar código', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('Código incorrecto');
-  expect(auth.changed).toHaveLength(0);
-  await page.getByLabel('Código de seis dígitos').fill('123456');
-  await page.getByRole('button', { name: 'Verificar código', exact: true }).click();
+  await expect(page.getByLabel('Código de seis dígitos')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Elige tu nueva contraseña' })).toBeVisible();
   await page.getByLabel('Nueva contraseña', { exact: true }).fill('nueva-contraseña-de-prueba');
   await page.getByLabel('Confirmar nueva contraseña').fill('contraseña-que-no-coincide');

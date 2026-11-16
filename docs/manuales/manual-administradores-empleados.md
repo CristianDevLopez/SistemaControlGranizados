@@ -22,13 +22,13 @@ La aplicación tiene tres roles de operación. El propietario utiliza una cuenta
 | Cobrar pedidos                                 | Solo su propio turno conectado                                        | Solo su turno y equipo principal             | No                  |
 | Abrir caja                                     | Inicia su propia caja conectado o autoriza la solicitud del encargado | Solicita apertura desde el equipo principal  | No                  |
 | Presentar apertura y cierre                    | Cuando es responsable del turno                                       | Cuando es responsable del turno              | No                  |
-| Solicitar arqueo y seleccionar ítems           | Sí con conexión y doble factor                                        | No                                           | No                  |
+| Solicitar arqueo y seleccionar ítems           | Sí con conexión                                                       | No                                           | No                  |
 | Presentar conteo de arqueo                     | Cuando es responsable del turno                                       | Cuando es responsable del turno              | No                  |
 | Abrir bolsas y paquetes y reportar daños       | Sí durante la operación                                               | Sí durante la operación                      | Sí con conexión     |
 | Registrar recepción física de mercancía        | Sí                                                                    | Sí                                           | Sí con conexión     |
 | Registrar gastos y movimientos de dinero       | Según origen y responsabilidad de caja                                | Según permisos y límites de caja             | No                  |
 | Ver saldos teóricos y revisar diferencias      | Sí                                                                    | Conteos propios sin esperados ni diferencias | Sin saldos teóricos |
-| Configurar catálogo promociones equipo y metas | Sí con conexión y doble factor                                        | No                                           | No                  |
+| Configurar catálogo promociones equipo y metas | Sí con conexión                                                       | No                                           | No                  |
 | Solicitar locales y consultar mensualidades    | Solo si es propietario                                                | No                                           | No                  |
 
 Si eres encargado de caja, comienza por acceso, apertura, pedidos, inventario, recepción, cierre y sincronización. Si eres apoyo, lee acceso, pedidos, entregas, degustaciones, inventario y recepción. Si eres administrador, revisa el manual completo antes de preparar el primer turno.
@@ -42,12 +42,12 @@ En **Configuración → Equipo y accesos**, el administrador dispone de una **Gu
 ### Ingreso de un administrador
 
 1. Abre la aplicación y pulsa **Administrador**.
-2. Escribe tu correo electrónico y contraseña y pulsa **Continuar**.
-3. Completa el doble factor con el código de tu aplicación de autenticación. Si es tu primer acceso, sigue la configuración que muestra la pantalla y guarda el acceso a tu autenticador.
+2. Pulsa **Continuar con Google** y elige la cuenta cuyo correo está registrado como administrador.
+3. También puedes escribir tu correo y contraseña y pulsar **Continuar**. No necesitas Authenticator.
 4. Si aparece **Registrar este equipo**, escribe un nombre que permita identificar el navegador. Configura el PIN local de respaldo si la pantalla lo solicita y corresponde a la operación prevista.
 5. Comprueba el usuario, el local seleccionado y el estado de conexión antes de trabajar.
 
-La contraseña de las cuentas nuevas debe tener entre 14 y 200 caracteres. El código de doble factor y el PIN del empleado cumplen funciones diferentes; introducir uno en el campo del otro no inicia sesión.
+La contraseña de las cuentas nuevas debe tener entre 14 y 200 caracteres. Los empleados conservan el acceso con usuario y PIN.
 
 **Primera cuenta del negocio.** La opción **Configurar primer administrador** se usa una sola vez en la instalación inicial y exige el código privado de configuración entregado por el responsable de la aplicación. No sirve para crear un local adicional. Los demás usuarios se crean desde Configuración.
 
@@ -63,9 +63,9 @@ El administrador decide si el equipo registrado será la caja principal del loca
 
 ### Recuperación y cambio de usuario
 
-En **Administrador → Olvidé mi contraseña**, escribe el correo y solicita el enlace. También puedes abrir **Recuperar mi contraseña** desde el botón del perfil cuando tienes una sesión administrativa abierta. En el enlace de recuperación, verifica el doble factor si ya estaba configurado, elige una contraseña nueva y confírmala. Un enlace vencido permite solicitar otro.
+En **Administrador → Olvidé mi contraseña**, escribe el correo y solicita el enlace. También puedes abrir **Recuperar mi contraseña** desde el botón del perfil cuando tienes una sesión administrativa abierta. En el enlace de recuperación, elige una contraseña nueva y confírmala. Un enlace vencido permite solicitar otro.
 
-La recepción del correo depende del servicio de correo configurado. Si no llega, revisa spam y comunica el caso al desarrollador. Recuperar la contraseña no elimina el doble factor. Si perdiste el autenticador, informa al responsable del servicio; este formulario no es un mecanismo para omitirlo.
+La recepción del correo depende del servicio de correo configurado. Si no llega, revisa spam y comunica el caso al desarrollador. No necesitas una aplicación de autenticación para recuperar la contraseña.
 
 El empleado que olvida su PIN debe acudir al administrador o al responsable técnico; la recuperación por correo de administrador no es su método de acceso. La pantalla de equipo permite crear cuentas y activar o desactivar accesos; no debe asumirse que cualquier función técnica de restablecimiento está disponible como botón en esa pantalla.
 
@@ -182,7 +182,7 @@ Un destino es una ubicación del dinero y no una sucursal. Registrar una cuenta 
 
 ### Apertura por un administrador que atenderá caja
 
-Con conexión y doble factor, abre **Turno y caja → Iniciar caja**, indica la base y confirma. El turno queda a tu nombre y autorizado por ti; presenta después el conteo de apertura. No necesitas la autorización de otro administrador para iniciar tu propio turno.
+Con conexión, abre **Turno y caja → Iniciar caja**, indica la base y confirma. El turno queda a tu nombre y autorizado por ti; presenta después el conteo de apertura. No necesitas la autorización de otro administrador para iniciar tu propio turno.
 
 Si existe efectivo físico anterior registrado, la aplicación utiliza ese saldo para la apertura en lugar de reemplazarlo libremente. Si ya hay un turno solicitado, abierto o provisional del local, resuélvelo o ciérralo antes de abrir otro.
 
@@ -477,7 +477,7 @@ Cuando no puedas conectarte, utiliza la opción de acceso offline y el PIN local
 
 ### Abrir por contingencia
 
-El permiso debe prepararse antes, con conexión y doble factor, mediante **Configuración → Equipo y accesos → Apertura de contingencia**, estando el administrador presente en el equipo de caja. Se configura un PIN de contingencia y una autorización cifrada para ese equipo.
+El permiso debe prepararse antes, con conexión, mediante **Configuración → Equipo y accesos → Apertura de contingencia**, estando el administrador presente en el equipo de caja. Se configura un PIN de contingencia y una autorización cifrada para ese equipo.
 
 Si hay que abrir sin internet, el encargado solicita el turno y utiliza **Autorizar con admin presente**. Selecciona al administrador habilitado y este introduce presencialmente el PIN de contingencia. El permiso se utiliza una vez y vence a los siete días; no es una contraseña permanente para operar cualquier caja. Al volver la conexión la apertura se valida y queda su registro de contingencia.
 
@@ -514,7 +514,7 @@ Los cierres conservan su conteo original. Si luego se aprueba un gasto o se regi
 
 En **Conteos registrados**, el administrador ve por cada medio/cuenta: contado, esperado original y diferencia. Una diferencia de cero indica que cuadra; negativa, faltante; positiva, sobrante. El esperado de una cuenta corresponde a los pagos menos devoluciones de ventas del turno, separado del efectivo; no es una conciliación del saldo bancario completo. También aparecen cuentas desactivadas que recibieron pagos durante ese turno. Los registros anteriores conservan solo los valores verificados que se capturaron.
 
-Después de cerrar, incluso si el cierre offline está provisional, los trabajadores no pueden registrar gastos, inventario, entregas, movimientos ni editar pedidos de ese turno. Abrir otro turno no desbloquea el anterior. Solo un administrador conectado con doble factor puede registrar correcciones; en **Registrar gasto → Turno a corregir** puede vincular un gasto al turno cerrado. El registro original del conteo permanece intacto.
+Después de cerrar, incluso si el cierre offline está provisional, los trabajadores no pueden registrar gastos, inventario, entregas, movimientos ni editar pedidos de ese turno. Abrir otro turno no desbloquea el anterior. Solo un administrador conectado puede registrar correcciones; en **Registrar gasto → Turno a corregir** puede vincular un gasto al turno cerrado. El registro original del conteo permanece intacto.
 
 ### Lista rápida del administrador
 
