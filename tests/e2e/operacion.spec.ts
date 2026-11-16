@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { decodeGeneratedQr } from '../support/qr.ts';
 import { admin, cashier, support, cmd, ids } from '../support/fixture.ts';
 import type { CommandType } from '../../src/domain/types.ts';
+import type { OutboxEntry } from '../../src/lib/db.ts';
 
 const headers = {
   authorization: `Bearer ${admin.id}`,
@@ -45,8 +46,186 @@ async function nav(page: Page, name: string) {
   }
   await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
 }
+async function seedOutbox(page: Page, entries: OutboxEntry[]) {
+  await page.evaluate(async (entries) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const open = indexedDB.open('dexter-v1');
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => reject(open.error);
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const tx = database.transaction(['outbox', 'meta'], 'readwrite');
+        for (const entry of entries) tx.objectStore('outbox').add(entry);
+        tx.objectStore('meta').put({ key: 'sequence', value: entries[entries.length - 1].sequence });
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error);
+      });
+    } finally {
+      database.close();
+    }
+  }, entries);
+}
+function pending(command: OutboxEntry['command']): OutboxEntry {
+  return {
+    id: command.id,
+    actorId: command.actorId,
+    branchId: command.branchId,
+    sequence: command.sequence,
+    command,
+    optimistic: false,
+    status: 'pending',
+  };
+}
 test.beforeEach(async ({ request }) => {
   await request.post('http://127.0.0.1:5180/reset');
+});
+
+test('recupera una cortesía rechazada en la versión anterior y envía la operación siguiente una sola vez', async ({
+  page,
+  request,
+}) => {
+  await execute(request, 'configure', { courtesyQuota: 0 });
+  await login(page, 'admin@test.invalid');
+  const s = await snapshot(request);
+  const at = new Date().toISOString();
+  const options = { at, branchId: s.branch.id, configVersion: s.state.settings[0].version };
+  const coupon = cmd(
+    'issue_coupon',
+    {
+      courtesySpec: { sizeId: s.state.sizes[0].id, alcohol: 'all' },
+      expiresAt: new Date(Date.now() + 86400_000).toISOString(),
+    },
+    admin,
+    { ...options, sequence: 166 },
+  );
+  const next = cmd('configure', { businessName: 'Configuración pendiente' }, admin, {
+    ...options,
+    sequence: 167,
+  });
+  const response = await request.post('http://127.0.0.1:5180/dexter/commands', {
+    headers,
+    data: { commands: [coupon] },
+  });
+  const { message, code, status } = (await response.json()).results[0];
+  expect({ status, code, message }).toEqual({
+    status: 'conflict',
+    code: 'VALIDATION',
+    message: 'La cuota se agotó. Otro admin debe aprobar una cortesía adicional.',
+  });
+  // El teléfono antiguo solo persistía estos campos de la respuesta.
+  await seedOutbox(page, [
+    { ...pending(coupon), status: 'conflict', message, result: { id: coupon.id, message, code, status } },
+    pending(next),
+  ]);
+  // Si el teléfono reintentara la 166 ahora, el servidor sí podría emitirla.
+  await execute(request, 'configure', { courtesyQuota: 10 });
+  await page.reload();
+  await page.getByRole('button', { name: 'Estado de sincronización' }).click();
+  await page.getByRole('button', { name: 'Sincronizar ahora' }).click();
+  await expect
+    .poll(async () => (await snapshot(request)).state.settings[0].businessName)
+    .toBe('Configuración pendiente');
+  await expect(page.getByText('No quedan operaciones pendientes.')).toBeVisible();
+  await page.getByText('Operaciones no aplicadas (1)').click();
+  await expect(page.getByText(coupon.id, { exact: false })).toBeVisible();
+  await expect(page.getByText(message, { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Sincronizar ahora' }).click();
+  const { state } = await snapshot(request);
+  expect(state.coupons).toHaveLength(0);
+  expect(state.audit.filter((a: { eventId: string }) => a.eventId === next.id)).toHaveLength(1);
+});
+
+test('al agotar la cuota muestra el rechazo y permite solicitar una cortesía adicional', async ({
+  page,
+  request,
+}) => {
+  await execute(request, 'configure', { courtesyQuota: 0 });
+  await login(page, 'admin@test.invalid');
+  await nav(page, 'Promociones');
+  await page.getByRole('button', { name: 'Generar cortesía', exact: true }).click();
+  const form = page.getByRole('dialog');
+  await form
+    .getByRole('combobox', { name: 'Tamaño del vaso *', exact: true })
+    .selectOption('00000000-0000-4000-8000-000000000016');
+  await form.getByRole('button', { name: 'Generar código de cortesía' }).click();
+  await expect(form.getByRole('alert')).toContainText('La cuota se agotó.');
+  await form.getByRole('button', { name: 'Cancelar' }).click();
+  await page.getByRole('button', { name: 'Solicitar cortesía adicional' }).click();
+  await form.getByLabel('Motivo').fill('Cortesía especial del turno');
+  await form.getByRole('button', { name: 'Guardar' }).click();
+  await expect(form).toHaveCount(0);
+  const { state } = await snapshot(request);
+  expect(state.coupons).toHaveLength(0);
+  expect(state.requests).toHaveLength(1);
+  expect(state.requests[0]).toMatchObject({ type: 'courtesy_excess', status: 'pending', by: admin.id });
+});
+
+test('una vigencia inválida se puede corregir en el formulario y solo emite el código corregido', async ({
+  page,
+  request,
+}) => {
+  await login(page, 'admin@test.invalid');
+  await nav(page, 'Promociones');
+  await page.getByRole('button', { name: 'Generar cortesía', exact: true }).click();
+  const form = page.getByRole('dialog');
+  await form
+    .getByRole('combobox', { name: 'Tamaño del vaso *', exact: true })
+    .selectOption('00000000-0000-4000-8000-000000000016');
+  const expiry = form.getByLabel('Vence (hora de Colombia)');
+  const submit = form.getByRole('button', { name: 'Generar código de cortesía' });
+  await expiry.fill('2020-01-01T09:00');
+  await submit.click();
+  await expect(form.getByRole('alert')).toContainText('Vencimiento inválido.');
+  expect((await snapshot(request)).state.coupons).toHaveLength(0);
+  const future = new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 16);
+  await expiry.fill(future);
+  await submit.click();
+  await expect(form.getByRole('heading', { name: 'Cortesía Dexter’s' })).toBeVisible();
+  const { state } = await snapshot(request);
+  expect(state.coupons).toHaveLength(1);
+  expect(state.coupons[0].expiresAt).toBe(new Date(future + ':00-05:00').toISOString());
+});
+
+test('un conflicto de cobro conserva la cola hasta que un administrador lo concilie', async ({
+  page,
+  request,
+}) => {
+  await login(page, 'admin@test.invalid');
+  const s = await snapshot(request);
+  const options = {
+    at: new Date().toISOString(),
+    branchId: s.branch.id,
+    configVersion: s.state.settings[0].version,
+  };
+  const payment = cmd('pay', { orderId: crypto.randomUUID(), codes: ['CUPON-NO-VALIDO'] }, admin, {
+    ...options,
+    sequence: 20,
+  });
+  const next = cmd('request_courtesy_excess', { notes: 'Solicitud siguiente' }, admin, {
+    ...options,
+    sequence: 21,
+  });
+  await seedOutbox(page, [pending(payment), pending(next)]);
+  await page.getByRole('button', { name: 'Estado de sincronización' }).click();
+  const synchronize = page.getByRole('button', { name: 'Sincronizar ahora' });
+  await synchronize.click();
+  await expect(page.getByText('Por conciliar', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Espera la conciliación de la operación 20/)).toBeVisible();
+  const before = (await snapshot(request)).state;
+  expect(before.requests).toHaveLength(1);
+  expect(before.requests[0]).toMatchObject({ type: 'sync', id: payment.id, status: 'pending' });
+  expect(before.payments).toHaveLength(0);
+  await execute(request, 'resolve_request', {
+    requestId: payment.id,
+    approve: false,
+    resolutionNotes: 'Pedido inexistente, no se recibió dinero.',
+  });
+  await synchronize.click();
+  await expect(page.getByText('Todas tus operaciones están sincronizadas.')).toBeVisible();
+  const after = (await snapshot(request)).state;
+  expect(after.payments).toHaveLength(0);
+  expect(after.audit.filter((a: { eventId: string }) => a.eventId === next.id)).toHaveLength(1);
 });
 
 test('al agotar veinte vasos recuerda registrar otro paquete desde Mostrador', async ({ page, request }) => {

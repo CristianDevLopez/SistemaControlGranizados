@@ -563,6 +563,9 @@ export interface Result {
   id: ID;
   status: 'accepted' | 'review' | 'conflict';
   message: string;
+  code?: string;
+  /** Validación denegada antes de guardar, sin una solicitud de conciliación en el servidor. */
+  finalRejection?: true;
   referenceId?: ID;
   revision?: number;
   at?: string;
