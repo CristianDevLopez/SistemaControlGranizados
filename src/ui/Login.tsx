@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react';
-import QRCode from 'qrcode';
 import { ArrowRight, ShieldCheck, WifiOff, Smartphone, FlaskConical } from 'lucide-react';
 import {
   api,
   ApiError,
   configured,
   loginAdmin,
+  loginGoogle,
   loginPin,
   session,
-  supabase,
-  testGateway,
   saveDeviceCredential,
 } from '../lib/api.ts';
-import { getMeta, setMeta } from '../lib/db.ts';
 import { cacheLocalPin, useApp } from '../lib/store.tsx';
+import { googleLoginError } from '../lib/admin-auth.ts';
 function consumeActivationToken() {
   const token = new URLSearchParams(window.location.hash.slice(1)).get('activar-superadmin');
   if (token) window.history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -22,44 +20,22 @@ function consumeActivationToken() {
 export function Login({ onRecover }: { onRecover: () => void }) {
   const app = useApp();
   const [activation, setActivation] = useState(consumeActivationToken);
-  const [mode, setMode] = useState<
-      'admin' | 'employee' | 'setup' | 'superadmin' | 'mfa' | 'device' | 'offline'
-    >(activation ? 'superadmin' : 'employee'),
-    [error, setError] = useState(''),
-    [busy, setBusy] = useState(false),
-    [qr, setQr] = useState(''),
-    [factorId, setFactorId] = useState(''),
-    [factorSecret, setFactorSecret] = useState(''),
-    [rememberPin, setRememberPin] = useState('');
+  const [mode, setMode] = useState<'admin' | 'employee' | 'setup' | 'superadmin' | 'device' | 'offline'>(
+      activation
+        ? 'superadmin'
+        : new URLSearchParams(window.location.search).get('acceso') === 'google'
+          ? 'admin'
+          : 'employee',
+    ),
+    [error, setError] = useState(() => googleLoginError(window.location)),
+    [busy, setBusy] = useState(false);
   const ready = async () => {
     try {
       await app.load();
     } catch (e) {
-      if (e instanceof ApiError && e.code === 'MFA_REQUIRED') {
-        setMode('mfa');
-        await prepareMfa();
-      } else if (e instanceof ApiError && e.code === 'DEVICE_REQUIRED') setMode('device');
+      if (e instanceof ApiError && e.code === 'DEVICE_REQUIRED') setMode('device');
       else throw e;
     }
-  };
-  const prepareMfa = async () => {
-    if (testGateway) return;
-    const listed = await supabase!.auth.mfa.listFactors();
-    const existing = listed.data?.totp.find((f) => f.status === 'verified');
-    if (existing) {
-      setFactorId(existing.id);
-      return;
-    }
-    const pending = listed.data?.all.filter((f) => f.status === 'unverified') ?? [];
-    for (const factor of pending) await supabase!.auth.mfa.unenroll({ factorId: factor.id });
-    const response = await supabase!.auth.mfa.enroll({
-      factorType: 'totp',
-      friendlyName: 'Dexter Mostrador',
-    });
-    if (response.error) throw response.error;
-    setFactorId(response.data.id);
-    setQr(await QRCode.toDataURL(response.data.totp.uri, { width: 220, margin: 2 }));
-    setFactorSecret(response.data.totp.secret);
   };
   useEffect(() => {
     const activate = () => {
@@ -95,7 +71,7 @@ export function Login({ onRecover }: { onRecover: () => void }) {
         });
         setActivation('');
         setMode('admin');
-        app.toast('Tu acceso privado está creado. Activa el doble factor para continuar.');
+        app.toast('Tu acceso privado está creado.');
         await loginAdmin(v('email'), v('password'));
         await ready();
       } else if (mode === 'setup') {
@@ -106,7 +82,7 @@ export function Login({ onRecover }: { onRecover: () => void }) {
           token: v('token'),
         });
         setMode('admin');
-        app.toast('Administrador creado. Inicia sesión para activar el doble factor.');
+        app.toast('Administrador creado. Inicia sesión con Google o con tu correo y contraseña.');
       } else if (mode === 'admin') {
         await loginAdmin(v('email'), v('password'));
         await ready();
@@ -119,10 +95,6 @@ export function Login({ onRecover }: { onRecover: () => void }) {
         });
         const s = await session();
         if (s) await cacheLocalPin(v('pin'), s.user.id);
-        await ready();
-      } else if (mode === 'mfa') {
-        const result = await supabase!.auth.mfa.challengeAndVerify({ factorId, code: v('code') });
-        if (result.error) throw result.error;
         await ready();
       } else if (mode === 'device') {
         const result = await api('devices/self', {
@@ -199,7 +171,6 @@ export function Login({ onRecover }: { onRecover: () => void }) {
               admin: 'Acceso de administrador',
               setup: 'Configurar Dexter’s',
               superadmin: 'Activar tu acceso privado',
-              mfa: 'Verifica tu identidad',
               device: 'Registrar este equipo',
               offline: 'Continuar sin conexión',
             }[mode]
@@ -209,13 +180,9 @@ export function Login({ onRecover }: { onRecover: () => void }) {
           {
             {
               employee: 'Entra con el usuario y PIN asignados.',
-              admin: 'Usa tu correo y contraseña. Después verificaremos el doble factor.',
+              admin: 'Entra con Google o con tu correo y contraseña de administrador.',
               setup: 'Usa el código privado de configuración entregado al propietario.',
-              superadmin:
-                'Crea tu acceso de superadministrador con el correo reservado. Después activarás el doble factor.',
-              mfa: qr
-                ? 'Añade esta cuenta a tu app de autenticación y escribe el código.'
-                : 'Escribe el código de tu app de autenticación.',
+              superadmin: 'Crea tu acceso de superadministrador con el correo reservado y una contraseña.',
               device: 'Este registro vincula el navegador a tu negocio.',
               offline: 'Solo disponible en un equipo de caja previamente autorizado.',
             }[mode]
@@ -244,6 +211,26 @@ export function Login({ onRecover }: { onRecover: () => void }) {
           </div>
         )}
         <form onSubmit={submit} className="login-form">
+          {mode === 'admin' && (
+            <button
+              type="button"
+              className="button secondary full"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                setError('');
+                try {
+                  await loginGoogle();
+                } catch (e) {
+                  setError((e as Error).message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Continuar con Google
+            </button>
+          )}
           {mode === 'superadmin' && (
             <label>
               Tu nombre
@@ -315,31 +302,6 @@ export function Login({ onRecover }: { onRecover: () => void }) {
               </details>
             </>
           )}
-          {mode === 'mfa' && (
-            <>
-              {qr && (
-                <div className="auth-qr">
-                  <img src={qr} alt="QR para configurar doble factor" />
-                  <details>
-                    <summary>Configurar con clave manual</summary>
-                    <code>{factorSecret}</code>
-                  </details>
-                </div>
-              )}
-              <label>
-                Código de seis dígitos
-                <input
-                  name="code"
-                  required
-                  inputMode="numeric"
-                  pattern="[0-9]{6}"
-                  maxLength={6}
-                  autoComplete="one-time-code"
-                  autoFocus
-                />
-              </label>
-            </>
-          )}
           {mode === 'device' && (
             <>
               <label>
@@ -395,7 +357,7 @@ export function Login({ onRecover }: { onRecover: () => void }) {
               Entrar sin conexión
             </button>
           )}
-          {!['mfa', 'device', 'superadmin'].includes(mode) && (
+          {!['device', 'superadmin'].includes(mode) && (
             <button
               className="text-button"
               onClick={() => {

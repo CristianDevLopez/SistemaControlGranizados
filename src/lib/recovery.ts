@@ -30,18 +30,9 @@ export async function requestPasswordRecovery(client: SupabaseClient, email: str
   }
 }
 
-export async function recoveryFactor(client: SupabaseClient) {
+export async function validateRecoverySession(client: SupabaseClient) {
   const { data, error } = await client.auth.getUser();
   if (error || !data.user) throw new Error('El enlace venció o no es válido. Solicita uno nuevo.');
-  const factors = await client.auth.mfa.listFactors();
-  if (factors.error) throw new Error('No se pudo verificar el doble factor. Inténtalo de nuevo.');
-  const assurance = await client.auth.mfa.getAuthenticatorAssuranceLevel();
-  if (assurance.error) throw new Error('No se pudo verificar tu sesión. Abre de nuevo el enlace del correo.');
-  if (assurance.data.currentLevel === 'aal2') return null;
-  const factor = factors.data.totp.find((f) => f.status === 'verified');
-  if (factor) return factor.id;
-  if (assurance.data.nextLevel === 'aal2') throw new Error('Verifica tu segundo factor para continuar.');
-  return null;
 }
 
 export async function updateRecoveredPassword(
@@ -50,13 +41,10 @@ export async function updateRecoveredPassword(
   confirmation: string,
 ) {
   validateNewPassword(password, confirmation);
-  if (await recoveryFactor(client))
-    throw new Error('Verifica el doble factor antes de cambiar la contraseña.');
+  await validateRecoverySession(client);
   const { error } = await client.auth.updateUser({ password });
   if (error) {
     if (error.code === 'same_password') throw new Error('Elige una contraseña distinta de la anterior.');
-    if (error.code === 'insufficient_aal')
-      throw new Error('Verifica el doble factor antes de cambiar la contraseña.');
     throw new Error('No se pudo cambiar la contraseña. Abre de nuevo el enlace o solicita uno nuevo.');
   }
 }

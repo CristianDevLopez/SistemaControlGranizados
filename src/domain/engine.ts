@@ -63,8 +63,8 @@ function required<T>(value: T | undefined, label: string): T {
 }
 function admin(actor: Actor): void {
   assert(
-    actor.role === 'admin' && actor.online && actor.aal === 'aal2',
-    'Esta operación requiere un administrador con doble factor y conexión.',
+    actor.role === 'admin' && actor.online,
+    'Esta operación requiere un administrador con conexión.',
     'FORBIDDEN',
   );
 }
@@ -466,8 +466,6 @@ export function applyCommand(
   );
   const reportedAt = command.at;
   command = { ...command, at: effectiveAt(original, command, actor, receivedAt) };
-  if (actor.role === 'admin' && actor.online)
-    assert(actor.aal === 'aal2', 'Completa el doble factor.', 'FORBIDDEN');
   const prior = original.audit.find((x) => x.eventId === command.id);
   if (prior)
     return {

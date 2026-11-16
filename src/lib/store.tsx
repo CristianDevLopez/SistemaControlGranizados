@@ -271,8 +271,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.message);
-        if (['UNAUTHORIZED', 'FORBIDDEN', 'MFA_REQUIRED', 'DEVICE_REQUIRED'].includes(e.code))
-          setOnline(false);
+        if (['UNAUTHORIZED', 'FORBIDDEN', 'DEVICE_REQUIRED'].includes(e.code)) setOnline(false);
       } else {
         setOnline(false);
         setError('Sin conexión con el servidor. Los registros locales se conservan.');
