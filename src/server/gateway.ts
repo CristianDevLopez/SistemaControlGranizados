@@ -710,31 +710,33 @@ export function createGateway(options: GatewayOptions) {
               });
           } catch (error) {
             const e = error as Error & { code?: string };
-            if (
-              [
-                'create_order',
-                'update_order',
-                'deliver',
-                'pay',
-                'count',
-                'taste',
-                'update_tasting',
-                'remove_tasting',
-                'authorize_shift',
-                'replace_order',
-                'refund_order',
-                'receive_shipment',
-                'expense',
-                'execute_transfer',
-                'confirm_transfer',
-              ].includes(command.type)
-            )
-              await store.security('sync_conflict', { command, message: e.message });
+            const needsReview = [
+              'create_order',
+              'update_order',
+              'deliver',
+              'pay',
+              'count',
+              'taste',
+              'update_tasting',
+              'remove_tasting',
+              'authorize_shift',
+              'replace_order',
+              'refund_order',
+              'receive_shipment',
+              'expense',
+              'execute_transfer',
+              'confirm_transfer',
+            ].includes(command.type);
+            if (needsReview) await store.security('sync_conflict', { command, message: e.message });
+            const rejectedRecovery =
+              command.type === 'record_employee_recovery' &&
+              (error instanceof DomainError || e.code === '42501');
             results.push({
               id: command.id,
               status: 'conflict',
               message: e.message,
               code: e.code ?? 'VALIDATION',
+              ...(rejectedRecovery ? { finalRejection: true } : {}),
             });
             break;
           }

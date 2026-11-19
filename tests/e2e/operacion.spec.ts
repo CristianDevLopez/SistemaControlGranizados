@@ -410,6 +410,12 @@ test('admin edita permisos e imagen; el cierre presenta cuentas y conserva difer
   await page.getByRole('button', { name: 'Revisar y aprobar cierre', exact: true }).click();
   const review = page.getByRole('dialog');
   await expect(review.locator('.closing-comparison')).toContainText('Faltan 4 vasos');
+  const charge = review.getByLabel('Valor del faltante a reportar al empleado', { exact: false });
+  await expect(charge).toHaveValue('56.000');
+  await review.getByRole('spinbutton', { name: 'Vasos · 12 oz', exact: false }).fill('17');
+  await expect(charge).toHaveValue('42.000');
+  await review.getByRole('spinbutton', { name: 'Vasos · 12 oz', exact: false }).fill('16');
+  await charge.fill('10.000');
   await review.getByLabel('Reconfirmado · Cuenta de prueba', { exact: false }).fill('14.000');
   await review
     .getByLabel('Resultado de la revisión y motivo de las correcciones', { exact: false })
@@ -427,6 +433,7 @@ test('admin edita permisos e imagen; el cierre presenta cuentas y conserva difer
   await expect(review).toHaveCount(0);
   const final = (await snapshot(request)).state;
   expect(final.shifts[0].closingReview.status).toBe('approved');
+  expect(final.shifts[0].closingReview.employeeCharge).toBe(10000);
   expect(final.counts[0].payments[`transfer:${ids.location}`]).toBe(13000);
   expect(final.counts[1].payments[`transfer:${ids.location}`]).toBe(14000);
   expect(
@@ -434,6 +441,17 @@ test('admin edita permisos e imagen; el cierre presenta cuentas y conserva difer
       .filter((m: any) => m.article === `cup:${s.state.sizes[0].id}`)
       .reduce((n: number, m: any) => n + m.quantity, 0),
   ).toBe(16);
+  await page.getByRole('button', { name: 'Registrar descuento', exact: true }).click();
+  const deduction = page.getByRole('dialog', { name: 'Confirmar descuento de quincena' });
+  await deduction.getByLabel('Valor descontado', { exact: false }).fill('4.000');
+  await deduction.getByLabel('Confirmo que apliqué este descuento', { exact: false }).check();
+  await deduction.getByRole('button', { name: 'Registrar descuento aplicado', exact: true }).click();
+  await expect(deduction).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: /Ventas por mermas de empleado/ })).toContainText('4.000');
+  await expect(page.getByRole('heading', { name: /Saldo pendiente actual/ })).toContainText('6.000');
+  const afterRecovery = (await snapshot(request)).state;
+  expect(afterRecovery.shifts[0].closingReview.recoveries[0].amount).toBe(4000);
+  expect(afterRecovery.payments).toEqual(final.payments);
 });
 
 test('comparte un QR legible y canjea dos de tres cortesías sin consumir la sobrante', async ({

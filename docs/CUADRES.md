@@ -17,9 +17,15 @@ En **Turno y caja → Cierres pendientes de aprobación**, abre **Revisar y apro
 
 Al aprobar se agrega una revisión vinculada al original y un movimiento de inventario por cada diferencia de vasos. El conteo original permanece intacto. Un faltante de cuatro vasos se descuenta una sola vez, de modo que no vuelva a aparecer en la siguiente apertura. Las correcciones de recetas, las mermas ya aprobadas y los ajustes de cierres anteriores se consideran para evitar duplicados, aun al revisar después de abrir otro turno.
 
-El valor **Faltante a reportar al empleado** es un registro administrativo manual en pesos, acompañado por el motivo y la identidad de quien lo aprobó. No calcula el precio de los vasos ni ejecuta descuentos de nómina. El módulo no dispone de nómina.
+El campo **Valor del faltante a reportar al empleado** sugiere el precio de venta con licor más alto de cada tamaño por la cantidad de vasos faltantes. Solo el administrador ve el importe y puede modificarlo al aprobar el cierre. El valor confirmado queda vinculado al turno y al motivo de la revisión.
+
+En **Turno y caja → Faltantes y descuentos por quincena**, filtra por empleado y registra el importe descontado efectivamente y su fecha. Se permiten recuperaciones parciales hasta agotar el saldo. El registro **Ventas por mermas de empleado** conserva quién lo registró y a qué cuadre corresponde. Representa el descuento ya aplicado en la liquidación externa.
 
 La aprobación no confirma automáticamente que el efectivo se entregó o que una transferencia llegó. Las solicitudes de remanente sin ejecutar se actualizan con el efectivo reconfirmado; si ya no hay remanente, quedan canceladas y se conserva su registro. Las entregas ejecutadas permanecen intactas.
+
+## Merma de líquido
+
+En **Inventario → Merma de líquido por quincena**, selecciona una fecha para consultar la primera o segunda mitad del mes por sabor. El informe muestra bolsas abiertas, onzas servidas, mermas aprobadas y saldos al inicio y al corte. Si hay líquido pendiente de verificar, se muestra un saldo estimado y queda abierta la diferencia. El umbral configurado tiene prioridad sobre la referencia histórica. Esta última usa hasta seis quincenas previas, con al menos dos periodos medibles y excluye diferencias del tamaño de una bolsa. El aviso de bolsa se activa desde el 90 % del volumen configurado para su revisión.
 
 ## Mostrador y cortesías
 
@@ -32,5 +38,3 @@ Las cortesías entregadas ya descuentan vasos y líquido, incluidos todos los sa
 Aplicar las migraciones pendientes, incluida `supabase/migrations/20261114200017_closing_review.sql`, y actualizar juntos la función `dexter` y el frontend. La migración agrega la validación del rol de aprobación en los commits serializados; no modifica conteos ni ventas anteriores, no agrega tablas y mantiene las funciones limitadas a `service_role`.
 
 Los cierres históricos sin aprobación aparecen pendientes y pueden revisarse individualmente. Los clientes anteriores conservan la posibilidad de enviar su formato de cierre; la interfaz actual exige la comparación previa cuando hay conexión. El servidor siempre recalcula los importes y valida que una comparación enviada siga vigente.
-
-Validación local: `npm run check`, `npm run build`, `npm run format:check`, `deno check --config supabase/functions/deno.json supabase/functions/dexter/index.ts` y las pruebas Playwright de operación, caja, transferencias y arqueo. Todos los datos de prueba se ejecutan en PGlite aislado.

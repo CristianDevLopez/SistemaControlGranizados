@@ -1,4 +1,6 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import type { CommandType, Snapshot } from '../../src/domain/types.ts';
+import { cashier, cmd, ids } from '../support/fixture.ts';
 test.beforeEach(async ({ request }) => {
   await request.post('http://127.0.0.1:5180/reset');
 });
@@ -46,6 +48,43 @@ async function nav(page: Page, name: string) {
   }
   await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
 }
+async function seedTasting(request: APIRequestContext, withProduct = false) {
+  const gateway = 'http://127.0.0.1:5180/dexter';
+  const headers = {
+    authorization: `Bearer ${cashier.id}`,
+    'x-device-id': cashier.deviceId,
+    'x-device-token': 'test-device-token',
+  };
+  const response = await request.get(`${gateway}/snapshot`, { headers });
+  const snapshot: Snapshot = await response.json();
+  const send = async (type: CommandType, payload: Record<string, unknown>) => {
+    const response = await request.post(`${gateway}/commands`, {
+      headers,
+      data: {
+        commands: [
+          cmd(type, payload, cashier, {
+            at: new Date().toISOString(),
+            branchId: snapshot.branch?.id,
+            configVersion: snapshot.state.settings[0].version,
+          }),
+        ],
+      },
+    });
+    const result = (await response.json()).results[0];
+    expect(result).toMatchObject({ status: 'accepted', referenceId: expect.any(String) });
+    return result.referenceId;
+  };
+  const orderId = withProduct
+    ? await send('create_order', {
+        lines: [{ flavorId: ids.flavor, sizeId: snapshot.state.sizes[0].id, quantity: 1 }],
+      })
+    : undefined;
+  await send('taste', { orderId, flavorId: ids.flavor });
+}
+async function openSeededOrder(page: Page) {
+  await page.getByRole('button', { name: 'Ver pedidos abiertos', exact: true }).click();
+  await page.locator('.open-order-picker').getByRole('button', { name: /#/ }).click();
+}
 test('el administrador conserva el botón de inventario inicial y puede agregar cantidades de nuevo', async ({
   page,
 }) => {
@@ -83,6 +122,8 @@ test('venta sencilla en tres acciones, conserva entregas y evita cobros repetido
   page,
 }) => {
   await enter(page);
+  await expect(page.getByRole('button', { name: /degustación/i })).toHaveCount(0);
+  await expect(page.getByText(/Las degustaciones descuentan/)).toHaveCount(0);
   const started = Date.now();
   await page.getByRole('button', { name: '16 ONZAS' }).click();
   await page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
@@ -193,12 +234,13 @@ test('agrupa la misma mezcla elegida en distinto orden y conserva separado un va
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('elimina una degustación de prueba y deja de mostrar el pedido como pendiente al recargar', async ({
+test('elimina una degustación existente y deja de mostrar el pedido como pendiente al recargar', async ({
   page,
+  request,
 }) => {
+  await seedTasting(request);
   await enter(page);
-  await page.getByRole('button', { name: '+1 degustación', exact: true }).click();
-  await page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
+  await openSeededOrder(page);
   await expect(page.locator('.tasting-list')).toContainText('1 degustación');
   await expect(page.getByRole('combobox', { name: 'Sabor de la degustación 1', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -221,12 +263,11 @@ test('elimina una degustación de prueba y deja de mostrar el pedido como pendie
 
 test('cambia y elimina el sabor de una degustación conservando los productos del pedido', async ({
   page,
+  request,
 }) => {
+  await seedTasting(request, true);
   await enter(page);
-  const flavor = page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' });
-  await flavor.click();
-  await page.getByRole('button', { name: '+1 degustación', exact: true }).click();
-  await flavor.click();
+  await openSeededOrder(page);
   const tasting = page.getByRole('combobox', { name: 'Sabor de la degustación 1', exact: true });
   await tasting.selectOption('30000000-0000-4000-8000-000000000002');
   await expect(tasting).toHaveValue('30000000-0000-4000-8000-000000000002');
@@ -252,11 +293,11 @@ test('cambia y elimina el sabor de una degustación conservando los productos de
   await expect(page.locator('tbody')).not.toContainText('degustaciones');
 });
 
-test('un aviso nuevo conserva su duración aunque exista un aviso anterior', async ({ page }) => {
+test('un aviso nuevo conserva su duración aunque exista un aviso anterior', async ({ page, request }) => {
+  await seedTasting(request);
   await page.clock.install();
   await enter(page);
-  await page.getByRole('button', { name: '+1 degustación', exact: true }).click();
-  await page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
+  await openSeededOrder(page);
   await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('Sincronizado');
   await page.clock.pauseAt(new Date(Date.now() + 5000));
   const tasting = page.getByRole('combobox', { name: 'Sabor de la degustación 1', exact: true });
@@ -275,10 +316,13 @@ test('un aviso nuevo conserva su duración aunque exista un aviso anterior', asy
   await expect(notice).toHaveCount(0);
 });
 
-test('corrige y elimina una degustación ya cerrada desde el detalle del historial', async ({ page }) => {
+test('corrige y elimina una degustación ya cerrada desde el detalle del historial', async ({
+  page,
+  request,
+}) => {
+  await seedTasting(request);
   await enter(page);
-  await page.getByRole('button', { name: '+1 degustación', exact: true }).click();
-  await page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
+  await openSeededOrder(page);
   await page.getByRole('button', { name: 'Cerrar solo degustaciones', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
   await nav(page, 'Pedidos');
@@ -299,12 +343,11 @@ test('corrige y elimina una degustación ya cerrada desde el detalle del histori
 
 test('cancela un pedido sin cobrar y conserva sus degustaciones fuera de los pendientes', async ({
   page,
+  request,
 }) => {
+  await seedTasting(request, true);
   await enter(page);
-  const flavor = page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' });
-  await flavor.click();
-  await page.getByRole('button', { name: '+1 degustación', exact: true }).click();
-  await flavor.click();
+  await openSeededOrder(page);
   await expect(page.locator('.tasting-list')).toContainText('1 degustación');
   await page.getByRole('button', { name: 'Cancelar pedido', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();

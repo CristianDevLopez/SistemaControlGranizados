@@ -164,15 +164,16 @@ export function Modal({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const d = ref.current;
     d?.showModal();
     return () => d?.close();
   }, []);
   return (
-    <dialog ref={ref} className="modal" onCancel={onClose}>
+    <dialog ref={ref} className="modal" aria-labelledby={titleId} onCancel={onClose}>
       <div className="modal-header">
-        <h2>{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         <button type="button" className="icon-button" aria-label="Cerrar" onClick={onClose}>
           <X size={20} />
         </button>

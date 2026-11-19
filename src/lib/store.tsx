@@ -101,6 +101,7 @@ const ONLINE_TYPES = new Set<CommandType>([
   'start_audit',
   'finish_audit',
   'approve_closing',
+  'record_employee_recovery',
 ]);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<Snapshot | null>(null),

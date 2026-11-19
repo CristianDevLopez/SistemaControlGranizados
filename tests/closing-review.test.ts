@@ -10,6 +10,7 @@ import {
 } from '../src/domain/engine.ts';
 import { admin, cashier, cmd, fixture, ids, NOW, order, run, support } from './support/fixture.ts';
 import type { State } from '../src/domain/types.ts';
+import { suggestedCupCharge } from '../src/domain/reconciliation.ts';
 
 const cup = `cup:${fixture().sizes[0].id}`;
 const account = `transfer:${ids.location}`;
@@ -52,6 +53,26 @@ it('un cuadre coincidente también espera aprobación y conserva su conteo origi
   expect(approved.counts[0]).toEqual(original);
   expect(approved.counts[1]).toMatchObject({ revisesId: original.id, by: admin.id, difference: 0 });
   expect(approved.stock).toHaveLength(0);
+});
+
+it('mantiene bloqueada la aprobación de un cierre ya archivado en producción', () => {
+  const state = close(fixture());
+  state.shifts[0].closingArchive = {
+    at: NOW,
+    by: admin.id,
+    notes: 'Conciliado junto con un cierre posterior',
+    replacementCountId: crypto.randomUUID(),
+  };
+  expect(() => run(state, 'approve_closing', approval(state), admin)).toThrow(/archivado/);
+});
+
+it('sugiere el mayor precio con licor por tamaño solo para vasos faltantes', () => {
+  const { sizes } = fixture();
+  const variant = { ...sizes[0], id: 'otra-presentacion', alcoholPrice: 15000 };
+  expect(suggestedCupCharge([...sizes, variant], { [cup]: 20, 'liquid:sabor': 202 }, { [cup]: 19 })).toBe(
+    15000,
+  );
+  expect(suggestedCupCharge(sizes, { [cup]: 20 }, { [cup]: 21 })).toBe(0);
 });
 
 it('ajusta faltantes y sobrantes una vez, con referencia al conteo, y la siguiente apertura usa el saldo corregido', () => {

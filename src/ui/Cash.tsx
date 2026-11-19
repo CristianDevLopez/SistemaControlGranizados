@@ -29,6 +29,7 @@ import {
   closingHasDifferences,
   type ClosingValues,
 } from './ClosingReview.tsx';
+import { EmployeeRecoveries } from './EmployeeRecoveries.tsx';
 import {
   Badge,
   Empty,
@@ -517,6 +518,7 @@ export function Cash() {
             })}
         </Panel>
       )}
+      {admin && <EmployeeRecoveries onReview={setReviewCount} />}
       {admin && (
         <div className="stats-grid">
           {state.locations.map((location) => (

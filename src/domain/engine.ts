@@ -2,6 +2,8 @@ import { initialState } from './initial.ts';
 import { canCorrectTastings, commandPermission, hasPermission, isShiftCashier } from './access.ts';
 import { lineTotal, quoteOrder } from './pricing.ts';
 import { hasAlcohol, liquidPortions, sameFlavors } from './flavors.ts';
+import { businessDay, rangeError } from './business-date.ts';
+import { recoveredAmount } from './reconciliation.ts';
 import {
   DomainError,
   type Actor,
@@ -1132,6 +1134,7 @@ export function applyCommand(
         'Turno',
       );
       assert(['closed', 'provisional'].includes(shift.status), 'Primero presenta el cierre.');
+      assert(!shift.closingArchive, 'Este cierre está archivado y no admite nuevos ajustes.');
       assert(shift.closingReview?.status !== 'approved', 'Este cierre ya fue aprobado.');
       const original = required(
         state.counts.find((c) => c.id === shift.closingCountId),
@@ -1245,6 +1248,39 @@ export function applyCommand(
         });
       }
       message = 'Cierre aprobado. Inventario ajustado y revisión conservada.';
+      break;
+    }
+    case 'record_employee_recovery': {
+      admin(actor);
+      const shift = required(
+        state.shifts.find((s) => s.id === p.shiftId),
+        'Turno',
+      );
+      const review = shift.closingReview;
+      assert(
+        review?.status === 'approved' && review.countId && (review.employeeCharge ?? 0) > 0,
+        'El turno debe tener un faltante aprobado para recuperar.',
+      );
+      assert(p.confirmed === true, 'Confirma que el descuento ya fue aplicado.');
+      const recovered = recoveredAmount(review);
+      assert(
+        p.expectedRecovered === recovered,
+        'Ya se registró una recuperación. Actualiza el saldo antes de continuar.',
+        'RECOVERY_CHANGED',
+      );
+      const amount = money(p.amount, 'Valor descontado');
+      assert(amount <= review.employeeCharge! - recovered, 'El descuento supera el saldo pendiente.');
+      const paidOn = p.paidOn;
+      assert(
+        typeof paidOn === 'string' &&
+          !rangeError({ from: paidOn, to: paidOn }) &&
+          paidOn >= businessDay(shift.closedAt ?? shift.requestedAt) &&
+          paidOn <= businessDay(receivedAt),
+        'La fecha del descuento debe estar entre el cierre y hoy.',
+      );
+      ref = makeId('employee-recovery');
+      (review.recoveries ??= []).push({ id: ref, by: actor.id, amount, paidOn, at: receivedAt });
+      message = 'Descuento confirmado. Recuperación por merma registrada.';
       break;
     }
     case 'create_order': {
@@ -2610,7 +2646,8 @@ export function redactState(full: State, actor: Actor): State {
     } = state.settings[0].auditRequest;
     state.settings[0].auditRequest = request;
   }
-  for (const shift of state.shifts)
+  for (const shift of state.shifts) {
+    if (shift.closingReview) shift.closingReview = { status: shift.closingReview.status };
     shift.paymentAccountIds = [
       ...new Set([
         ...(shift.paymentAccountIds ?? []),
@@ -2619,8 +2656,9 @@ export function redactState(full: State, actor: Actor): State {
           .map((p) => p.accountId!),
       ]),
     ];
+  }
   state.counts = state.counts
-    .filter((x) => x.by === actor.id)
+    .filter((x) => x.by === actor.id && !x.revisesId)
     .map(
       ({
         expectedCash: _,
