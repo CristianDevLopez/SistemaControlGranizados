@@ -109,6 +109,34 @@ it('la revisión solo corresponde a un administrador conectado', () => {
   ).toThrow(/No hay faltantes/);
 });
 
+it('un cierre anterior conserva su diferencia sin duplicar el ajuste de un arqueo posterior', () => {
+  const initial = run(fixture(), 'open_package', { sizeId: fixture().sizes[0].id }).state;
+  const requested = run(initial, 'start_audit', { shiftId: ids.shift, items: [cup] }, admin).state;
+  const audited = run(requested, 'finish_audit', {
+    shiftId: ids.shift,
+    auditId: requested.settings[0].auditId,
+    items: { [cup]: 16 },
+  }).state;
+  const closed = close(audited, {
+    items: { ...closingPreview(audited, ids.shift).expectedItems, [cup]: 16 },
+  });
+  const adjusted = run(
+    closed,
+    'adjust_count_inventory',
+    {
+      countId: audited.counts[0].id,
+      items: { [cup]: 16 },
+      expectedItems: { [cup]: 20 },
+      notes: 'Conteo físico verificado para el siguiente turno.',
+      confirmed: true,
+    },
+    admin,
+  ).state;
+  const approved = run(adjusted, 'approve_closing', approval(adjusted), admin).state;
+  expect(stockBalances(approved)[cup]).toBe(16);
+  expect(approved.counts.at(-1)?.differences?.[cup]).toBe(-4);
+});
+
 it('permite corregir un conteo y una reserva sobrestimados sin borrar el original ni generar nómina', () => {
   const state = close(fixture());
   const approved = run(

@@ -426,7 +426,7 @@ Las diferencias de conteo se explican desde **Turno y caja → Conteos registrad
 
 1. Un administrador abre **Turno y caja → Iniciar arqueo sorpresa** con un turno abierto, selecciona efectivo, cuentas de pago y/o artículos de inventario, y pulsa **Solicitar conteo**. Debe seleccionar al menos un ítem.
 2. La aplicación bloquea pedidos, entregas y cobros mientras dura el arqueo.
-3. El responsable del turno abre **Turno y caja → Presentar arqueo y reanudar** e ingresa únicamente las cantidades e importes solicitados, sin ver valores esperados. Los líquidos seleccionados se miden en onzas; los demás artículos se cuentan en unidades enteras. Si la atención continúa en papel, identifica cada folio y conserva el dinero posterior separado.
+3. El responsable del turno abre **Turno y caja → Presentar arqueo y reanudar** e ingresa únicamente las cantidades e importes solicitados, sin ver valores esperados. Los insumos físicos se cuentan en unidades enteras. Si la atención continúa en papel, identifica cada folio y conserva el dinero posterior separado.
 4. Al presentar el conteo con conexión se reanuda la operación. Solo el usuario responsable del turno puede presentarlo, incluso si quien lo solicita es otro administrador.
 5. El administrador abre **Conteos registrados → Revisar conteo** para validar cantidades, importes y diferencias contra los valores guardados al iniciar el arqueo. Se conservan quién lo solicitó, quién contó y las horas de ambos registros.
 6. Incorpora después las operaciones de papel desde Pedidos con folio, hora original y foto, sin duplicar ventas que ya estén registradas.

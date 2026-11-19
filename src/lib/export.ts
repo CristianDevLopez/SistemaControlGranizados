@@ -259,6 +259,7 @@ const schema: Record<string, string[]> = {
     'action',
     'referenceId',
     'detail',
+    'inventoryAdjustment',
   ],
   notifications: ['id', 'channel', 'text', 'at', 'status', 'attempts', 'lastError'],
   packages: ['id', 'sizeId', 'units', 'openedAt', 'by', 'closedAt', 'priorDifference'],

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { closingPreview } from '../domain/engine.ts';
+import { adjustedClosingArticles, closingPreview } from '../domain/engine.ts';
 import { suggestedCupCharge } from '../domain/reconciliation.ts';
 import type { ClosingPreview, Count } from '../domain/types.ts';
 import { useApp } from '../lib/store.tsx';
@@ -92,6 +92,9 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
   const [employeeCharge, setEmployeeCharge] = useState<string | null>(null);
   const suggestedCharge = suggestedCupCharge(state.sizes, preview.expectedItems, values.items);
   const labels = count.itemLabels ?? {};
+  const alreadyAdjusted = [...adjustedClosingArticles(state, count)]
+    .filter((key) => Object.hasOwn(preview.expectedItems, key))
+    .map((key) => labels[key] ?? key);
   const fields: Field[] = [
     {
       name: 'retained',
@@ -150,6 +153,9 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
         conteo al momento del cierre. El original se conserva. Al aprobar, las diferencias de vasos ajustan el
         inventario.
       </p>
+      {alreadyAdjusted.length > 0 && (
+        <p>Un conteo posterior ya ajustó estos artículos: {alreadyAdjusted.join(', ')}.</p>
+      )}
       <ClosingComparison values={values} preview={preview} labels={labels} />
       <button
         className="text-button"

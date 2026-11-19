@@ -40,6 +40,15 @@ async function enterCashier(page: Page) {
   await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
 }
 
+async function enterAdmin(page: Page) {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Administrador', exact: true }).click();
+  await page.getByLabel('Correo electrónico').fill('admin@test.invalid');
+  await page.getByLabel('Contraseña', { exact: true }).fill('test-password-only');
+  await page.getByRole('button', { name: 'Continuar', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
+}
+
 test('el admin selecciona ítems, el cajero cuenta a ciegas y el admin revisa el corte original', async ({
   page,
   context,
@@ -48,12 +57,7 @@ test('el admin selecciona ítems, el cajero cuenta a ciegas y el admin revisa el
 }, testInfo) => {
   test.setTimeout(60000);
   await request.post('http://127.0.0.1:5180/reset');
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Administrador', exact: true }).click();
-  await page.getByLabel('Correo electrónico').fill('admin@test.invalid');
-  await page.getByLabel('Contraseña', { exact: true }).fill('test-password-only');
-  await page.getByRole('button', { name: 'Continuar', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
+  await enterAdmin(page);
   await nav(page, 'Turno y caja');
   await page.getByRole('button', { name: 'Iniciar arqueo sorpresa', exact: true }).click();
   const setup = page.getByRole('dialog');
@@ -117,4 +121,48 @@ test('el admin selecciona ítems, el cajero cuenta a ciegas y el admin revisa el
   } finally {
     await cashierContext.close();
   }
+});
+
+test('programa una apertura completa y permite ajustar el inventario desde el conteo presentado', async ({
+  page,
+  request,
+}) => {
+  await request.post('http://127.0.0.1:5180/reset', { data: { emptyCash: true } });
+  await enterAdmin(page);
+  await nav(page, 'Turno y caja');
+  await page.getByRole('button', { name: 'Programar arqueo de apertura' }).click();
+  const dialog = page.getByRole('dialog');
+  const mode = dialog.getByLabel('Tipo de arqueo');
+  await mode.selectOption('custom');
+  await expect(dialog.getByRole('checkbox', { name: /Bolsas ·/ }).first()).toBeVisible();
+  await expect(dialog.getByRole('checkbox', { name: /Líquido ·/ })).toHaveCount(0);
+  await mode.selectOption('full');
+  await dialog.getByRole('button', { name: 'Guardar programación' }).click();
+  await expect(page.getByText('Próxima apertura · Arqueo completo')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Iniciar caja', exact: true }).click();
+  await dialog.getByLabel('Base inicial', { exact: false }).fill('12.000');
+  await dialog.getByRole('button', { name: 'Guardar', exact: true }).click();
+  await expect(dialog.getByRole('heading', { name: 'Arqueo de apertura' })).toBeVisible();
+  await expect(dialog.getByRole('spinbutton', { name: /Líquido ·/ })).toHaveCount(0);
+  await dialog.getByLabel('Efectivo contado *', { exact: true }).fill('12.000');
+  await dialog.getByLabel('Saldo de apertura · Cuenta de prueba *', { exact: true }).fill('0');
+  for (const field of await dialog.getByRole('spinbutton').all()) await field.fill('0');
+  await dialog.getByRole('spinbutton', { name: 'Copitas de degustación' }).fill('3');
+  await dialog.getByRole('button', { name: 'Registrar conteo' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Programar arqueo de apertura' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cerrar y contar caja' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Revisar conteo' }).click();
+  await dialog.getByRole('button', { name: 'Ajustar inventario al conteo' }).click();
+  await expect(dialog.getByRole('spinbutton', { name: /Copitas de degustación/ })).toHaveValue('3');
+  await dialog.getByLabel('Motivo del ajuste').fill('Inventario de entrega verificado por los socios.');
+  await dialog.getByLabel('Verifiqué las cantidades físicas actuales').check();
+  await dialog.getByRole('button', { name: 'Confirmar ajuste de inventario' }).click();
+  await expect(dialog).toContainText('Inventario ajustado por Administrador de prueba');
+  await expect(dialog.getByRole('row').filter({ hasText: 'Copitas de degustación' })).toContainText(
+    '0 unidades',
+  );
+  await expect(dialog.getByRole('button', { name: 'Ajustar inventario al conteo' })).toHaveCount(0);
 });

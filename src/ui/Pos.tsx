@@ -523,8 +523,9 @@ export function Pos() {
       </div>
       {state.settings[0].auditId && (
         <div className="notice warning">
-          Arqueo en curso. Usa la planilla manual y conserva por separado el efectivo recibido después del
-          corte.
+          {state.settings[0].auditRequest?.opening
+            ? 'Presenta el arqueo de apertura en Turno y caja antes de vender.'
+            : 'Arqueo en curso. Usa la planilla manual y conserva por separado el efectivo recibido después del corte.'}
         </div>
       )}
       {!app.online && (

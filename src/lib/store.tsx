@@ -100,6 +100,7 @@ const ONLINE_TYPES = new Set<CommandType>([
   'request_courtesy_excess',
   'start_audit',
   'finish_audit',
+  'adjust_count_inventory',
   'approve_closing',
   'record_employee_recovery',
 ]);
