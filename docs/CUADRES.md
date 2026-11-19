@@ -11,6 +11,12 @@ Publicado el 14 de noviembre de 2026: migraciones de permisos y revisión de cie
 
 Todo cierre espera aprobación administrativa, incluso si coincide. Sin conexión se permite enviar un cierre provisional, indicando que todavía no se verificaron los saldos; se compara al sincronizar. El turno queda bloqueado para el trabajador después del envío. Los arqueos sorpresa mantienen su conteo ciego.
 
+## Arqueo general y próxima apertura
+
+En **Turno y caja**, un administrador puede elegir **Iniciar arqueo sorpresa** en el turno abierto o **Programar arqueo de apertura** para el siguiente turno del local. Los modos son **Completo**, **Solo efectivo** y **Personalizado**. El arqueo completo verifica efectivo, cuentas de transferencia y existencias físicas como bolsas selladas, paquetes y vasos sueltos. El líquido de la máquina se omite.
+
+Para entregar el inventario verificado a un nuevo responsable, abre **Conteos registrados → Revisar conteo → Ajustar inventario al conteo**. Confirma las existencias físicas actuales y registra el motivo. El ajuste conserva el conteo y sus diferencias originales. Es un movimiento de inventario, independiente del efectivo y de los faltantes reportados al personal.
+
 ## Administrador
 
 En **Turno y caja → Cierres pendientes de aprobación**, abre **Revisar y aprobar cierre**. Reconfirma los importes y vasos del momento del cierre, revisa los comprobantes y documenta las correcciones. Los cambios de ventas o gastos siguen sus operaciones administrativas existentes; corregir un importe contado no crea ni modifica un pago.

@@ -731,12 +731,16 @@ export function createGateway(options: GatewayOptions) {
             const rejectedRecovery =
               command.type === 'record_employee_recovery' &&
               (error instanceof DomainError || e.code === '42501');
+            const rejectedAudit =
+              ['start_audit', 'finish_audit', 'adjust_count_inventory'].includes(command.type) &&
+              error instanceof DomainError &&
+              ['VALIDATION', 'FORBIDDEN', 'SHIFT_CLOSED'].includes(error.code);
             results.push({
               id: command.id,
               status: 'conflict',
               message: e.message,
               code: e.code ?? 'VALIDATION',
-              ...(rejectedRecovery ? { finalRejection: true } : {}),
+              ...(rejectedRecovery || rejectedAudit ? { finalRejection: true } : {}),
             });
             break;
           }

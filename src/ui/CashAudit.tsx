@@ -1,37 +1,60 @@
 import { useState } from 'react';
-import { articles, closingPaymentMethods } from '../domain/engine.ts';
-import type { Count, Shift } from '../domain/types.ts';
+import {
+  adjustableCountArticles,
+  articles,
+  closingPaymentMethods,
+  countInventoryAdjustment,
+  physicalArticles,
+  stockBalances,
+} from '../domain/engine.ts';
+import type { AuditMode, Count, Shift } from '../domain/types.ts';
 import { useApp } from '../lib/store.tsx';
-import { Modal, date, money } from './components.tsx';
+import { FieldsForm, Modal, date, money } from './components.tsx';
 import { transferAccountName } from './payment-labels.ts';
 
-export function AuditSetupDialog({ shift, onClose }: { shift: Shift; onClose: () => void }) {
+export const auditModeLabels: Record<AuditMode, string> = {
+  full: 'Completo',
+  cash: 'Solo efectivo',
+  custom: 'Personalizado',
+};
+
+export function AuditSetupDialog({ shift, onClose }: { shift?: Shift; onClose: () => void }) {
   const app = useApp(),
     { state, profiles } = app.data!;
+  const schedule = shift ? undefined : state.settings[0].nextOpeningAudit;
+  const [mode, setMode] = useState<AuditMode>(schedule?.mode ?? (shift ? 'custom' : 'full'));
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   return (
-    <Modal title="Definir arqueo sorpresa" onClose={onClose}>
+    <Modal title={shift ? 'Definir arqueo sorpresa' : 'Programar arqueo de apertura'} onClose={onClose}>
       <p className="modal-intro">
-        Selecciona qué debe contar{' '}
-        {profiles.find((x) => x.id === shift.cashierId)?.name ?? 'el responsable del turno'}. Al iniciar se
-        guardan los valores esperados del corte y se pausa la operación hasta que presente el conteo.
+        {shift
+          ? `Se pausará la operación hasta que ${profiles.find((x) => x.id === shift.cashierId)?.name ?? 'el responsable del turno'} presente el conteo.`
+          : 'Se aplicará una sola vez en la próxima apertura de este local. Para comenzar a operar, el responsable debe presentar el conteo con conexión.'}
       </p>
       <form
         className="fields-form"
         onSubmit={async (e) => {
           e.preventDefault();
-          const form = new FormData(e.currentTarget);
+          const form = new FormData(e.currentTarget, (e.nativeEvent as SubmitEvent).submitter);
+          const cancel = form.get('action') === 'cancel';
           setBusy(true);
           setError('');
           try {
             await app.run('start_audit', {
-              shiftId: shift.id,
+              ...(shift ? { shiftId: shift.id } : { when: 'next_opening', cancel }),
+              mode,
               cash: form.has('cash'),
               items: form.getAll('items').map(String),
               payments: form.getAll('payments').map(String),
             });
-            app.toast('Arqueo solicitado. El responsable del turno debe ingresar las cantidades.');
+            app.toast(
+              shift
+                ? 'Arqueo solicitado. El responsable del turno debe ingresar las cantidades.'
+                : cancel
+                  ? 'Programación cancelada.'
+                  : 'Arqueo programado para la próxima apertura.',
+            );
             onClose();
           } catch (error) {
             setError((error as Error).message);
@@ -40,39 +63,74 @@ export function AuditSetupDialog({ shift, onClose }: { shift: Shift; onClose: ()
           }
         }}
       >
-        <fieldset>
-          <legend>Dinero</legend>
-          <label className="check-inline">
-            <input type="checkbox" name="cash" defaultChecked />
-            Efectivo
-          </label>
-          {closingPaymentMethods(state, shift.id).map(({ id, account }) => (
-            <label className="check-inline" key={id}>
-              <input type="checkbox" name="payments" value={id} />
-              Transferencias · {transferAccountName(account)}
-            </label>
-          ))}
-        </fieldset>
-        <fieldset>
-          <legend>Inventario</legend>
-          {articles(state).map((article) => (
-            <label className="check-inline" key={article.id}>
-              <input type="checkbox" name="items" value={article.id} />
-              {article.name} ({article.unit})
-            </label>
-          ))}
-        </fieldset>
+        <label className="field">
+          <span>Tipo de arqueo</span>
+          <select value={mode} onChange={(event) => setMode(event.target.value as AuditMode)}>
+            {Object.entries(auditModeLabels).map(([value, label]) => (
+              <option value={value} key={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          {mode === 'full' && (
+            <small>
+              Incluye efectivo, cuentas de transferencia, bolsas selladas, paquetes de vasos, vasos sueltos y
+              demás insumos físicos.
+            </small>
+          )}
+        </label>
+        {mode === 'custom' && (
+          <>
+            <fieldset>
+              <legend>Dinero</legend>
+              <label className="check-inline">
+                <input type="checkbox" name="cash" defaultChecked={schedule?.cash ?? true} />
+                Efectivo
+              </label>
+              {closingPaymentMethods(state, shift?.id).map(({ id, account }) => (
+                <label className="check-inline" key={id}>
+                  <input
+                    type="checkbox"
+                    name="payments"
+                    value={id}
+                    defaultChecked={schedule?.payments.includes(id)}
+                  />
+                  {shift ? 'Transferencias' : 'Saldo de apertura'} · {transferAccountName(account)}
+                </label>
+              ))}
+            </fieldset>
+            <fieldset>
+              <legend>Inventario físico</legend>
+              {physicalArticles(state).map((article) => (
+                <label className="check-inline" key={article.id}>
+                  <input
+                    type="checkbox"
+                    name="items"
+                    value={article.id}
+                    defaultChecked={schedule?.items.includes(article.id)}
+                  />
+                  {article.name} ({article.unit})
+                </label>
+              ))}
+            </fieldset>
+          </>
+        )}
         {error && (
           <div className="form-error" role="alert">
             {error}
           </div>
         )}
         <div className="form-actions">
+          {schedule && (
+            <button className="button secondary" name="action" value="cancel" disabled={busy}>
+              Quitar programación
+            </button>
+          )}
           <button type="button" className="button secondary" onClick={onClose}>
-            Cancelar
+            Volver
           </button>
           <button className="button primary" disabled={busy}>
-            {busy ? 'Solicitando…' : 'Solicitar conteo'}
+            {busy ? 'Guardando…' : shift ? 'Solicitar conteo' : 'Guardar programación'}
           </button>
         </div>
       </form>
@@ -81,7 +139,12 @@ export function AuditSetupDialog({ shift, onClose }: { shift: Shift; onClose: ()
 }
 
 export function CountReviewDialog({ count, onClose }: { count: Count; onClose: () => void }) {
-  const { state, profiles } = useApp().data!;
+  const app = useApp();
+  const { state, profiles } = app.data!;
+  const [adjusting, setAdjusting] = useState<Record<string, number> | null>(null);
+  const adjustable = adjustableCountArticles(state, count);
+  const adjustmentEvent = countInventoryAdjustment(state, count.id);
+  const adjustment = adjustmentEvent?.inventoryAdjustment;
   const label = (id?: string) => profiles.find((p) => p.id === id)?.name ?? 'Sin registro';
   const rows = [
     ...(count.cash === undefined
@@ -98,7 +161,7 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
         ]),
     ...Object.entries(count.payments ?? {}).map(([key, amount]) => ({
       key,
-      name: `Transferencias · ${count.paymentLabels?.[key] ?? key}`,
+      name: `${count.kind === 'opening' ? 'Saldo de apertura' : 'Transferencias'} · ${count.paymentLabels?.[key] ?? key}`,
       counted: money(amount),
       expected: money(count.expectedPayments?.[key] ?? 0),
       difference: count.paymentDifferences?.[key] ?? 0,
@@ -117,6 +180,49 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
       };
     }),
   ];
+  if (adjusting && !adjustment) {
+    return (
+      <Modal title="Ajustar inventario al conteo" onClose={() => setAdjusting(null)}>
+        <p className="modal-intro">
+          Los valores iniciales vienen del conteo del {date(count.at)}. Si hubo ventas, entradas o mermas
+          desde entonces, actualiza las cantidades tras verificar las existencias de hoy.
+        </p>
+        <FieldsForm
+          fields={[
+            ...adjustable.map(({ id, name, unit }) => ({
+              name: id,
+              label: `${name} (${unit}) · registrado ${adjusting[id] ?? 0}`,
+              type: 'number' as const,
+              value: count.items[id],
+              min: 0,
+              step: '1',
+              required: true,
+            })),
+            { name: 'notes', label: 'Motivo del ajuste', type: 'textarea', required: true },
+            {
+              name: 'confirmed',
+              label: 'Verifiqué las cantidades físicas actuales',
+              type: 'checkbox',
+              required: true,
+            },
+          ]}
+          submit="Confirmar ajuste de inventario"
+          onCancel={() => setAdjusting(null)}
+          onSubmit={async ({ notes, confirmed, ...items }) => {
+            await app.run('adjust_count_inventory', {
+              countId: count.id,
+              items,
+              notes,
+              confirmed,
+              expectedItems: adjusting,
+            });
+            app.toast('Inventario ajustado. Se conservó el conteo original.');
+            setAdjusting(null);
+          }}
+        />
+      </Modal>
+    );
+  }
   return (
     <Modal
       title={count.kind === 'audit' ? 'Revisión del arqueo sorpresa' : 'Revisión del conteo'}
@@ -126,6 +232,9 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
         Contado por {label(count.by)} · {date(count.at)}.
         {count.requestedBy && ` Solicitado por ${label(count.requestedBy)} · ${date(count.requestedAt)}.`}
         {count.kind === 'audit' && ' Los valores esperados corresponden al corte guardado al solicitarlo.'}
+        {count.kind === 'opening' &&
+          count.auditId &&
+          ' Los valores esperados corresponden al corte de apertura.'}
       </p>
       <div className="table-wrap">
         <table>
@@ -141,7 +250,12 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
             {rows.map((row) => (
               <tr key={row.key}>
                 <td>{row.name}</td>
-                <td>{row.counted}</td>
+                <td>
+                  {row.counted}
+                  {adjustment?.items[row.key] !== undefined && (
+                    <small>Existencia confirmada: {adjustment.items[row.key]}</small>
+                  )}
+                </td>
                 <td>{row.expected}</td>
                 <td className={row.difference ? 'negative' : ''}>
                   {row.monetary ? money(row.difference) : row.difference}
@@ -152,6 +266,12 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
         </table>
       </div>
       {count.notes && <p>Novedades: {count.notes}</p>}
+      {adjustmentEvent && adjustment && (
+        <p>
+          Inventario ajustado por {label(adjustmentEvent.by)} · {date(adjustmentEvent.receivedAt)}.{' '}
+          {adjustment.notes}
+        </p>
+      )}
       {count.revisesId && (
         <p>
           Revisión administrativa; se conserva el conteo original. Faltante reportado al empleado:{' '}
@@ -163,6 +283,18 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
         </p>
       )}
       <div className="form-actions">
+        {adjustable.length > 0 && !adjustment && (
+          <button
+            className="button primary"
+            disabled={!app.online || !!state.settings[0].auditId}
+            onClick={() => {
+              const balances = stockBalances(state);
+              setAdjusting(Object.fromEntries(adjustable.map(({ id }) => [id, balances[id] ?? 0])));
+            }}
+          >
+            Ajustar inventario al conteo
+          </button>
+        )}
         <button className="button secondary" onClick={onClose}>
           Cerrar revisión
         </button>

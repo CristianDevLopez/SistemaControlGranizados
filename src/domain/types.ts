@@ -58,15 +58,25 @@ export interface Settings {
   inventoryInitialized?: boolean;
   auditId?: ID;
   auditRequest?: AuditRequest;
+  nextOpeningAudit?: ScheduledOpeningAudit;
 }
-export interface AuditRequest {
+export type AuditMode = 'full' | 'cash' | 'custom';
+export interface AuditSelection {
+  cash: boolean;
+  items: string[];
+  payments: string[];
+}
+export interface ScheduledOpeningAudit extends AuditSelection {
+  mode: AuditMode;
+  by: ID;
+  at: string;
+}
+export interface AuditRequest extends AuditSelection {
   id: ID;
   shiftId: ID;
   by: ID;
   at: string;
-  cash: boolean;
-  items: string[];
-  payments: string[];
+  opening?: boolean;
   expectedCash?: number;
   expectedItems?: Record<string, number>;
   expectedPayments?: Record<string, number>;
@@ -406,6 +416,11 @@ export interface Audit {
   action: string;
   referenceId?: ID;
   detail: string;
+  inventoryAdjustment?: {
+    notes: string;
+    items: Record<string, number>;
+    closingCountIds: ID[];
+  };
 }
 export interface Notification {
   id: ID;
@@ -525,6 +540,7 @@ export type CommandType =
   | 'record_employee_recovery'
   | 'start_audit'
   | 'finish_audit'
+  | 'adjust_count_inventory'
   | 'create_order'
   | 'update_order'
   | 'taste'

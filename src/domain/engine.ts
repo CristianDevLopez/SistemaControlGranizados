@@ -8,6 +8,7 @@ import {
   DomainError,
   type Actor,
   type Audit,
+  type AuditSelection,
   type Command,
   type ClosingPreview,
   type Count,
@@ -22,6 +23,7 @@ import {
   type Request,
   type Result,
   type ShipmentLine,
+  type Shift,
   type Size,
   type State,
   type Transfer,
@@ -118,11 +120,31 @@ export function articles(state: State): { id: string; name: string; unit: string
   ];
 }
 
+export function physicalArticles(state: State) {
+  return articles(state).filter((x) => !x.id.startsWith('liquid:'));
+}
+
 export function countArticles(state: State, kind: Count['kind']) {
-  if (kind === 'audit' && state.settings[0].auditRequest)
-    return articles(state).filter((x) => state.settings[0].auditRequest!.items.includes(x.id));
-  return articles(state).filter((x) =>
-    kind === 'closing' ? x.id.startsWith('cup:') : !x.id.startsWith('liquid:'),
+  const list = physicalArticles(state);
+  const request = state.settings[0].auditRequest;
+  if (kind === 'audit' && request) return list.filter((x) => request.items.includes(x.id));
+  return kind === 'closing' ? list.filter((x) => x.id.startsWith('cup:')) : list;
+}
+
+export function adjustableCountArticles(state: State, count: Count) {
+  if (count.kind !== 'audit' && count.kind !== 'opening') return [];
+  return physicalArticles(state).filter(({ id }) => Object.hasOwn(count.items, id));
+}
+
+export function countInventoryAdjustment(state: State, countId: ID): Audit | undefined {
+  return state.audit.find((a) => a.referenceId === countId && a.inventoryAdjustment);
+}
+
+export function adjustedClosingArticles(state: State, closing: Count): Set<string> {
+  return new Set(
+    state.audit.flatMap(({ inventoryAdjustment: adjustment }) =>
+      adjustment?.closingCountIds.includes(closing.id) ? Object.keys(adjustment.items) : [],
+    ),
   );
 }
 
@@ -135,7 +157,7 @@ export function countPaymentMethods(state: State, shiftId: ID, kind: Count['kind
 }
 
 /** Cuentas configuradas o usadas en el turno, aunque después se hayan desactivado. */
-export function closingPaymentMethods(state: State, shiftId: ID) {
+export function closingPaymentMethods(state: State, shiftId?: ID) {
   const used = new Set(state.shifts.find((s) => s.id === shiftId)?.paymentAccountIds ?? []);
   for (const p of state.payments)
     if (p.shiftId === shiftId && paymentMethod(p) === 'transfer' && p.accountId) used.add(p.accountId);
@@ -528,9 +550,51 @@ export function applyCommand(
       );
   }
   const makeId = (tag: string) => eventId(command, tag);
+  const startAudit = (shift: Shift, selection: AuditSelection, by: ID, opening = false) => {
+    settings.auditId = makeId('audit-cut');
+    const balances = stockBalances(state);
+    const totals = opening ? {} : salesByMethod(state, shift.id).byAccount;
+    settings.auditRequest = {
+      id: settings.auditId,
+      shiftId: shift.id,
+      by,
+      at: command.at,
+      ...(opening ? { opening: true } : {}),
+      ...selection,
+      expectedCash: selection.cash
+        ? opening
+          ? shift.base
+          : cashExpected(state, shift.id, command.at)
+        : undefined,
+      expectedItems: Object.fromEntries(selection.items.map((key) => [key, balances[key] ?? 0])),
+      expectedPayments: Object.fromEntries(
+        selection.payments.map((key) => {
+          const accountId = key.slice('transfer:'.length);
+          return [key, opening ? locationBalance(state, accountId) : (totals[accountId] ?? 0)];
+        }),
+      ),
+    };
+  };
+  const activateOpeningAudit = (shift: Shift) => {
+    const scheduled = settings.nextOpeningAudit;
+    if (!scheduled) return;
+    const items = physicalArticles(state)
+      .map((x) => x.id)
+      .filter((key) => scheduled.mode === 'full' || scheduled.items.includes(key));
+    const payments =
+      scheduled.mode === 'full'
+        ? closingPaymentMethods(state, shift.id).map((x) => x.id)
+        : scheduled.payments.filter((key) =>
+            state.locations.some((x) => x.type === 'bank' && key === `transfer:${x.id}`),
+          );
+    const cash = scheduled.cash || (!items.length && !payments.length);
+    startAudit(shift, { cash, items, payments }, scheduled.by, true);
+    settings.nextOpeningAudit = undefined;
+  };
   let ref: string | undefined,
     message = 'Registro guardado.',
     review = false;
+  let inventoryAdjustment: Audit['inventoryAdjustment'];
   const notify = (channel: State['notifications'][number]['channel'], value: string) =>
     state.notifications.push({
       id: makeId(`notify:${channel}`),
@@ -843,7 +907,13 @@ export function applyCommand(
       admin(actor);
       for (const [article, value] of Object.entries(p.items ?? {})) {
         const amount = quantity(value, 'Inventario inicial', 1000000, true);
-        if (amount) movement(article, amount, 'initial', makeId('initial'), article);
+        if (amount) {
+          assert(
+            !article.startsWith('liquid:'),
+            'El líquido en máquina no se cuenta en el inventario físico.',
+          );
+          movement(article, amount, 'initial', makeId('initial'), article);
+        }
       }
       settings.inventoryInitialized = true;
       ref = makeId('initial');
@@ -863,7 +933,7 @@ export function applyCommand(
         'Ya existe un turno abierto, solicitado o pendiente de sincronizar.',
       );
       ref = makeId('shift');
-      state.shifts.push({
+      const shift: Shift = {
         id: ref,
         cashierId: actor.id,
         deviceId: actor.deviceId,
@@ -872,7 +942,9 @@ export function applyCommand(
         ...(directOpening ? { openedAt: command.at, authorizedBy: actor.id } : {}),
         base: openingExpectedCash(state) ?? (directOpening ? money(p.base ?? 0, 'Base', true) : 0),
         openingSkipped: false,
-      });
+      };
+      state.shifts.push(shift);
+      if (directOpening) activateOpeningAudit(shift);
       break;
     }
     case 'authorize_shift': {
@@ -887,6 +959,7 @@ export function applyCommand(
       shift.authorizedBy = offline ? actor.offlineAdminId : actor.id;
       shift.openedAt = command.at;
       shift.status = 'open';
+      activateOpeningAudit(shift);
       if (offline) {
         shift.offlineAuthorizedBy = actor.offlineAdminId;
         review = true;
@@ -896,11 +969,22 @@ export function applyCommand(
     }
     case 'start_audit': {
       admin(actor);
-      assert(!settings.auditId, 'Ya existe un arqueo en curso.');
-      const shift = required(
-        state.shifts.find((x) => x.id === p.shiftId && x.status === 'open'),
-        'Turno abierto',
-      );
+      assert(p.when === undefined || p.when === 'next_opening', 'Momento de arqueo inválido.');
+      const scheduled = p.when === 'next_opening';
+      if (scheduled && p.cancel === true) {
+        settings.nextOpeningAudit = undefined;
+        ref = settings.id;
+        break;
+      }
+      if (!scheduled) assert(!settings.auditId, 'Ya existe un arqueo en curso.');
+      const shift = scheduled
+        ? undefined
+        : required(
+            state.shifts.find((x) => x.id === p.shiftId && x.status === 'open'),
+            'Turno abierto',
+          );
+      const mode = p.mode ?? 'custom';
+      assert(mode === 'full' || mode === 'cash' || mode === 'custom', 'Tipo de arqueo inválido.');
       const selected = (value: unknown, allowed: string[], label: string): string[] => {
         assert(
           Array.isArray(value) && value.every((x) => typeof x === 'string' && allowed.includes(x)),
@@ -909,40 +993,30 @@ export function applyCommand(
         assert(new Set(value).size === value.length, `No repitas ${label.toLowerCase()}.`);
         return value;
       };
-      const items = selected(
-        p.items ?? [],
-        articles(state).map((x) => x.id),
-        'Artículos',
-      );
-      const methods = closingPaymentMethods(state, shift.id);
-      const payments = selected(
-        p.payments ?? [],
-        methods.map((x) => x.id),
-        'Medios de pago',
-      );
+      const allowedItems = physicalArticles(state).map((x) => x.id);
+      const allowedPayments = closingPaymentMethods(state, shift?.id).map((x) => x.id);
+      const items =
+        mode === 'full'
+          ? allowedItems
+          : mode === 'custom'
+            ? selected(p.items ?? [], allowedItems, 'Artículos')
+            : [];
+      const payments =
+        mode === 'full'
+          ? allowedPayments
+          : mode === 'custom'
+            ? selected(p.payments ?? [], allowedPayments, 'Medios de pago')
+            : [];
       assert(p.cash === undefined || typeof p.cash === 'boolean', 'Selección de efectivo inválida.');
-      const cash = p.cash === true;
+      const cash = mode !== 'custom' || p.cash === true;
       assert(cash || items.length || payments.length, 'Selecciona al menos un ítem para contar.');
-      settings.auditId = makeId('audit-cut');
-      const balances = stockBalances(state),
-        totals = salesByMethod(state, shift.id).byAccount;
-      settings.auditRequest = {
-        id: settings.auditId,
-        shiftId: shift.id,
-        by: actor.id,
-        at: command.at,
-        cash,
-        items,
-        payments,
-        expectedCash: cash ? cashExpected(state, shift.id, command.at) : undefined,
-        expectedItems: Object.fromEntries(items.map((key) => [key, balances[key] ?? 0])),
-        expectedPayments: Object.fromEntries(
-          methods
-            .filter((x) => payments.includes(x.id))
-            .map(({ id: key, account }) => [key, totals[account.id] ?? 0]),
-        ),
-      };
-      ref = settings.auditId;
+      if (shift) {
+        startAudit(shift, { cash, items, payments }, actor.id);
+        ref = settings.auditId;
+      } else {
+        settings.nextOpeningAudit = { mode, cash, items, payments, by: actor.id, at: command.at };
+        ref = settings.id;
+      }
       break;
     }
     case 'count':
@@ -964,22 +1038,27 @@ export function applyCommand(
           'Este arqueo corresponde a otro turno.',
         );
       } else cashier(actor, state, shift.id);
+      const auditRequest = kind === 'audit' ? settings.auditRequest : undefined;
+      const openingAudit = auditRequest?.opening === true;
+      if (kind === 'opening')
+        assert(!settings.auditRequest?.opening, 'Presenta el arqueo de apertura programado.');
+      const recordedKind = openingAudit ? 'opening' : kind;
       assert(
-        !state.counts.some((x) => x.shiftId === shift.id && x.kind === kind && kind !== 'audit'),
+        recordedKind === 'audit' ||
+          !state.counts.some((x) => x.shiftId === shift.id && x.kind === recordedKind),
         'Este conteo ya fue presentado.',
       );
       const skipped = kind === 'opening' && p.skip === true;
       assert(!skipped || settings.skipOpeningCount, 'El conteo de apertura no se puede omitir.');
-      const auditRequest = kind === 'audit' ? settings.auditRequest : undefined;
       const balances = auditRequest?.expectedItems ?? stockBalances(state),
-        items: Record<string, number> = {};
-      for (const article of countArticles(state, kind)) {
+        items: Record<string, number> = {},
+        list = countArticles(state, kind);
+      for (const article of list) {
         if (skipped) continue;
         const value = (p.items ?? {})[article.id];
         assert(value !== undefined, `Falta contar ${article.name}.`);
         items[article.id] = quantity(value, article.name, 1000000, true);
-        if (!article.id.startsWith('liquid:'))
-          assert(Number.isInteger(items[article.id]), 'Los conteos físicos deben ser enteros.');
+        assert(Number.isInteger(items[article.id]), 'Los conteos físicos deben ser enteros.');
       }
       const countsCash = !skipped && (kind !== 'audit' || !auditRequest || auditRequest.cash);
       const counted = countsCash ? money(p.cash, 'Efectivo contado', true) : undefined,
@@ -997,9 +1076,9 @@ export function applyCommand(
       )?.after as { settings?: State['settings'][number] } | undefined;
       const procedure = command.configVersion === settings.version ? settings : archived?.settings;
       const tasks =
-        kind === 'audit'
+        recordedKind === 'audit'
           ? []
-          : kind === 'opening'
+          : recordedKind === 'opening'
             ? (procedure?.openingChecklist ?? [])
             : (procedure?.closingChecklist ?? []);
       const checklist = tasks.map((task, index) => ({ task, done: p.checklist?.[index] === true }));
@@ -1009,13 +1088,13 @@ export function applyCommand(
       );
       const count: Count = {
         id: makeId('count'),
-        kind,
+        kind: recordedKind,
         shiftId: shift.id,
         by: actor.id,
         at: command.at,
         cash: counted,
         items,
-        itemLabels: Object.fromEntries(countArticles(state, kind).map((x) => [x.id, x.name])),
+        itemLabels: Object.fromEntries(list.map((x) => [x.id, x.name])),
         expectedCash: expected,
         expectedItems: Object.fromEntries(Object.keys(items).map((k) => [k, balances[k] ?? 0])),
         difference: counted === undefined || expected === undefined ? undefined : counted - expected,
@@ -1044,7 +1123,7 @@ export function applyCommand(
       }
       state.counts.push(count);
       ref = count.id;
-      if (kind === 'opening') {
+      if (recordedKind === 'opening') {
         shift.openingSkipped = skipped;
         shift.openingCountId = count.id;
       }
@@ -1127,6 +1206,45 @@ export function applyCommand(
       if (countHasDifferences(count)) notify('mermas', `Diferencias registradas en conteo de ${kind}.`);
       break;
     }
+    case 'adjust_count_inventory': {
+      admin(actor);
+      assert(!settings.auditId, 'Termina el arqueo activo antes de ajustar el inventario.');
+      const count = required(
+        state.counts.find((c) => c.id === p.countId),
+        'Conteo',
+      );
+      const list = adjustableCountArticles(state, count);
+      assert(list.length, 'Este conteo no tiene artículos físicos para ajustar.');
+      assert(!countInventoryAdjustment(state, count.id), 'Este conteo ya se usó para ajustar el inventario.');
+      assert(p.confirmed === true, 'Confirma que verificaste las existencias actuales.');
+      const notes = text(p.notes, 'Motivo del ajuste', 1500);
+      const balances = stockBalances(state);
+      const items: Record<string, number> = {};
+      for (const { id: key, name } of list) {
+        const expected = balances[key] ?? 0;
+        assert(
+          expected === p.expectedItems?.[key],
+          'El inventario cambió. Abre de nuevo el conteo y verifica las existencias.',
+        );
+        const counted = quantity(p.items?.[key], name, 1000000, true);
+        assert(Number.isInteger(counted), 'Los conteos físicos deben ser enteros.');
+        items[key] = counted;
+        if (counted !== expected) movement(key, counted - expected, 'audit_adjustment', count.id);
+      }
+      // Un cierre pendiente anterior conserva sus diferencias, pero sus artículos ya se conciliaron.
+      const pending = new Set(
+        state.shifts
+          .filter((s) => s.closingCountId && !s.closingArchive && s.closingReview?.status !== 'approved')
+          .map((s) => s.closingCountId),
+      );
+      const closingCountIds = state.counts
+        .filter((c) => pending.has(c.id) && Object.keys(c.items).some((key) => Object.hasOwn(items, key)))
+        .map((c) => c.id);
+      inventoryAdjustment = { notes, items, closingCountIds };
+      ref = count.id;
+      message = 'Inventario ajustado y conteo original conservado.';
+      break;
+    }
     case 'approve_closing': {
       admin(actor);
       const shift = required(
@@ -1196,8 +1314,9 @@ export function applyCommand(
         notes,
       };
       state.counts.push(reviewed);
+      const adjusted = adjustedClosingArticles(state, original);
       for (const [article, delta] of Object.entries(differences))
-        if (delta) movement(article, delta, 'closing_adjustment', original.id);
+        if (delta && !adjusted.has(article)) movement(article, delta, 'closing_adjustment', original.id);
       shift.closingReview = {
         status: 'approved',
         countId: ref,
@@ -2613,6 +2732,7 @@ export function applyCommand(
     action: command.type,
     referenceId: ref,
     detail: review ? 'Registro con configuración anterior o autorización de contingencia.' : message,
+    ...(inventoryAdjustment ? { inventoryAdjustment } : {}),
   };
   state.audit.push(audit);
   return {

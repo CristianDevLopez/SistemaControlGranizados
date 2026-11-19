@@ -160,6 +160,12 @@ test('configura Nequi y lo identifica al cobrar, en el ticket y separado del efe
   const transfers = page.locator('.stat').filter({ hasText: 'Cobrado por transferencia' });
   await expect(transfers).toContainText('28.000');
   await expect(transfers).toContainText('Nequi');
+  const balance = page.locator('.stat').filter({ hasText: 'Saldo en Nequi' });
+  await expect(balance).toContainText('28.000');
+  const transferBox = (await transfers.boundingBox())!;
+  const balanceBox = (await balance.boundingBox())!;
+  expect(balanceBox.y).toBe(transferBox.y);
+  expect(balanceBox.x).toBeGreaterThan(transferBox.x);
   await nav(page, 'Pedidos');
   await page.getByRole('button', { name: 'Cobrados', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(2);

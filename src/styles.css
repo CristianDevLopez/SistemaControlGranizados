@@ -2592,6 +2592,9 @@ dd {
 .panel > .stats-grid {
   margin: 0 22px 22px;
 }
+.panel > .cash-transfer-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 .two-columns {
   display: grid;
   grid-template-columns: 1fr 1fr;
