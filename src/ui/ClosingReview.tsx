@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { closingPreview } from '../domain/engine.ts';
+import { suggestedCupCharge } from '../domain/reconciliation.ts';
 import type { ClosingPreview, Count } from '../domain/types.ts';
 import { useApp } from '../lib/store.tsx';
-import { parseMoney } from '../lib/money.ts';
-import { FieldsForm, Modal, date, money, type Field } from './components.tsx';
+import { moneyText, parseMoney } from '../lib/money.ts';
+import { FieldsForm, Modal, MoneyInput, date, money, type Field } from './components.tsx';
 
 export interface ClosingValues {
   cash: number;
@@ -88,6 +89,8 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
     items: count.items,
     payments: count.payments ?? {},
   });
+  const [employeeCharge, setEmployeeCharge] = useState<string | null>(null);
+  const suggestedCharge = suggestedCupCharge(state.sizes, preview.expectedItems, values.items);
   const labels = count.itemLabels ?? {};
   const fields: Field[] = [
     {
@@ -134,13 +137,6 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
       required: true,
     },
     {
-      name: 'employeeCharge',
-      label: 'Valor del faltante a reportar al empleado',
-      type: 'money',
-      value: 0,
-      hint: 'Registro administrativo en pesos; no ejecuta descuentos de nómina.',
-    },
-    {
       name: 'verified',
       label: 'Verifiqué el efectivo entregado o reservado y los comprobantes de cada cuenta',
       type: 'checkbox',
@@ -185,10 +181,13 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
           })
         }
         onSubmit={async (form) => {
+          const confirmedCharge = employeeCharge === null ? suggestedCharge : parseMoney(employeeCharge);
+          if (confirmedCharge === null) throw new Error('Escribe el monto confirmado o 0.');
           await app.run('approve_closing', {
             shiftId: shift.id,
             ...form,
             preview,
+            employeeCharge: confirmedCharge,
             items: Object.fromEntries(Object.keys(preview.expectedItems).map((key) => [key, form[key]])),
             payments: Object.fromEntries(
               Object.keys(preview.expectedPayments).map((key) => [key, form[key]]),
@@ -197,7 +196,22 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
           app.toast('Cierre aprobado. El ajuste de vasos quedó registrado.');
           onClose();
         }}
-      />
+      >
+        <label className="field">
+          <span>Valor del faltante a reportar al empleado</span>
+          <MoneyInput
+            required
+            value={employeeCharge ?? moneyText(suggestedCharge)}
+            onChange={setEmployeeCharge}
+          />
+          <small>Precio de venta sugerido por los vasos faltantes {money(suggestedCharge)}.</small>
+        </label>
+        {employeeCharge !== null && (
+          <button type="button" className="text-button" onClick={() => setEmployeeCharge(null)}>
+            Usar valor sugerido
+          </button>
+        )}
+      </FieldsForm>
     </Modal>
   );
 }

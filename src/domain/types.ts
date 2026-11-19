@@ -179,14 +179,21 @@ export interface Shift {
   offlineAuthorizedBy?: ID;
   /** Cuentas usadas en el turno, también en la vista de caja sin importes esperados. */
   paymentAccountIds?: ID[];
+  /** Retira el cierre de la revisión habitual sin alterar los hechos del turno. */
+  closingArchive?: {
+    at: string;
+    by: ID;
+    notes: string;
+    replacementCountId: ID;
+  };
   closingReview?: {
     status: 'pending' | 'approved';
     countId?: ID;
     by?: ID;
     at?: string;
     notes?: string;
-    /** Registro administrativo; no ejecuta descuentos de nómina. */
     employeeCharge?: number;
+    recoveries?: { id: ID; amount: number; paidOn: string; at: string; by: ID }[];
   };
 }
 export interface Count {
@@ -515,6 +522,7 @@ export type CommandType =
   | 'authorize_shift'
   | 'count'
   | 'approve_closing'
+  | 'record_employee_recovery'
   | 'start_audit'
   | 'finish_audit'
   | 'create_order'
@@ -563,6 +571,9 @@ export interface Result {
   id: ID;
   status: 'accepted' | 'review' | 'conflict';
   message: string;
+  code?: string;
+  /** Validación denegada antes de guardar, sin una solicitud de conciliación en el servidor. */
+  finalRejection?: true;
   referenceId?: ID;
   revision?: number;
   at?: string;

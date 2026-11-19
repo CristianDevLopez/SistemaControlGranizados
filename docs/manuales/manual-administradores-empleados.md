@@ -79,7 +79,7 @@ En escritorio, el menú está a la izquierda. En un teléfono, pulsa el botón d
 
 | Pantalla                | Para qué se utiliza                                                                                            |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Mostrador               | Preparar pedidos degustaciones entregas y cobros autorizados                                                   |
+| Mostrador               | Preparar pedidos, registrar entregas y realizar cobros autorizados                                             |
 | Pedidos                 | Buscar y revisar tickets entregar pendientes tramitar anulaciones e ingresar planillas cuando se tiene permiso |
 | Inventario              | Abrir bolsas y paquetes registrar daños y consultar el control disponible para tu rol                          |
 | Turno y caja            | Solicitar o iniciar turnos contar efectivo cerrar caja y registrar movimientos de dinero autorizados           |
@@ -230,11 +230,11 @@ Validar un cupón no lo consume todavía: se consume al confirmar el cobro acept
 
 El medio de pago se selecciona antes de cobrar: **Efectivo**, **Nequi** u otra cuenta receptora configurada. Para habilitar Nequi, el administrador entra en **Configuración → Cuentas y custodia → Configurar Nequi**, indica el número receptor, el responsable de la cuenta y el saldo inicial que corresponda. La opción queda habilitada para recibir ventas. Sin una cuenta activa configurada para ventas, el botón Nequi permanece deshabilitado. Al seleccionar Nequi se muestra el destino y puede anotarse un comprobante opcional; confirma el cobro cuando hayas verificado que el pago llegó. El registro conserva la cuenta y el comprobante, y ese ingreso se muestra por transferencia, separado del efectivo de caja. Registrar el pago no consulta automáticamente Nequi ni inicia una transferencia.
 
-### Degustaciones y cambios antes del cobro
+### Combinados, cambios antes del cobro y degustaciones anteriores
 
 Para un combinado o bomba, elige el tamaño y pulsa **Combinado / bomba**. Toca los sabores que echaste, revisa las porciones y pulsa **Agregar combinado**. Se registra un solo vaso y las onzas se dividen en partes iguales: 16 oz con dos sabores son 8 oz de cada uno; con tres, 5⅓ oz de cada uno. La pantalla aproxima los decimales para lectura, pero el inventario conserva el reparto sin redondear. Si cualquiera de los sabores lleva licor, se cobra la tarifa con licor del tamaño. Para un vaso sin mezcla usa **Un sabor**. Las porciones quedan visibles en Mostrador, Pedidos y el detalle del ticket, y se descuentan al entregar. Si una promoción limita los sabores, todos los de la mezcla deben estar incluidos. Al corregir tickets o ingresar planillas, el selector de sabor también permite **Combinado / bomba**.
 
-Registra la degustación con el sabor correspondiente desde Mostrador. Cada degustación descuenta una onza y una copita. Un pedido con solo degustaciones puede finalizarse sin venta; no se debe simular un cobro para cerrarlo.
+Las degustaciones registradas anteriormente conservan el descuento de una onza y una copita. Si quedó abierto un pedido que contiene solo degustaciones, usa **Cerrar solo degustaciones** para finalizarlo.
 
 Si registraste una degustación de prueba o por error, usa la papelera de esa degustación para eliminarla. Se restituyen una copita y una onza del sabor registrado. Para cambiar el sabor, selecciónalo en la misma fila: se devuelve la onza del sabor anterior y se descuenta del nuevo, conservando una sola copita. También puedes hacerlo desde el detalle del ticket en **Pedidos**, incluso cuando quedó como **Solo degustaciones**. Si eliminas la última degustación de un pedido sin productos, queda cancelado; en un ticket vendido se mantienen su cobro y sus productos. Las correcciones conservan los movimientos anteriores y agregan el ajuste al historial. El personal corrige degustaciones del turno activo; los turnos anteriores los corrige un administrador. Durante un arqueo, espera a finalizarlo. Las correcciones sin conexión se guardan desde el equipo principal y se sincronizan al reconectar.
 
@@ -525,7 +525,7 @@ Después de cerrar, incluso si el cierre offline está provisional, los trabajad
 ### Lista rápida del empleado
 
 - Encargado: entra con tu usuario, solicita apertura, cuenta, verifica tickets y dinero, registra entregas reales, conserva soportes y presenta el cierre.
-- Apoyo: identifica el pedido correcto, registra productos, degustaciones y entregas, cuenta lo recibido físicamente y comunica novedades al encargado.
+- Apoyo: identifica el pedido correcto, registra productos y entregas, cuenta lo recibido físicamente y comunica novedades al encargado.
 - Ambos: utiliza tu cuenta, respeta la unidad de medida y evita repetir una operación que aún espera confirmación.
 
 ## 17 Solución de problemas frecuentes

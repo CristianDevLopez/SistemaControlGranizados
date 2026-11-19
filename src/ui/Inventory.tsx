@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { PackageOpen, Plus, Droplets, AlertTriangle } from 'lucide-react';
 import { articles, stockBalances } from '../domain/engine.ts';
 import { liquidReconciliation } from '../domain/liquid.ts';
+import { LiquidFortnightReport } from './LiquidFortnightReport.tsx';
 import { useApp } from '../lib/store.tsx';
 import { Badge, Empty, FieldsForm, Modal, Panel, date, type Field } from './components.tsx';
 import type { CommandType } from '../domain/types.ts';
@@ -279,6 +280,7 @@ export function Inventory() {
           )}
         </Panel>
       </div>
+      {admin && <LiquidFortnightReport state={state} />}
       {admin && (
         <Panel title="Líquido y pérdida aceptable">
           <div className="liquid-summary">
