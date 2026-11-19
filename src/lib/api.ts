@@ -3,6 +3,7 @@ import type { Command, Result, Role, Snapshot } from '../domain/types.ts';
 import { getMeta, setMeta, migrateBranchCache, type DeviceCredential } from './db.ts';
 import { hasRecoveryLinkError } from './recovery.ts';
 import type { Access, Branch } from '../domain/platform.ts';
+import { requireGoogleProvider, signInAdminWithGoogle } from './admin-auth.ts';
 
 export const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 export const publicKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
@@ -88,8 +89,13 @@ export async function loginAdmin(email: string, password: string) {
     await setMeta('device', data.device);
     return;
   }
-  const response = await supabase!.auth.signInWithPassword({ email, password });
+  const response = await supabase!.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
   if (response.error) throw response.error;
+}
+export async function loginGoogle() {
+  if (!supabase) throw new Error('El acceso con Google necesita conexión con el negocio.');
+  await requireGoogleProvider(url!, publicKey!);
+  await signInAdminWithGoogle(supabase, window.location.origin);
 }
 export async function loginPin(data: Record<string, unknown>) {
   const device = await getMeta<DeviceCredential>('device'),

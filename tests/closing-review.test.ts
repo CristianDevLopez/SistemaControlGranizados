@@ -10,6 +10,7 @@ import {
 } from '../src/domain/engine.ts';
 import { admin, cashier, cmd, fixture, ids, NOW, order, run, support } from './support/fixture.ts';
 import type { State } from '../src/domain/types.ts';
+import { suggestedCupCharge } from '../src/domain/reconciliation.ts';
 
 const cup = `cup:${fixture().sizes[0].id}`;
 const account = `transfer:${ids.location}`;
@@ -54,6 +55,15 @@ it('un cuadre coincidente también espera aprobación y conserva su conteo origi
   expect(approved.stock).toHaveLength(0);
 });
 
+it('sugiere el mayor precio con licor por tamaño solo para vasos faltantes', () => {
+  const { sizes } = fixture();
+  const variant = { ...sizes[0], id: 'otra-presentacion', alcoholPrice: 15000 };
+  expect(suggestedCupCharge([...sizes, variant], { [cup]: 20, 'liquid:sabor': 202 }, { [cup]: 19 })).toBe(
+    15000,
+  );
+  expect(suggestedCupCharge(sizes, { [cup]: 20 }, { [cup]: 21 })).toBe(0);
+});
+
 it('ajusta faltantes y sobrantes una vez, con referencia al conteo, y la siguiente apertura usa el saldo corregido', () => {
   let state = run(fixture(), 'open_package', { sizeId: fixture().sizes[0].id }).state;
   const otherCup = `cup:${state.sizes[1].id}`;
@@ -73,9 +83,9 @@ it('ajusta faltantes y sobrantes una vez, con referencia al conteo, y la siguien
   expect(closingPreview(approved, ids.shift).expectedItems[cup]).toBe(16);
 });
 
-it('la revisión solo corresponde a un administrador conectado con doble factor', () => {
+it('la revisión solo corresponde a un administrador conectado', () => {
   const state = close(fixture());
-  for (const actor of [cashier, support, { ...admin, online: false }, { ...admin, aal: 'aal1' as const }])
+  for (const actor of [cashier, support, { ...admin, online: false }])
     expect(() => run(state, 'approve_closing', approval(state), actor)).toThrow();
   expect(() => run(state, 'approve_closing', approval(state, ids.shift, { verified: false }), admin)).toThrow(
     /verificación/,
@@ -86,6 +96,34 @@ it('la revisión solo corresponde a un administrador conectado con doble factor'
   expect(() =>
     run(state, 'approve_closing', approval(state, ids.shift, { employeeCharge: 1 }), admin),
   ).toThrow(/No hay faltantes/);
+});
+
+it('un cierre anterior conserva su diferencia sin duplicar el ajuste de un arqueo posterior', () => {
+  const initial = run(fixture(), 'open_package', { sizeId: fixture().sizes[0].id }).state;
+  const requested = run(initial, 'start_audit', { shiftId: ids.shift, items: [cup] }, admin).state;
+  const audited = run(requested, 'finish_audit', {
+    shiftId: ids.shift,
+    auditId: requested.settings[0].auditId,
+    items: { [cup]: 16 },
+  }).state;
+  const closed = close(audited, {
+    items: { ...closingPreview(audited, ids.shift).expectedItems, [cup]: 16 },
+  });
+  const adjusted = run(
+    closed,
+    'adjust_count_inventory',
+    {
+      countId: audited.counts[0].id,
+      items: { [cup]: 16 },
+      expectedItems: { [cup]: 20 },
+      notes: 'Conteo físico verificado para el siguiente turno.',
+      confirmed: true,
+    },
+    admin,
+  ).state;
+  const approved = run(adjusted, 'approve_closing', approval(adjusted), admin).state;
+  expect(stockBalances(approved)[cup]).toBe(16);
+  expect(approved.counts.at(-1)?.differences?.[cup]).toBe(-4);
 });
 
 it('permite corregir un conteo y una reserva sobrestimados sin borrar el original ni generar nómina', () => {

@@ -39,6 +39,8 @@ import {
   getMeta,
   setMeta,
   belongsToBranch,
+  awaitsSync,
+  isFinalRejection,
   type DeviceCredential,
   type OfflineAuthorizer,
   type OutboxEntry,
@@ -56,6 +58,7 @@ interface AppContext {
   switchBranch: (branchId: string) => Promise<void>;
   online: boolean;
   pending: OutboxEntry[];
+  rejected: OutboxEntry[];
   photosPending: number;
   syncing: boolean;
   lastSync: string | null;
@@ -97,17 +100,21 @@ const ONLINE_TYPES = new Set<CommandType>([
   'request_courtesy_excess',
   'start_audit',
   'finish_audit',
+  'adjust_count_inventory',
   'approve_closing',
+  'record_employee_recovery',
 ]);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<Snapshot | null>(null),
     [online, setOnline] = useState(navigator.onLine),
-    [pending, setPending] = useState<OutboxEntry[]>([]),
+    [outbox, setOutbox] = useState<OutboxEntry[]>([]),
     [syncing, setSyncing] = useState(false),
     [lastSync, setLastSync] = useState<string | null>(null),
     [error, setError] = useState<string | null>(null),
     [notice, setNotice] = useState('');
   const [photosPending, setPhotosPending] = useState(0);
+  const pending = useMemo(() => outbox.filter(awaitsSync), [outbox]);
+  const rejected = useMemo(() => outbox.filter((entry) => entry.status === 'rejected'), [outbox]);
   const [viewRole, setViewRole] = useState<Role | null>(null);
   const preview = useRef<Role | null>(null);
   const current = useRef<Snapshot | null>(null),
@@ -156,9 +163,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
   const updatePending = useCallback(async () => {
     const all = await db.outbox.toArray();
-    setPending(
+    setOutbox(
       all
-        .filter((x) => belongsToBranch(x, current.current) && x.status !== 'reconciled')
+        .filter((x) => belongsToBranch(x, current.current) && (awaitsSync(x) || x.status === 'rejected'))
         .sort((a, b) => a.sequence - b.sequence),
     );
     setPhotosPending(
@@ -181,14 +188,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await db.outbox.delete(entry.id);
         continue;
       }
-      if (
-        entry.status === 'conflict' &&
-        result.state.requests.some((r) => r.type === 'sync' && r.id === entry.id && r.status !== 'pending')
-      ) {
-        await db.outbox.update(entry.id, { status: 'reconciled' });
-        continue;
+      if (entry.status === 'conflict') {
+        const review = result.state.requests.find((r) => r.type === 'sync' && r.id === entry.id);
+        if (review && review.status !== 'pending') {
+          await db.outbox.update(entry.id, { status: 'reconciled' });
+          continue;
+        }
+        if (!review && isFinalRejection(entry)) {
+          await db.outbox.update(entry.id, { status: 'rejected' });
+          continue;
+        }
       }
-      if (!entry.optimistic || entry.status === 'reconciled') continue;
+      if (!entry.optimistic || !awaitsSync(entry)) continue;
       try {
         state = applyCommand(
           state,
@@ -221,23 +232,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       await load();
       const entries = (await db.outbox.toArray())
-        .filter((x) => belongsToBranch(x, current.current) && ['pending', 'conflict'].includes(x.status))
+        .filter((x) => belongsToBranch(x, current.current) && awaitsSync(x))
         .sort((a, b) => a.sequence - b.sequence);
       for (const entry of entries) {
         if (entry.status === 'conflict') break;
         const response = await sendCommands([entry.command]);
         const result = response.results[0];
-        if (!result) throw new Error('Respuesta incompleta del servidor.');
+        if (result?.id !== entry.id || !['accepted', 'review', 'conflict'].includes(result.status))
+          throw new Error('Respuesta incompleta del servidor.');
         recentResults.current.set(entry.id, result);
+        const status = isFinalRejection(entry, result)
+          ? 'rejected'
+          : result.status === 'conflict'
+            ? 'conflict'
+            : 'acknowledged';
         await db.outbox.update(entry.id, {
-          status: result.status === 'conflict' ? 'conflict' : 'acknowledged',
+          status,
           result,
           message: result.message,
         });
-        if (result.status === 'conflict') {
-          toast(result.message);
-          break;
-        }
+        if (result.status === 'conflict') toast(result.message);
+        if (status === 'conflict') break;
       }
       const photos = (await db.photos.toArray()).filter(
         (x) => belongsToBranch(x, current.current) && x.status === 'pending',
@@ -271,8 +286,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.message);
-        if (['UNAUTHORIZED', 'FORBIDDEN', 'MFA_REQUIRED', 'DEVICE_REQUIRED'].includes(e.code))
-          setOnline(false);
+        if (['UNAUTHORIZED', 'FORBIDDEN', 'DEVICE_REQUIRED'].includes(e.code)) setOnline(false);
       } else {
         setOnline(false);
         setError('Sin conexión con el servidor. Los registros locales se conservan.');
@@ -391,7 +405,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           await sync();
           if ((await db.outbox.get(command.id))?.status === 'pending' && navigator.onLine) await sync();
           const saved = await db.outbox.get(command.id);
-          if (saved?.status === 'conflict') throw new Error(saved.message);
+          if (saved?.status === 'conflict' || saved?.status === 'rejected') throw new Error(saved.message);
           if (saved?.status === 'pending')
             throw new Error(
               'Validación pendiente. No repitas la operación; se reintentará con el mismo identificador.',
@@ -507,7 +521,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setViewRole(null);
     current.current = null;
     setData(null);
-    setPending([]);
+    setOutbox([]);
     setPhotosPending(0);
   }, []);
   const changeView = useCallback(
@@ -543,8 +557,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const snapshot = current.current;
         if (!snapshot) throw new Error('Inicia sesión antes de actualizar.');
         const queued = (await db.outbox.toArray()).some(
-          (entry) =>
-            belongsToBranch(entry, snapshot) && !['acknowledged', 'reconciled'].includes(entry.status),
+          (entry) => belongsToBranch(entry, snapshot) && awaitsSync(entry),
         );
         const photos = (await db.photos.toArray()).some(
           (photo) => belongsToBranch(photo, snapshot) && photo.status === 'pending',
@@ -568,9 +581,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (preview.current) throw new Error('Vuelve a Superadministrador para cambiar de local.');
       if (switchingBranch.current || syncLock.current || localWrites.current > 0 || installingUpdate.current)
         throw new Error('Espera a que termine la sincronización.');
-      const queued = (await db.outbox.toArray()).some(
-        (x) => x.actorId === saved.actor.id && !['acknowledged', 'reconciled'].includes(x.status),
-      );
+      const queued = (await db.outbox.toArray()).some((x) => x.actorId === saved.actor.id && awaitsSync(x));
       const photos = (await db.photos.toArray()).some(
         (x) => x.actorId === saved.actor.id && x.status === 'pending',
       );
@@ -689,6 +700,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         switchBranch,
         online,
         pending,
+        rejected,
         photosPending,
         syncing,
         lastSync,

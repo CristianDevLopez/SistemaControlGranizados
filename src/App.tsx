@@ -19,6 +19,7 @@ import {
   ArrowUpRight,
   Download,
   Building2,
+  LayoutDashboard,
 } from 'lucide-react';
 import { useApp } from './lib/store.tsx';
 import { logout, supabase } from './lib/api.ts';
@@ -33,10 +34,12 @@ import { Purchasing } from './ui/Purchasing.tsx';
 import { Promotions } from './ui/Promotions.tsx';
 import { Settings } from './ui/Settings.tsx';
 import { Control } from './ui/Control.tsx';
+import { Dashboard } from './ui/Dashboard.tsx';
 import { Platform } from './ui/Platform.tsx';
 import { branchStatusLabels } from './domain/platform.ts';
 import { Badge, Modal, date } from './ui/components.tsx';
 import { downloadFile } from './lib/export.ts';
+import type { OutboxEntry } from './lib/db.ts';
 import { roleLabels } from './domain/views.ts';
 import type { Role } from './domain/types.ts';
 const pages = [
@@ -45,7 +48,8 @@ const pages = [
   { id: 'inventory', label: 'Inventario', icon: Package },
   { id: 'cash', label: 'Turno y caja', icon: Wallet },
   { id: 'purchases', label: 'Compras y gastos', icon: Truck },
-  { id: 'promotions', label: 'Promociones', icon: Ticket, admin: true, group: 'ADMINISTRACIÓN' },
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, admin: true, group: 'ADMINISTRACIÓN' },
+  { id: 'promotions', label: 'Promociones', icon: Ticket, admin: true },
   { id: 'control', label: 'Control y aprobaciones', icon: ShieldCheck, admin: true },
   { id: 'settings', label: 'Configuración', icon: SettingsIcon, admin: true },
   { id: 'locals', label: 'Locales y mensualidades', icon: Building2, admin: true },
@@ -102,7 +106,8 @@ export function App() {
     ),
     active = nav.find((p) => p.id === page) ?? pages[0],
     pending = app.pending.filter((p) => p.status === 'pending').length + app.photosPending,
-    conflicts = app.pending.filter((p) => p.status === 'conflict').length;
+    conflicts = app.pending.filter((p) => p.status === 'conflict').length,
+    firstConflict = app.pending.find((p) => p.status === 'conflict');
   const canUpdate = app.online && !app.syncing && !updating;
   const sessionActor = app.sessionActor ?? actor;
   const changeView = (role: Role | null) => {
@@ -338,11 +343,13 @@ export function App() {
               <p>
                 {active.id === 'pos'
                   ? 'Todo lo que necesitas, a un toque de distancia.'
-                  : active.id === 'cash'
-                    ? 'Un turno claro. Cada peso con su destino.'
-                    : active.id === 'inventory'
-                      ? 'De la primera bolsa al último vaso.'
-                      : 'La información del negocio, siempre a la mano.'}
+                  : active.id === 'dashboard'
+                    ? 'Ventas, tendencias y resultados para decidir con claridad.'
+                    : active.id === 'cash'
+                      ? 'Un turno claro. Cada peso con su destino.'
+                      : active.id === 'inventory'
+                        ? 'De la primera bolsa al último vaso.'
+                        : 'La información del negocio, siempre a la mano.'}
               </p>
             </div>
             {active.id === 'pos' && (
@@ -409,6 +416,8 @@ export function App() {
               <Cash />
             ) : active.id === 'purchases' ? (
               <Purchasing />
+            ) : active.id === 'dashboard' ? (
+              <Dashboard />
             ) : active.id === 'promotions' ? (
               <Promotions />
             ) : active.id === 'control' ? (
@@ -436,21 +445,26 @@ export function App() {
                 : 'El servidor no está disponible. Las operaciones locales se conservan.'}
             </p>
             <p>
-              Última sincronización: <strong>{date(app.lastSync ?? undefined)}</strong>
+              Último contacto con el servidor: <strong>{date(app.lastSync ?? undefined)}</strong>
             </p>
             <div className="button-row">
               <button className="button primary" disabled={app.syncing} onClick={() => void app.sync()}>
                 <RefreshCw size={17} />
                 Sincronizar ahora
               </button>
-              {app.pending.length > 0 && (
+              {(app.pending.length > 0 || app.rejected.length > 0) && (
                 <button
                   className="button secondary"
                   onClick={() => {
-                    const entries = app.pending.map((e) => ({
-                      ...e,
-                      command: { ...e.command, payload: { ...e.command.payload, offlinePermit: undefined } },
-                    }));
+                    const entries = [...app.pending, ...app.rejected]
+                      .sort((a, b) => a.sequence - b.sequence)
+                      .map((e) => ({
+                        ...e,
+                        command: {
+                          ...e.command,
+                          payload: { ...e.command.payload, offlinePermit: undefined },
+                        },
+                      }));
                     downloadFile(
                       new Blob(
                         [
@@ -479,23 +493,26 @@ export function App() {
             {app.pending.length ? (
               <div className="sync-list">
                 {app.pending.map((p) => (
-                  <div className="list-row" key={p.id}>
-                    <div>
-                      <strong>Operación {p.sequence}</strong>
-                      <small>
-                        {date(p.command.at)} · {p.message ?? 'Esperando confirmación del servidor'}
-                      </small>
-                      <small>Referencia: {p.id}</small>
-                    </div>
-                    <Badge tone={p.status === 'conflict' ? 'orange' : 'neutral'}>
-                      {p.status === 'conflict' ? 'Por conciliar' : 'Pendiente'}
-                    </Badge>
-                  </div>
+                  <SyncRow key={p.id} entry={p} blockedBy={firstConflict} />
                 ))}
               </div>
             ) : app.photosPending === 0 ? (
-              <div className="notice success">Todas tus operaciones están sincronizadas.</div>
+              <div className="notice success">
+                {app.rejected.length
+                  ? 'No quedan operaciones pendientes.'
+                  : 'Todas tus operaciones están sincronizadas.'}
+              </div>
             ) : null}
+            {app.rejected.length > 0 && (
+              <details>
+                <summary>Operaciones no aplicadas ({app.rejected.length})</summary>
+                <div className="sync-list">
+                  {[...app.rejected].reverse().map((entry) => (
+                    <SyncRow key={entry.id} entry={entry} />
+                  ))}
+                </div>
+              </details>
+            )}
           </div>
         </Modal>
       )}
@@ -530,6 +547,31 @@ export function App() {
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+function SyncRow({ entry, blockedBy }: { entry: OutboxEntry; blockedBy?: OutboxEntry }) {
+  const rejected = entry.status === 'rejected';
+  const waiting = entry.status === 'pending' && blockedBy && blockedBy.sequence < entry.sequence;
+  return (
+    <div className="list-row">
+      <div>
+        <strong>
+          Operación {entry.sequence}
+          {rejected && entry.command.type === 'issue_coupon' ? ' · Código no emitido' : ''}
+        </strong>
+        <small>
+          {date(entry.command.at)} ·{' '}
+          {waiting
+            ? `Espera la conciliación de la operación ${blockedBy.sequence}.`
+            : (entry.message ?? 'Esperando confirmación del servidor')}
+        </small>
+        <small>Referencia: {entry.id}</small>
+      </div>
+      <Badge tone={entry.status === 'conflict' ? 'orange' : 'neutral'}>
+        {rejected ? 'Rechazada' : entry.status === 'conflict' ? 'Por conciliar' : 'Pendiente'}
+      </Badge>
     </div>
   );
 }

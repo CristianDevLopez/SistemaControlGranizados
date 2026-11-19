@@ -56,8 +56,8 @@ describe('Operación del mostrador', () => {
     expect(s.stock).toHaveLength(previousStock.length + 1);
     expect(s.stock.slice(0, previousStock.length)).toEqual(previousStock);
     expect(applyCommand(s, command, admin, NOW).state.stock).toEqual(s.stock);
-    for (const actor of [cashier, support, { ...admin, online: false }, { ...admin, aal: 'aal1' as const }])
-      expect(() => run(s, 'initialize_stock', { items: { copita: 1 } }, actor)).toThrow(/doble factor/);
+    for (const actor of [cashier, support, { ...admin, online: false }])
+      expect(() => run(s, 'initialize_stock', { items: { copita: 1 } }, actor)).toThrow(/administrador/);
   });
   it('retira efectivo al ejecutarse y lo conserva en tránsito hasta la confirmación', () => {
     let s = run(fixture(), 'request_transfer', {

@@ -44,7 +44,7 @@ npm ci
 npm run dev -- --port 5173 --strictPort
 ```
 
-5. Abrir http://127.0.0.1:5173. Utilizar una cuenta propia de la aplicación, creada por un administrador, y completar MFA y registro de dispositivo según su rol.
+5. Abrir http://127.0.0.1:5173. Utilizar una cuenta propia de la aplicación, creada por un administrador, y completar el registro de dispositivo según su rol.
 
 Esto ejecuta el frontend local contra el backend ya desplegado. Los cambios que permita su cuenta afectan la misma base que usa la web publicada. Para experimentar con datos o migraciones, utilizar un proyecto Supabase separado. El endpoint `health` y CORS para `http://127.0.0.1:5173` respondieron correctamente en la verificación.
 
@@ -55,7 +55,7 @@ El archivo `.local/OneTwoDan.env.local` del equipo del titular contiene solo las
 | Acceso            | Cuándo hace falta                           | Permiso o dato                                                                      |
 | ----------------- | ------------------------------------------- | ----------------------------------------------------------------------------------- |
 | GitHub            | Clonar, crear ramas y colaborar             | Invitación a `OneTwoDan` con escritura; autenticar con su propia cuenta             |
-| Aplicación        | Probar flujos protegidos                    | Cuenta individual con el rol necesario; contraseña y MFA propios                    |
+| Aplicación        | Probar flujos protegidos                    | Cuenta individual con el rol necesario; Google o contraseña propios                 |
 | Panel de Supabase | Modificar SQL, migraciones o Edge Functions | Invitación por correo con rol Developer                                             |
 | Vercel            | Administrar el alojamiento o publicar       | Acceso individual al equipo si el plan lo permite; no hace falta para `npm run dev` |
 

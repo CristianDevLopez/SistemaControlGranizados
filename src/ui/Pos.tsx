@@ -5,7 +5,6 @@ import {
   Check,
   ShoppingBag,
   ArrowRight,
-  FlaskConical,
   ScanLine,
   Ticket,
   Trash2,
@@ -411,7 +410,6 @@ export function Pos() {
     [checkout, setCheckout] = useState(false),
     [packageSize, setPackageSize] = useState<string | null>(null),
     [showOrders, setShowOrders] = useState(false),
-    [tasting, setTasting] = useState(false),
     [mixing, setMixing] = useState(false),
     [mixFlavors, setMixFlavors] = useState<string[]>([]),
     [flavorGroup, setFlavorGroup] = useState('all'),
@@ -486,25 +484,13 @@ export function Pos() {
     }
   };
   const addFlavor = (flavorId: string) => {
-    if (mixing && !tasting) {
+    if (mixing) {
       setMixFlavors((selected) =>
         selected.includes(flavorId) ? selected.filter((id) => id !== flavorId) : [...selected, flavorId],
       );
       return;
     }
-    void action(async () => {
-      if (tasting) {
-        const result = await app.run('taste', {
-          orderId: order?.id,
-          expectedVersion: order?.version,
-          flavorId,
-        });
-        select(result.referenceId!);
-        setTasting(false);
-        return;
-      }
-      await addProduct([flavorId]);
-    });
+    void action(() => addProduct([flavorId]));
   };
   const adjust = (line: OrderLine, delta: number) =>
     void action(async () => {
@@ -537,8 +523,9 @@ export function Pos() {
       </div>
       {state.settings[0].auditId && (
         <div className="notice warning">
-          Arqueo en curso. Usa la planilla manual y conserva por separado el efectivo recibido después del
-          corte.
+          {state.settings[0].auditRequest?.opening
+            ? 'Presenta el arqueo de apertura en Turno y caja antes de vender.'
+            : 'Arqueo en curso. Usa la planilla manual y conserva por separado el efectivo recibido después del corte.'}
         </div>
       )}
       {!app.online && (
@@ -574,68 +561,52 @@ export function Pos() {
           <div className="section-heading">
             <div>
               <span className="eyebrow">PREPARA EL PEDIDO</span>
-              <h2>{tasting ? 'Elige el sabor de la degustación' : '¿Qué tamaño llevamos?'}</h2>
+              <h2>¿Qué tamaño llevamos?</h2>
             </div>
+          </div>
+          <div className="size-grid">
+            {state.sizes
+              .filter((x) => x.active)
+              .map((s) => (
+                <button
+                  key={s.id}
+                  className={`size-option ${sizeId === s.id ? 'selected' : ''}`}
+                  onClick={() => setSizeId(s.id)}
+                  aria-pressed={sizeId === s.id}
+                >
+                  <span>{s.name.replace(' oz', '')}</span>
+                  <small>{s.name.includes('oz') ? 'ONZAS' : s.name}</small>
+                  {sizeId === s.id && (
+                    <span className="selected-check">
+                      <Check size={12} />
+                    </span>
+                  )}
+                </button>
+              ))}
+          </div>
+          <div className="segmented flavor-mode" role="group" aria-label="Sabores por vaso">
             <button
-              className={`button ${tasting ? 'primary' : 'secondary'}`}
-              disabled={!active || busy || !canDeliver}
+              aria-pressed={!mixing}
+              className={!mixing ? 'active' : ''}
+              disabled={busy}
               onClick={() => {
-                setTasting((x) => !x);
+                setMixing(false);
                 setMixFlavors([]);
               }}
             >
-              <FlaskConical size={17} /> {tasting ? 'Volver a venta' : '+1 degustación'}
+              Un sabor
+            </button>
+            <button
+              aria-pressed={mixing}
+              className={mixing ? 'active' : ''}
+              disabled={busy}
+              onClick={() => setMixing(true)}
+            >
+              Combinado / bomba
             </button>
           </div>
-          {!tasting && (
-            <div className="size-grid">
-              {state.sizes
-                .filter((x) => x.active)
-                .map((s) => (
-                  <button
-                    key={s.id}
-                    className={`size-option ${sizeId === s.id ? 'selected' : ''}`}
-                    onClick={() => setSizeId(s.id)}
-                    aria-pressed={sizeId === s.id}
-                  >
-                    <span>{s.name.replace(' oz', '')}</span>
-                    <small>{s.name.includes('oz') ? 'ONZAS' : s.name}</small>
-                    {sizeId === s.id && (
-                      <span className="selected-check">
-                        <Check size={12} />
-                      </span>
-                    )}
-                  </button>
-                ))}
-            </div>
-          )}
-          {!tasting && (
-            <div className="segmented flavor-mode" role="group" aria-label="Sabores por vaso">
-              <button
-                aria-pressed={!mixing}
-                className={!mixing ? 'active' : ''}
-                disabled={busy}
-                onClick={() => {
-                  setMixing(false);
-                  setMixFlavors([]);
-                }}
-              >
-                Un sabor
-              </button>
-              <button
-                aria-pressed={mixing}
-                className={mixing ? 'active' : ''}
-                disabled={busy}
-                onClick={() => setMixing(true)}
-              >
-                Combinado / bomba
-              </button>
-            </div>
-          )}
           <div className="section-heading small">
-            <h3>
-              {tasting ? 'Una copita · 1 oz' : mixing ? 'Elige los sabores del vaso' : 'Elige un sabor'}
-            </h3>
+            <h3>{mixing ? 'Elige los sabores del vaso' : 'Elige un sabor'}</h3>
             <span>{state.flavors.filter((x) => x.active).length} disponibles</span>
           </div>
           <div className="segmented" role="group" aria-label="Filtrar sabores por licor">
@@ -664,16 +635,16 @@ export function Pos() {
                   return (
                     <button
                       key={f.id}
-                      className={`flavor-card flavor-${index % 6} ${mixing && !tasting && mixFlavors.includes(f.id) ? 'selected' : ''}`}
-                      aria-pressed={mixing && !tasting ? mixFlavors.includes(f.id) : undefined}
+                      className={`flavor-card flavor-${index % 6} ${mixing && mixFlavors.includes(f.id) ? 'selected' : ''}`}
+                      aria-pressed={mixing ? mixFlavors.includes(f.id) : undefined}
                       onClick={() => addFlavor(f.id)}
                       disabled={
                         busy ||
-                        (tasting ? !canDeliver : !canOrders) ||
+                        !canOrders ||
                         !active ||
                         !!state.settings[0].auditId ||
                         (!app.online && !actor.primary) ||
-                        (!tasting && !mixing && price == null)
+                        (!mixing && price == null)
                       }
                     >
                       <div className="flavor-art">
@@ -683,26 +654,20 @@ export function Pos() {
                         </span>
                         <span className="flavor-orbit" />
                         <span className="flavor-plus">
-                          {mixing && !tasting && mixFlavors.includes(f.id) ? (
-                            <Check size={19} />
-                          ) : (
-                            <Plus size={19} />
-                          )}
+                          {mixing && mixFlavors.includes(f.id) ? <Check size={19} /> : <Plus size={19} />}
                         </span>
                       </div>
                       <div className="flavor-info">
                         <span className="flavor-category">{f.alcohol ? 'CON LICOR' : 'SIN LICOR'}</span>
                         <strong>{f.name}</strong>
                         <span>
-                          {tasting
-                            ? 'Degustación · 1 oz'
-                            : mixing
-                              ? mixFlavors.includes(f.id)
-                                ? 'Seleccionado'
-                                : 'Toca para combinar'
-                              : price === null
-                                ? 'Precio pendiente'
-                                : money(price ?? 0)}
+                          {mixing
+                            ? mixFlavors.includes(f.id)
+                              ? 'Seleccionado'
+                              : 'Toca para combinar'
+                            : price === null
+                              ? 'Precio pendiente'
+                              : money(price ?? 0)}
                         </span>
                       </div>
                     </button>
@@ -719,7 +684,7 @@ export function Pos() {
               }
             />
           )}
-          {mixing && !tasting && (
+          {mixing && (
             <section className="mix-builder" aria-label="Composición del vaso" aria-live="polite">
               <strong>
                 {size?.name} · {mixFlavors.length} sabores seleccionados
@@ -761,10 +726,6 @@ export function Pos() {
               </button>
             </section>
           )}
-          <div className="catalog-note">
-            <FlaskConical size={16} />
-            <span>Las degustaciones descuentan una copita y 1 oz del sabor elegido.</span>
-          </div>
         </div>
         <aside className="cart-panel">
           <div className="cart-heading">

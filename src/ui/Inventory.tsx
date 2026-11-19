@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { PackageOpen, Plus, Droplets, AlertTriangle } from 'lucide-react';
-import { articles, stockBalances } from '../domain/engine.ts';
+import { articles, physicalArticles, stockBalances } from '../domain/engine.ts';
 import { liquidReconciliation } from '../domain/liquid.ts';
+import { LiquidFortnightReport } from './LiquidFortnightReport.tsx';
 import { useApp } from '../lib/store.tsx';
 import { Badge, Empty, FieldsForm, Modal, Panel, date, type Field } from './components.tsx';
 import type { CommandType } from '../domain/types.ts';
@@ -279,6 +280,7 @@ export function Inventory() {
           )}
         </Panel>
       </div>
+      {admin && <LiquidFortnightReport state={state} />}
       {admin && (
         <Panel title="Líquido y pérdida aceptable">
           <div className="liquid-summary">
@@ -359,7 +361,7 @@ export function Inventory() {
 }
 function InitialInventory({ onClose }: { onClose: () => void }) {
   const app = useApp(),
-    list = articles(app.data!.state),
+    list = physicalArticles(app.data!.state),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
   return (
@@ -397,7 +399,7 @@ function InitialInventory({ onClose }: { onClose: () => void }) {
                 name={x.id}
                 aria-label={x.name}
                 type="number"
-                step={x.unit === 'oz' ? '0.001' : '1'}
+                step="1"
                 min="0"
                 defaultValue="0"
                 required

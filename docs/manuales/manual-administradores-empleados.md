@@ -22,13 +22,13 @@ La aplicación tiene tres roles de operación. El propietario utiliza una cuenta
 | Cobrar pedidos                                 | Solo su propio turno conectado                                        | Solo su turno y equipo principal             | No                  |
 | Abrir caja                                     | Inicia su propia caja conectado o autoriza la solicitud del encargado | Solicita apertura desde el equipo principal  | No                  |
 | Presentar apertura y cierre                    | Cuando es responsable del turno                                       | Cuando es responsable del turno              | No                  |
-| Solicitar arqueo y seleccionar ítems           | Sí con conexión y doble factor                                        | No                                           | No                  |
+| Solicitar arqueo y seleccionar ítems           | Sí con conexión                                                       | No                                           | No                  |
 | Presentar conteo de arqueo                     | Cuando es responsable del turno                                       | Cuando es responsable del turno              | No                  |
 | Abrir bolsas y paquetes y reportar daños       | Sí durante la operación                                               | Sí durante la operación                      | Sí con conexión     |
 | Registrar recepción física de mercancía        | Sí                                                                    | Sí                                           | Sí con conexión     |
 | Registrar gastos y movimientos de dinero       | Según origen y responsabilidad de caja                                | Según permisos y límites de caja             | No                  |
 | Ver saldos teóricos y revisar diferencias      | Sí                                                                    | Conteos propios sin esperados ni diferencias | Sin saldos teóricos |
-| Configurar catálogo promociones equipo y metas | Sí con conexión y doble factor                                        | No                                           | No                  |
+| Configurar catálogo promociones equipo y metas | Sí con conexión                                                       | No                                           | No                  |
 | Solicitar locales y consultar mensualidades    | Solo si es propietario                                                | No                                           | No                  |
 
 Si eres encargado de caja, comienza por acceso, apertura, pedidos, inventario, recepción, cierre y sincronización. Si eres apoyo, lee acceso, pedidos, entregas, degustaciones, inventario y recepción. Si eres administrador, revisa el manual completo antes de preparar el primer turno.
@@ -42,12 +42,12 @@ En **Configuración → Equipo y accesos**, el administrador dispone de una **Gu
 ### Ingreso de un administrador
 
 1. Abre la aplicación y pulsa **Administrador**.
-2. Escribe tu correo electrónico y contraseña y pulsa **Continuar**.
-3. Completa el doble factor con el código de tu aplicación de autenticación. Si es tu primer acceso, sigue la configuración que muestra la pantalla y guarda el acceso a tu autenticador.
+2. Pulsa **Continuar con Google** y elige la cuenta cuyo correo está registrado como administrador.
+3. También puedes escribir tu correo y contraseña y pulsar **Continuar**. No necesitas Authenticator.
 4. Si aparece **Registrar este equipo**, escribe un nombre que permita identificar el navegador. Configura el PIN local de respaldo si la pantalla lo solicita y corresponde a la operación prevista.
 5. Comprueba el usuario, el local seleccionado y el estado de conexión antes de trabajar.
 
-La contraseña de las cuentas nuevas debe tener entre 14 y 200 caracteres. El código de doble factor y el PIN del empleado cumplen funciones diferentes; introducir uno en el campo del otro no inicia sesión.
+La contraseña de las cuentas nuevas debe tener entre 14 y 200 caracteres. Los empleados conservan el acceso con usuario y PIN.
 
 **Primera cuenta del negocio.** La opción **Configurar primer administrador** se usa una sola vez en la instalación inicial y exige el código privado de configuración entregado por el responsable de la aplicación. No sirve para crear un local adicional. Los demás usuarios se crean desde Configuración.
 
@@ -63,9 +63,9 @@ El administrador decide si el equipo registrado será la caja principal del loca
 
 ### Recuperación y cambio de usuario
 
-En **Administrador → Olvidé mi contraseña**, escribe el correo y solicita el enlace. También puedes abrir **Recuperar mi contraseña** desde el botón del perfil cuando tienes una sesión administrativa abierta. En el enlace de recuperación, verifica el doble factor si ya estaba configurado, elige una contraseña nueva y confírmala. Un enlace vencido permite solicitar otro.
+En **Administrador → Olvidé mi contraseña**, escribe el correo y solicita el enlace. También puedes abrir **Recuperar mi contraseña** desde el botón del perfil cuando tienes una sesión administrativa abierta. En el enlace de recuperación, elige una contraseña nueva y confírmala. Un enlace vencido permite solicitar otro.
 
-La recepción del correo depende del servicio de correo configurado. Si no llega, revisa spam y comunica el caso al desarrollador. Recuperar la contraseña no elimina el doble factor. Si perdiste el autenticador, informa al responsable del servicio; este formulario no es un mecanismo para omitirlo.
+La recepción del correo depende del servicio de correo configurado. Si no llega, revisa spam y comunica el caso al desarrollador. No necesitas una aplicación de autenticación para recuperar la contraseña.
 
 El empleado que olvida su PIN debe acudir al administrador o al responsable técnico; la recuperación por correo de administrador no es su método de acceso. La pantalla de equipo permite crear cuentas y activar o desactivar accesos; no debe asumirse que cualquier función técnica de restablecimiento está disponible como botón en esa pantalla.
 
@@ -79,7 +79,7 @@ En escritorio, el menú está a la izquierda. En un teléfono, pulsa el botón d
 
 | Pantalla                | Para qué se utiliza                                                                                            |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Mostrador               | Preparar pedidos degustaciones entregas y cobros autorizados                                                   |
+| Mostrador               | Preparar pedidos, registrar entregas y realizar cobros autorizados                                             |
 | Pedidos                 | Buscar y revisar tickets entregar pendientes tramitar anulaciones e ingresar planillas cuando se tiene permiso |
 | Inventario              | Abrir bolsas y paquetes registrar daños y consultar el control disponible para tu rol                          |
 | Turno y caja            | Solicitar o iniciar turnos contar efectivo cerrar caja y registrar movimientos de dinero autorizados           |
@@ -182,7 +182,7 @@ Un destino es una ubicación del dinero y no una sucursal. Registrar una cuenta 
 
 ### Apertura por un administrador que atenderá caja
 
-Con conexión y doble factor, abre **Turno y caja → Iniciar caja**, indica la base y confirma. El turno queda a tu nombre y autorizado por ti; presenta después el conteo de apertura. No necesitas la autorización de otro administrador para iniciar tu propio turno.
+Con conexión, abre **Turno y caja → Iniciar caja**, indica la base y confirma. El turno queda a tu nombre y autorizado por ti; presenta después el conteo de apertura. No necesitas la autorización de otro administrador para iniciar tu propio turno.
 
 Si existe efectivo físico anterior registrado, la aplicación utiliza ese saldo para la apertura en lugar de reemplazarlo libremente. Si ya hay un turno solicitado, abierto o provisional del local, resuélvelo o ciérralo antes de abrir otro.
 
@@ -230,11 +230,11 @@ Validar un cupón no lo consume todavía: se consume al confirmar el cobro acept
 
 El medio de pago se selecciona antes de cobrar: **Efectivo**, **Nequi** u otra cuenta receptora configurada. Para habilitar Nequi, el administrador entra en **Configuración → Cuentas y custodia → Configurar Nequi**, indica el número receptor, el responsable de la cuenta y el saldo inicial que corresponda. La opción queda habilitada para recibir ventas. Sin una cuenta activa configurada para ventas, el botón Nequi permanece deshabilitado. Al seleccionar Nequi se muestra el destino y puede anotarse un comprobante opcional; confirma el cobro cuando hayas verificado que el pago llegó. El registro conserva la cuenta y el comprobante, y ese ingreso se muestra por transferencia, separado del efectivo de caja. Registrar el pago no consulta automáticamente Nequi ni inicia una transferencia.
 
-### Degustaciones y cambios antes del cobro
+### Combinados, cambios antes del cobro y degustaciones anteriores
 
 Para un combinado o bomba, elige el tamaño y pulsa **Combinado / bomba**. Toca los sabores que echaste, revisa las porciones y pulsa **Agregar combinado**. Se registra un solo vaso y las onzas se dividen en partes iguales: 16 oz con dos sabores son 8 oz de cada uno; con tres, 5⅓ oz de cada uno. La pantalla aproxima los decimales para lectura, pero el inventario conserva el reparto sin redondear. Si cualquiera de los sabores lleva licor, se cobra la tarifa con licor del tamaño. Para un vaso sin mezcla usa **Un sabor**. Las porciones quedan visibles en Mostrador, Pedidos y el detalle del ticket, y se descuentan al entregar. Si una promoción limita los sabores, todos los de la mezcla deben estar incluidos. Al corregir tickets o ingresar planillas, el selector de sabor también permite **Combinado / bomba**.
 
-Registra la degustación con el sabor correspondiente desde Mostrador. Cada degustación descuenta una onza y una copita. Un pedido con solo degustaciones puede finalizarse sin venta; no se debe simular un cobro para cerrarlo.
+Las degustaciones registradas anteriormente conservan el descuento de una onza y una copita. Si quedó abierto un pedido que contiene solo degustaciones, usa **Cerrar solo degustaciones** para finalizarlo.
 
 Si registraste una degustación de prueba o por error, usa la papelera de esa degustación para eliminarla. Se restituyen una copita y una onza del sabor registrado. Para cambiar el sabor, selecciónalo en la misma fila: se devuelve la onza del sabor anterior y se descuenta del nuevo, conservando una sola copita. También puedes hacerlo desde el detalle del ticket en **Pedidos**, incluso cuando quedó como **Solo degustaciones**. Si eliminas la última degustación de un pedido sin productos, queda cancelado; en un ticket vendido se mantienen su cobro y sus productos. Las correcciones conservan los movimientos anteriores y agregan el ajuste al historial. El personal corrige degustaciones del turno activo; los turnos anteriores los corrige un administrador. Durante un arqueo, espera a finalizarlo. Las correcciones sin conexión se guardan desde el equipo principal y se sincronizan al reconectar.
 
@@ -426,7 +426,7 @@ Las diferencias de conteo se explican desde **Turno y caja → Conteos registrad
 
 1. Un administrador abre **Turno y caja → Iniciar arqueo sorpresa** con un turno abierto, selecciona efectivo, cuentas de pago y/o artículos de inventario, y pulsa **Solicitar conteo**. Debe seleccionar al menos un ítem.
 2. La aplicación bloquea pedidos, entregas y cobros mientras dura el arqueo.
-3. El responsable del turno abre **Turno y caja → Presentar arqueo y reanudar** e ingresa únicamente las cantidades e importes solicitados, sin ver valores esperados. Los líquidos seleccionados se miden en onzas; los demás artículos se cuentan en unidades enteras. Si la atención continúa en papel, identifica cada folio y conserva el dinero posterior separado.
+3. El responsable del turno abre **Turno y caja → Presentar arqueo y reanudar** e ingresa únicamente las cantidades e importes solicitados, sin ver valores esperados. Los insumos físicos se cuentan en unidades enteras. Si la atención continúa en papel, identifica cada folio y conserva el dinero posterior separado.
 4. Al presentar el conteo con conexión se reanuda la operación. Solo el usuario responsable del turno puede presentarlo, incluso si quien lo solicita es otro administrador.
 5. El administrador abre **Conteos registrados → Revisar conteo** para validar cantidades, importes y diferencias contra los valores guardados al iniciar el arqueo. Se conservan quién lo solicitó, quién contó y las horas de ambos registros.
 6. Incorpora después las operaciones de papel desde Pedidos con folio, hora original y foto, sin duplicar ventas que ya estén registradas.
@@ -477,7 +477,7 @@ Cuando no puedas conectarte, utiliza la opción de acceso offline y el PIN local
 
 ### Abrir por contingencia
 
-El permiso debe prepararse antes, con conexión y doble factor, mediante **Configuración → Equipo y accesos → Apertura de contingencia**, estando el administrador presente en el equipo de caja. Se configura un PIN de contingencia y una autorización cifrada para ese equipo.
+El permiso debe prepararse antes, con conexión, mediante **Configuración → Equipo y accesos → Apertura de contingencia**, estando el administrador presente en el equipo de caja. Se configura un PIN de contingencia y una autorización cifrada para ese equipo.
 
 Si hay que abrir sin internet, el encargado solicita el turno y utiliza **Autorizar con admin presente**. Selecciona al administrador habilitado y este introduce presencialmente el PIN de contingencia. El permiso se utiliza una vez y vence a los siete días; no es una contraseña permanente para operar cualquier caja. Al volver la conexión la apertura se valida y queda su registro de contingencia.
 
@@ -514,7 +514,7 @@ Los cierres conservan su conteo original. Si luego se aprueba un gasto o se regi
 
 En **Conteos registrados**, el administrador ve por cada medio/cuenta: contado, esperado original y diferencia. Una diferencia de cero indica que cuadra; negativa, faltante; positiva, sobrante. El esperado de una cuenta corresponde a los pagos menos devoluciones de ventas del turno, separado del efectivo; no es una conciliación del saldo bancario completo. También aparecen cuentas desactivadas que recibieron pagos durante ese turno. Los registros anteriores conservan solo los valores verificados que se capturaron.
 
-Después de cerrar, incluso si el cierre offline está provisional, los trabajadores no pueden registrar gastos, inventario, entregas, movimientos ni editar pedidos de ese turno. Abrir otro turno no desbloquea el anterior. Solo un administrador conectado con doble factor puede registrar correcciones; en **Registrar gasto → Turno a corregir** puede vincular un gasto al turno cerrado. El registro original del conteo permanece intacto.
+Después de cerrar, incluso si el cierre offline está provisional, los trabajadores no pueden registrar gastos, inventario, entregas, movimientos ni editar pedidos de ese turno. Abrir otro turno no desbloquea el anterior. Solo un administrador conectado puede registrar correcciones; en **Registrar gasto → Turno a corregir** puede vincular un gasto al turno cerrado. El registro original del conteo permanece intacto.
 
 ### Lista rápida del administrador
 
@@ -525,7 +525,7 @@ Después de cerrar, incluso si el cierre offline está provisional, los trabajad
 ### Lista rápida del empleado
 
 - Encargado: entra con tu usuario, solicita apertura, cuenta, verifica tickets y dinero, registra entregas reales, conserva soportes y presenta el cierre.
-- Apoyo: identifica el pedido correcto, registra productos, degustaciones y entregas, cuenta lo recibido físicamente y comunica novedades al encargado.
+- Apoyo: identifica el pedido correcto, registra productos y entregas, cuenta lo recibido físicamente y comunica novedades al encargado.
 - Ambos: utiliza tu cuenta, respeta la unidad de medida y evita repetir una operación que aún espera confirmación.
 
 ## 17 Solución de problemas frecuentes

@@ -90,7 +90,7 @@ it('persiste la revisión y el ajuste atómicamente, exige admin también en SQL
     payments: original.payments,
     verified: true,
     notes: 'Recontamos: faltan cuatro vasos de exhibición.',
-    employeeCharge: 0,
+    employeeCharge: 10000,
     preview: closingPreview(state, ids.shift, original),
   };
   expect((await submit(cmd('approve_closing', approval))).status).toBe('conflict');
@@ -117,6 +117,53 @@ it('persiste la revisión y el ajuste atómicamente, exige admin también en SQL
   expect(stockBalances(state)[cup]).toBe(16);
   expect(state.stock.filter((m) => m.reason === 'closing_adjustment')).toHaveLength(1);
   expect(state.shifts[0].closingReview?.status).toBe('approved');
+  const deduction = {
+    shiftId: ids.shift,
+    amount: 4000,
+    paidOn: '2026-10-23',
+    confirmed: true,
+    expectedRecovered: 0,
+  };
+  const recover = cmd('record_employee_recovery', deduction, admin, { branchId });
+  const proposed = applyCommand(state, recover, admin, NOW);
+  const latest = await db.forBranch(branchId).load();
+  const forbidden = { ...recover, id: crypto.randomUUID(), actorId: cashier.id, deviceId: cashier.deviceId };
+  await expect(
+    db.forBranch(branchId).commit(latest.revision, forbidden, proposed.state, {
+      ...proposed.result,
+      id: forbidden.id,
+    }),
+  ).rejects.toThrow(/ADMIN_REQUIRED/);
+  expect((await submit(cmd('record_employee_recovery', deduction))).status).toBe('conflict');
+  expect((await submit(recover, admin)).status).toBe('accepted');
+  expect((await submit(recover, admin)).status).toBe('accepted');
+  expect((await submit(cmd('record_employee_recovery', deduction, admin), admin)).code).toBe(
+    'RECOVERY_CHANGED',
+  );
+  expect(
+    (
+      await submit(
+        cmd('record_employee_recovery', { ...deduction, expectedRecovered: 4000, amount: 7000 }, admin),
+        admin,
+      )
+    ).status,
+  ).toBe('conflict');
+  const recovered = (await db.load()).state;
+  expect(recovered.shifts[0].closingReview?.recoveries).toEqual([
+    expect.objectContaining({ by: admin.id, amount: 4000, paidOn: '2026-10-23' }),
+  ]);
+  expect(recovered.payments).toEqual(state.payments);
+  const cashierView = await gateway(
+    new Request('http://localhost/dexter/snapshot', {
+      headers: {
+        authorization: `Bearer ${cashier.id}`,
+        'x-device-id': cashier.deviceId,
+        'x-device-token': 'test-device-token',
+        'x-branch-id': branchId,
+      },
+    }),
+  );
+  expect((await cashierView.json()).state.shifts[0].closingReview).toEqual({ status: 'approved' });
   expect((await submit(cmd('request_shift', { base: 0 }, admin, { shiftId: undefined }), admin)).status).toBe(
     'accepted',
   );

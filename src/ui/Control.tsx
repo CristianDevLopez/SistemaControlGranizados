@@ -4,6 +4,7 @@ import { useApp } from '../lib/store.tsx';
 import { api } from '../lib/api.ts';
 import { exportZip, downloadFile } from '../lib/export.ts';
 import { articles, countHasDifferences, stockBalances } from '../domain/engine.ts';
+import { visibleCounts } from '../domain/closing-archive.ts';
 import { Badge, Empty, Panel, Stat, date, money, stateNames, Modal, FieldsForm } from './components.tsx';
 import { EvidenceButton } from './Purchasing.tsx';
 export function Control() {
@@ -14,6 +15,7 @@ export function Control() {
     [error, setError] = useState(''),
     [reconcile, setReconcile] = useState<{ requestId: string; approve: boolean } | null>(null);
   const pending = state.requests.filter((r) => r.status === 'pending'),
+    counts = visibleCounts(state),
     stock = stockBalances(state),
     negative = Object.entries(stock).filter(([, v]) => v < 0);
   const labels: Record<string, string> = {
@@ -162,7 +164,7 @@ export function Control() {
         )}
       </Panel>
       <Panel title="Diferencias para revisar">
-        {negative.length || state.counts.some(countHasDifferences) ? (
+        {negative.length || counts.some(countHasDifferences) ? (
           <div className="anomaly-grid">
             {negative.map(([article, amount]) => (
               <div className="anomaly" key={article}>
@@ -177,7 +179,7 @@ export function Control() {
                 </div>
               </div>
             ))}
-            {state.counts.filter(countHasDifferences).map((c) => (
+            {counts.filter(countHasDifferences).map((c) => (
               <div className="anomaly" key={c.id}>
                 <AlertTriangle size={18} />
                 <div>

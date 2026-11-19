@@ -33,15 +33,17 @@ No hay sabores, usuarios ni ventas de demostración en la base real. Los precios
 
 ### Acceso privado de superadministrador
 
-Reservado para `cristiandevlopez@gmail.com`. Se activa mediante un enlace privado de un solo uso, eligiendo contraseña y doble factor; después se ingresa por **Administrador**, sin registrar equipos, cajas ni PIN offline. El acceso general no muestra una opción de superadministrador.
+Reservado para `cristiandevlopez@gmail.com`. Se activa mediante un enlace privado de un solo uso, eligiendo contraseña; después se ingresa por **Administrador**, sin registrar equipos, cajas ni PIN offline. El acceso general no muestra una opción de superadministrador.
 
 Solo esta identidad ve **Vista de la aplicación**: Superadministrador, Administrador, Encargado de caja y Apoyo de mostrador. **Administrador** permite agregar productos y guardar precios, promociones, parámetros y metas directamente, con la identidad real del titular y sin aprobación de otro admin. Los administradores del negocio también pueden guardar esos cambios por sí mismos. Las vistas de Encargado y Apoyo son de consulta y bloquean cambios en cliente y servidor; para caja se prioriza al encargado del turno cuando existe. **Volver a superadministrador** recupera la vista completa sin cambiar de cuenta.
 
-Los administradores del negocio no ven este acceso en Equipo y accesos ni pueden asignarlo, desactivarlo o modificar sus dispositivos. La reserva privada admite una sola identidad. El privilegio exige conexión y MFA; no se guarda en el respaldo offline. Ver [activación y operación](docs/OPERACION.md).
+Los administradores del negocio no ven este acceso en Equipo y accesos ni pueden asignarlo, desactivarlo o modificar sus dispositivos. La reserva privada admite una sola identidad. El privilegio exige conexión; no se guarda en el respaldo offline. Ver [activación y operación](docs/OPERACION.md).
 
 ### Recuperar la contraseña
 
-En **Administrador → Olvidé mi contraseña**, introducir el correo de la cuenta. También se puede abrir **Recuperar mi contraseña** desde el botón del perfil estando conectado. El enlace lleva a `/recuperar-contrasena`: verifica el doble factor cuando ya está configurado y permite elegir y confirmar una contraseña de 14–200 caracteres. No solicita la contraseña anterior ni cambia roles o permisos. Los enlaces inválidos o vencidos permiten solicitar uno nuevo.
+El acceso de administrador admite Google o correo y contraseña, sin Authenticator. Ver [configuración de Google y retiro de factores anteriores](docs/ACCESO.md).
+
+En **Administrador → Olvidé mi contraseña**, introducir el correo de la cuenta. También se puede abrir **Recuperar mi contraseña** desde el botón del perfil estando conectado. El enlace lleva a `/recuperar-contrasena`: verifica el enlace del correo y permite elegir y confirmar una contraseña de 14–200 caracteres. No solicita la contraseña anterior ni cambia roles o permisos. Los enlaces inválidos o vencidos permiten solicitar uno nuevo.
 
 El destino de recuperación debe figurar en **Supabase → Authentication → URL Configuration**. Ver [operación](docs/OPERACION.md) para la configuración del correo.
 
@@ -49,16 +51,17 @@ El destino de recuperación debe figurar en **Supabase → Authentication → UR
 
 1. En el acceso, elegir **Configurar primer administrador**.
 2. Abrir localmente `.local/bootstrap-token.txt`. Es un código privado de un solo uso; no debe subirse al repositorio ni enviarse a empleados.
-3. Elegir nombre, correo y contraseña de al menos 14 caracteres. Activar el doble factor con una aplicación de autenticación.
+3. Elegir nombre, correo y contraseña de al menos 14 caracteres.
 4. Registrar el navegador del admin. Crear los otros administradores y empleados en **Configuración → Equipo y accesos**.
 5. Generar el código de registro del equipo de caja. En ese navegador, el encargado entra con usuario, PIN y código. El código vence en 15 minutos y se usa una vez. El PIN queda vinculado a ese usuario para el respaldo offline.
 
-Un administrador conectado puede abrir su propia caja desde **Turno y caja → Iniciar caja**, indicar la base inicial y presentar el conteo, sin autorización de otro admin. El turno y su autorización quedan a su nombre; se conserva el saldo físico anterior cuando existe. Si entra el encargado, solicita el turno desde el equipo de caja y un admin lo autoriza. Los códigos de registro y las autorizaciones offline solo se generan con MFA y conexión.
+Un administrador conectado puede abrir su propia caja desde **Turno y caja → Iniciar caja**, indicar la base inicial y presentar el conteo, sin autorización de otro admin. El turno y su autorización quedan a su nombre; se conserva el saldo físico anterior cuando existe. Si entra el encargado, solicita el turno desde el equipo de caja y un admin lo autoriza. Los códigos de registro y las autorizaciones offline solo se generan con sesión administrativa y conexión.
 
 Para preparar otro entorno vacío: `npm run bootstrap -- --prepare` genera el código y un SQL con su hash en `.local/bootstrap.sql`. Ejecutar ese SQL únicamente en el proyecto nuevo. Si ya existe un admin, no habilita otro código. No ejecutar de nuevo en esta instalación sin necesitar una recuperación del arranque.
 
 ## Funciones incluidas
 
+- Dashboard del administrador con ventas netas, tickets, promedio, unidades, comparación temporal, evolución, productos, turnos, recaudo, gastos y metas; filtros por mes, fechas y turno, y exportación CSV. Ver [indicadores y criterios de cálculo](docs/DASHBOARD.md).
 - Pedidos simultáneos, entregas parciales, cobro exclusivo del responsable y **Cobrar y entregar**.
 - Degustaciones por sabor: una onza y una copita; conserva pedidos sin venta.
 - Turnos autorizados, conteos ciegos, cierres con base retenida, remanentes, arqueos sorpresa y planillas con folio y hora original.
@@ -78,7 +81,7 @@ Cada operación y su pendiente se guardan juntos en una transacción IndexedDB. 
 
 Los cupones y beneficios con límites globales necesitan conexión. Offline se usan catálogo y promociones horarias descargados. El servidor valida usuario y dispositivo al sincronizar; un precio de una versión anterior queda identificado para revisión. El cierre offline queda provisional en el dispositivo y se valida al cargarlo al servidor.
 
-Una operación rechazada queda conservada localmente y genera una solicitud remota. Se detiene la cola en ese punto. El admin registra la operación correcta, la vincula al conflicto o explica su descarte; después la caja puede continuar. En ningún caso se modifica el comando original o se considera cobrada una operación por el simple hecho de reintentarla. El panel permite exportar los pendientes como respaldo local.
+Un conflicto de caja queda conservado localmente y genera una solicitud de conciliación. La cola espera hasta que el admin vincule la operación correcta o explique su descarte. Si el servidor rechaza una cortesía por cuota agotada, no se emite ningún código: el intento queda en **Operaciones no aplicadas** y el siguiente pendiente puede sincronizarse. El panel permite exportar pendientes y rechazos con sus referencias. Un reintento conserva el identificador original y no equivale a un cobro confirmado.
 
 Durante un arqueo, el sistema bloquea pedidos, entregas y cobros. Se usa papel y se mantiene separado el efectivo posterior al corte. Al terminar, un admin ingresa cada pedido con folio único, turno, hora y foto. Se conservan los conteos originales y se genera una conciliación.
 
@@ -86,7 +89,7 @@ La autorización offline de apertura se habilita presencialmente en caja con un 
 
 ## Seguridad y datos
 
-El navegador no puede leer ni escribir directamente las tablas de negocio. Todas tienen RLS y permisos directos revocados; la función de servidor verifica JWT con Auth, MFA, usuario activo, dispositivo y permisos por operación. El cliente de servicio nunca adopta sesiones de empleados. Las claves de servicio solo viven en servidor.
+El navegador no puede leer ni escribir directamente las tablas de negocio. Todas tienen RLS y permisos directos revocados; la función de servidor verifica JWT con Auth, usuario activo, dispositivo y permisos por operación. El cliente de servicio nunca adopta sesiones de empleados. Las claves de servicio solo viven en servidor.
 
 Las transacciones de servidor se serializan por revisión y bloquean la fila de control. Los comandos tienen recibo único; el canje y el cobro se confirman en la misma transacción. Pagos, consumos, entregas, conteos, recepciones, auditoría y versiones son registros inmutables; las correcciones agregan relaciones y movimientos nuevos.
 

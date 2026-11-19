@@ -127,7 +127,7 @@ export function createGateway(options: GatewayOptions) {
         await store.platform(userId, 'bootstrap');
         return json({
           ok: true,
-          message: 'Administrador creado. Inicia sesión y configura el doble factor.',
+          message: 'Administrador creado. Inicia sesión con Google o con tu correo y contraseña.',
         });
       }
       if (route === 'login-pin') {
@@ -193,14 +193,12 @@ export function createGateway(options: GatewayOptions) {
       assert(identity, 'Inicia sesión para continuar.', 'UNAUTHORIZED');
       let profile = await store.profile(identity.id);
       assert(profile?.active, 'El usuario está desactivado o no tiene acceso.', 'FORBIDDEN');
-      if (profile.role === 'admin')
-        assert(identity.aal === 'aal2', 'Completa el doble factor.', 'MFA_REQUIRED');
       const ownerId = (await store.superAdmin('owner'))?.userId;
-      const isSuperAdmin = profile.role === 'admin' && profile.id === ownerId && identity.aal === 'aal2';
+      const isSuperAdmin = profile.role === 'admin' && profile.id === ownerId;
       const access: Access = await store.platform(profile.id, 'access');
       if (route === 'access') return json(access);
       if (route.startsWith('platform/')) {
-        assert(identity.aal === 'aal2', 'Completa el doble factor.', 'MFA_REQUIRED');
+        assert(profile.role === 'admin', 'Esta operación requiere un administrador.', 'FORBIDDEN');
         assert(
           !req.headers.get('x-preview-role'),
           'Vuelve a Superadministrador para gestionar locales.',
@@ -288,8 +286,6 @@ export function createGateway(options: GatewayOptions) {
         'FORBIDDEN',
       );
       profile = { ...profile, ...branchProfile, role: branch.role };
-      if (profile.role === 'admin')
-        assert(identity.aal === 'aal2', 'Completa el doble factor.', 'MFA_REQUIRED');
       headers['X-Branch-Id'] = branch.id;
       headers['X-Legacy-Branch'] = String(branch.id === access.legacyBranchId);
       const previewRole = req.headers.get('x-preview-role');
@@ -306,11 +302,7 @@ export function createGateway(options: GatewayOptions) {
         );
       }
       const admin = () =>
-        assert(
-          profile.role === 'admin' && identity.aal === 'aal2',
-          'Esta operación requiere un admin con doble factor.',
-          'FORBIDDEN',
-        );
+        assert(profile.role === 'admin', 'Esta operación requiere un administrador.', 'FORBIDDEN');
       if (route === 'devices/self') {
         admin();
         assert(!isSuperAdmin, 'Tu acceso de superadministrador no requiere registrar equipos.', 'FORBIDDEN');
@@ -356,7 +348,7 @@ export function createGateway(options: GatewayOptions) {
             profile.id,
             device.id,
             'superadmin_session',
-            'Acceso privado con doble factor, sin equipo de caja.',
+            'Acceso privado con sesión verificada, sin equipo de caja.',
           );
         }
         assert(
@@ -718,31 +710,36 @@ export function createGateway(options: GatewayOptions) {
               });
           } catch (error) {
             const e = error as Error & { code?: string };
-            if (
-              [
-                'create_order',
-                'update_order',
-                'deliver',
-                'pay',
-                'count',
-                'taste',
-                'update_tasting',
-                'remove_tasting',
-                'authorize_shift',
-                'replace_order',
-                'refund_order',
-                'receive_shipment',
-                'expense',
-                'execute_transfer',
-                'confirm_transfer',
-              ].includes(command.type)
-            )
-              await store.security('sync_conflict', { command, message: e.message });
+            const needsReview = [
+              'create_order',
+              'update_order',
+              'deliver',
+              'pay',
+              'count',
+              'taste',
+              'update_tasting',
+              'remove_tasting',
+              'authorize_shift',
+              'replace_order',
+              'refund_order',
+              'receive_shipment',
+              'expense',
+              'execute_transfer',
+              'confirm_transfer',
+            ].includes(command.type);
+            if (needsReview) await store.security('sync_conflict', { command, message: e.message });
+            const rejectedRecovery =
+              command.type === 'record_employee_recovery' &&
+              ['RECOVERY_CHANGED', 'FORBIDDEN', '42501'].includes(e.code ?? '');
             results.push({
               id: command.id,
               status: 'conflict',
               message: e.message,
               code: e.code ?? 'VALIDATION',
+              ...(rejectedRecovery ||
+              (!needsReview && error instanceof DomainError && error.code === 'VALIDATION')
+                ? { finalRejection: true }
+                : {}),
             });
             break;
           }
@@ -841,7 +838,6 @@ export function createGateway(options: GatewayOptions) {
       const statuses: Record<string, number> = {
         UNAUTHORIZED: 401,
         FORBIDDEN: 403,
-        MFA_REQUIRED: 403,
         DEVICE_REQUIRED: 403,
         BRANCH_INACTIVE: 403,
         RATE_LIMIT: 429,

@@ -188,11 +188,12 @@ it('dos aperturas simultáneas de admins producen una sola caja abierta', async 
   expect((await db.load()).state.shifts).toHaveLength(1);
 });
 
-it('exige MFA y no convierte una apertura offline en una apertura directa', async () => {
+it('permite abrir con contraseña y no convierte una apertura offline en una apertura directa', async () => {
   db.tokens.set(admin.id, { id: admin.id, aal: 'aal1' });
-  expect((await request('commands', { commands: [cmd('request_shift', { base: 0 }, admin)] })).status).toBe(
-    403,
-  );
+  const opened = await request('commands', { commands: [cmd('request_shift', { base: 0 }, admin)] });
+  expect(opened.status).toBe(200);
+  expect(opened.body.results[0].status).toBe('accepted');
+  await db.db.exec('delete from public.shifts');
   db.tokens.set(admin.id, { id: admin.id, aal: 'aal2' });
   expect((await send('request_shift', { offline: true })).result.status).toBe('conflict');
   expect((await db.load()).state.shifts).toHaveLength(0);

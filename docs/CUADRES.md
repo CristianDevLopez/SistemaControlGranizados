@@ -11,15 +11,27 @@ Publicado el 14 de noviembre de 2026: migraciones de permisos y revisión de cie
 
 Todo cierre espera aprobación administrativa, incluso si coincide. Sin conexión se permite enviar un cierre provisional, indicando que todavía no se verificaron los saldos; se compara al sincronizar. El turno queda bloqueado para el trabajador después del envío. Los arqueos sorpresa mantienen su conteo ciego.
 
+## Arqueo general y próxima apertura
+
+En **Turno y caja**, un administrador puede elegir **Iniciar arqueo sorpresa** en el turno abierto o **Programar arqueo de apertura** para el siguiente turno del local. Los modos son **Completo**, **Solo efectivo** y **Personalizado**. El arqueo completo verifica efectivo, cuentas de transferencia y existencias físicas como bolsas selladas, paquetes y vasos sueltos. El líquido de la máquina se omite.
+
+Para entregar el inventario verificado a un nuevo responsable, abre **Conteos registrados → Revisar conteo → Ajustar inventario al conteo**. Confirma las existencias físicas actuales y registra el motivo. El ajuste conserva el conteo y sus diferencias originales. Es un movimiento de inventario, independiente del efectivo y de los faltantes reportados al personal.
+
 ## Administrador
 
 En **Turno y caja → Cierres pendientes de aprobación**, abre **Revisar y aprobar cierre**. Reconfirma los importes y vasos del momento del cierre, revisa los comprobantes y documenta las correcciones. Los cambios de ventas o gastos siguen sus operaciones administrativas existentes; corregir un importe contado no crea ni modifica un pago.
 
 Al aprobar se agrega una revisión vinculada al original y un movimiento de inventario por cada diferencia de vasos. El conteo original permanece intacto. Un faltante de cuatro vasos se descuenta una sola vez, de modo que no vuelva a aparecer en la siguiente apertura. Las correcciones de recetas, las mermas ya aprobadas y los ajustes de cierres anteriores se consideran para evitar duplicados, aun al revisar después de abrir otro turno.
 
-El valor **Faltante a reportar al empleado** es un registro administrativo manual en pesos, acompañado por el motivo y la identidad de quien lo aprobó. No calcula el precio de los vasos ni ejecuta descuentos de nómina. El módulo no dispone de nómina.
+El campo **Valor del faltante a reportar al empleado** sugiere el precio de venta con licor más alto de cada tamaño por la cantidad de vasos faltantes. Solo el administrador ve el importe y puede modificarlo al aprobar el cierre. El valor confirmado queda vinculado al turno y al motivo de la revisión.
+
+En **Turno y caja → Faltantes y descuentos por quincena**, filtra por empleado y registra el importe descontado efectivamente y su fecha. Se permiten recuperaciones parciales hasta agotar el saldo. El registro **Ventas por mermas de empleado** conserva quién lo registró y a qué cuadre corresponde. Representa el descuento ya aplicado en la liquidación externa.
 
 La aprobación no confirma automáticamente que el efectivo se entregó o que una transferencia llegó. Las solicitudes de remanente sin ejecutar se actualizan con el efectivo reconfirmado; si ya no hay remanente, quedan canceladas y se conserva su registro. Las entregas ejecutadas permanecen intactas.
+
+## Merma de líquido
+
+En **Inventario → Merma de líquido por quincena**, selecciona una fecha para consultar la primera o segunda mitad del mes por sabor. El informe muestra bolsas abiertas, onzas servidas, mermas aprobadas y saldos al inicio y al corte. Si hay líquido pendiente de verificar, se muestra un saldo estimado y queda abierta la diferencia. El umbral configurado tiene prioridad sobre la referencia histórica. Esta última usa hasta seis quincenas previas, con al menos dos periodos medibles y excluye diferencias del tamaño de una bolsa. El aviso de bolsa se activa desde el 90 % del volumen configurado para su revisión.
 
 ## Mostrador y cortesías
 
@@ -32,5 +44,13 @@ Las cortesías entregadas ya descuentan vasos y líquido, incluidos todos los sa
 Aplicar las migraciones pendientes, incluida `supabase/migrations/20261114200017_closing_review.sql`, y actualizar juntos la función `dexter` y el frontend. La migración agrega la validación del rol de aprobación en los commits serializados; no modifica conteos ni ventas anteriores, no agrega tablas y mantiene las funciones limitadas a `service_role`.
 
 Los cierres históricos sin aprobación aparecen pendientes y pueden revisarse individualmente. Los clientes anteriores conservan la posibilidad de enviar su formato de cierre; la interfaz actual exige la comparación previa cuando hay conexión. El servidor siempre recalcula los importes y valida que una comparación enviada siga vigente.
+
+## Cierres archivados
+
+Los cierres archivados se ocultan de **Conteos registrados**, **Cierres pendientes de aprobación** y **Diferencias para revisar**. En Turno y caja, **Mostrar cierres archivados** permite consultar su conteo original y el motivo del archivo. El servidor rechaza su aprobación para evitar ajustes tardíos sobre el inventario ya conciliado.
+
+El archivo conserva conteos, ventas, pagos, movimientos, bases de apertura y exportaciones. No cambia el estado cerrado del turno ni representa una aprobación. La marca se conserva en `Shift.closingArchive`, con fecha, responsable, motivo y referencia al cierre posterior aprobado.
+
+El 14 de noviembre de 2026 se archivaron, por solicitud del titular, los cierres del 13 de noviembre a las 13:39 y del 14 de noviembre a las 14:25 (hora de Colombia). Sigue vigente el del 14 a las 17:47, revisado a las 17:51. La operación quedó auditada; se verificó que las huellas de pedidos, pagos, entregas, inventario, conteos, gastos y transferencias permanecieran iguales. El respaldo y la verificación están en `.local/archive-closings-20261114/`, fuera del repositorio público.
 
 Validación local: `npm run check`, `npm run build`, `npm run format:check`, `deno check --config supabase/functions/deno.json supabase/functions/dexter/index.ts` y las pruebas Playwright de operación, caja, transferencias y arqueo. Todos los datos de prueba se ejecutan en PGlite aislado.

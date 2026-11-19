@@ -7,9 +7,28 @@ export interface OutboxEntry {
   sequence: number;
   command: Command;
   optimistic: boolean;
-  status: 'pending' | 'acknowledged' | 'conflict' | 'reconciled';
+  status: 'pending' | 'acknowledged' | 'conflict' | 'reconciled' | 'rejected';
   result?: Result;
   message?: string;
+}
+export function awaitsSync(entry: OutboxEntry) {
+  return entry.status === 'pending' || entry.status === 'conflict';
+}
+// Respuestas inequívocas del gateway anterior: el cupón no llegó a guardarse.
+const legacyCouponRejections = new Set([
+  'La cuota se agotó. Otro admin debe aprobar una cortesía adicional.',
+  'Esta autorización ya se utilizó.',
+  'Vencimiento inválido.',
+  'Fecha de vencimiento inválida.',
+]);
+export function isFinalRejection(entry: OutboxEntry, result = entry.result) {
+  if (entry.optimistic !== false || result?.status !== 'conflict' || result.id !== entry.id) return false;
+  if (result.finalRejection === true) return true;
+  return (
+    entry.command.type === 'issue_coupon' &&
+    result.code === 'VALIDATION' &&
+    legacyCouponRejections.has(result.message)
+  );
 }
 export interface LocalPhoto {
   id: string;

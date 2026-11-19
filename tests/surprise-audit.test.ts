@@ -1,5 +1,11 @@
 import { expect, it } from 'vitest';
-import { countArticles, countPaymentMethods, redactState } from '../src/domain/engine.ts';
+import {
+  countArticles,
+  countInventoryAdjustment,
+  countPaymentMethods,
+  redactState,
+  stockBalances,
+} from '../src/domain/engine.ts';
 import { fixture, ids, run, admin, cashier, support, other, order, NOW } from './support/fixture.ts';
 import type { Actor, State } from '../src/domain/types.ts';
 
@@ -21,8 +27,8 @@ function submit(state: State, extra = {}, actor: Actor = cashier) {
   ).state;
 }
 
-it('solo un administrador con conexión y doble factor puede solicitar el arqueo', () => {
-  for (const actor of [cashier, support, { ...admin, online: false }, { ...admin, aal: 'aal1' as const }])
+it('solo un administrador con conexión puede solicitar el arqueo', () => {
+  for (const actor of [cashier, support, { ...admin, online: false }])
     expect(() => run(fixture(), 'start_audit', { shiftId: ids.shift, cash: true }, actor)).toThrow(
       /administrador|factor/,
     );
@@ -96,13 +102,64 @@ it('presenta solo los ítems seleccionados sin exigir efectivo ni el resto del i
   expect(order(finished).order.status).toBe('open');
 });
 
-it('permite seleccionar líquidos con decimales y conserva unidades enteras para vasos', () => {
+it('excluye líquidos del arqueo completo y permite terminar un arqueo antiguo que los incluía', () => {
   const initial = fixture(),
     liquid = `liquid:${ids.flavor}`,
     cup = `cup:${initial.sizes[0].id}`;
-  const state = start(initial, { cash: false, items: [liquid, cup] });
+  expect(() => start(initial, { cash: false, items: [liquid] })).toThrow(/Artículos inválidos/);
+  expect(start(initial, { mode: 'full' }).settings[0].auditRequest!.items).not.toContain(liquid);
+  const state = start(initial, { cash: false, items: [cup] });
+  state.settings[0].auditRequest!.items.push(liquid);
   expect(() => submit(state, { items: { [liquid]: 12.5, [cup]: 1.5 } })).toThrow(/enteros/);
-  expect(submit(state, { items: { [liquid]: 12.5, [cup]: 1 } }).counts[0].items[liquid]).toBe(12.5);
+  expect(submit(state, { items: { [cup]: 1 } }).counts[0].items).toEqual({ [cup]: 1 });
+});
+
+it('programa, reemplaza y cancela el arqueo del próximo turno sin pausar el actual', () => {
+  const when = 'next_opening';
+  const scheduled = run(fixture(), 'start_audit', { when, mode: 'cash' }, admin).state;
+  expect(scheduled.settings[0].nextOpeningAudit).toMatchObject({
+    mode: 'cash',
+    cash: true,
+    items: [],
+    payments: [],
+  });
+  expect(scheduled.settings[0].auditId).toBeUndefined();
+  expect(order(scheduled).order.status).toBe('open');
+  const changed = run(scheduled, 'start_audit', { when, mode: 'custom', items: ['copita'] }, admin).state;
+  expect(changed.settings[0].nextOpeningAudit).toMatchObject({
+    mode: 'custom',
+    cash: false,
+    items: ['copita'],
+  });
+  const cleared = run(changed, 'start_audit', { when, cancel: true }, admin).state;
+  expect(cleared.settings[0].nextOpeningAudit).toBeUndefined();
+});
+
+it('ajusta el inventario una vez tras verificación administrativa y conserva el conteo original', () => {
+  const initial = fixture();
+  const state = submit(start(initial, { items: ['copita'] }), { items: { copita: 3 } });
+  const original = structuredClone(state.counts[0]);
+  const payload = {
+    countId: original.id,
+    items: { copita: 3, [`liquid:${ids.flavor}`]: 15 },
+    expectedItems: { copita: 0 },
+    notes: 'Inventario verificado por los socios.',
+    confirmed: true,
+  };
+  expect(() => run(state, 'adjust_count_inventory', payload, cashier)).toThrow(/administrador/);
+  expect(() =>
+    run(state, 'adjust_count_inventory', { ...payload, expectedItems: { copita: 1 } }, admin),
+  ).toThrow(/inventario cambió/);
+  const adjusted = run(state, 'adjust_count_inventory', payload, admin).state;
+  expect(adjusted.counts[0]).toEqual(original);
+  expect(countInventoryAdjustment(adjusted, original.id)).toMatchObject({
+    inventoryAdjustment: { items: { copita: 3 } },
+    by: admin.id,
+  });
+  expect(adjusted.stock).toMatchObject([{ article: 'copita', quantity: 3, referenceId: original.id }]);
+  expect(stockBalances(adjusted)).toEqual({ copita: 3 });
+  expect(adjusted.shifts).toEqual(state.shifts);
+  expect(() => run(adjusted, 'adjust_count_inventory', payload, admin)).toThrow(/ya se usó/);
 });
 
 it('guarda el corte solicitado y oculta todos los esperados al cajero', () => {

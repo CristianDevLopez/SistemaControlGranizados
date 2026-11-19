@@ -1479,7 +1479,7 @@
                       </tr>
                       <tr>
                         <th scope="row">Solicitar arqueo y seleccionar ítems</th>
-                        <td>Sí con conexión y doble factor</td>
+                        <td>Sí con conexión</td>
                         <td>No</td>
                         <td>No</td>
                       </tr>
@@ -1515,7 +1515,7 @@
                       </tr>
                       <tr>
                         <th scope="row">Configurar catálogo promociones equipo y metas</th>
-                        <td>Sí con conexión y doble factor</td>
+                        <td>Sí con conexión</td>
                         <td>No</td>
                         <td>No</td>
                       </tr>
@@ -1569,11 +1569,10 @@
                 <h3 tabindex="-1">Ingreso de un administrador</h3>
                 <ol>
                   <li>Abre la aplicación y pulsa <strong>Administrador</strong>.</li>
-                  <li>Escribe tu correo electrónico y contraseña y pulsa <strong>Continuar</strong>.</li>
+                  <li>Pulsa <strong>Continuar con Google</strong> y elige tu cuenta administradora.</li>
                   <li>
-                    Completa el doble factor con el código de tu aplicación de autenticación. Si es tu primer
-                    acceso, sigue la configuración que muestra la pantalla y guarda el acceso a tu
-                    autenticador.
+                    También puedes entrar con tu correo y contraseña y pulsar <strong>Continuar</strong>. No
+                    necesitas Authenticator.
                   </li>
                   <li>
                     Si aparece <strong>Registrar este equipo</strong>, escribe un nombre que permita
@@ -1585,9 +1584,8 @@
                   </li>
                 </ol>
                 <p>
-                  La contraseña de las cuentas nuevas debe tener entre 14 y 200 caracteres. El código de doble
-                  factor y el PIN del empleado cumplen funciones diferentes; introducir uno en el campo del
-                  otro no inicia sesión.
+                  La contraseña de las cuentas nuevas debe tener entre 14 y 200 caracteres. Los empleados
+                  conservan el acceso con usuario y PIN.
                 </p>
                 <p>
                   <strong>Primera cuenta del negocio.</strong> La opción
@@ -1637,15 +1635,13 @@
                 <p>
                   En <strong>Administrador → Olvidé mi contraseña</strong>, escribe el correo y solicita el
                   enlace. También puedes abrir <strong>Recuperar mi contraseña</strong> desde el botón del
-                  perfil cuando tienes una sesión administrativa abierta. En el enlace de recuperación,
-                  verifica el doble factor si ya estaba configurado, elige una contraseña nueva y confírmala.
-                  Un enlace vencido permite solicitar otro.
+                  perfil cuando tienes una sesión administrativa abierta. En el enlace de recuperación, elige
+                  una contraseña nueva y confírmala. Un enlace vencido permite solicitar otro.
                 </p>
                 <p>
                   La recepción del correo depende del servicio de correo configurado. Si no llega, revisa spam
-                  y comunica el caso al desarrollador. Recuperar la contraseña no elimina el doble factor. Si
-                  perdiste el autenticador, informa al responsable del servicio; este formulario no es un
-                  mecanismo para omitirlo.
+                  y comunica el caso al desarrollador. No necesitas una aplicación de autenticación para
+                  recuperar la contraseña.
                 </p>
                 <p>
                   El empleado que olvida su PIN debe acudir al administrador o al responsable técnico; la
@@ -1710,7 +1706,7 @@
                     <tbody>
                       <tr>
                         <th scope="row">Mostrador</th>
-                        <td>Preparar pedidos degustaciones entregas y cobros autorizados</td>
+                        <td>Preparar pedidos, registrar entregas y realizar cobros autorizados</td>
                       </tr>
                       <tr>
                         <th scope="row">Pedidos</th>
@@ -2118,10 +2114,9 @@
               <section class="topic" id="tema-6-2" data-roles="admin" data-search="Apertura del turno">
                 <h3 tabindex="-1">Apertura por un administrador que atenderá caja</h3>
                 <p>
-                  Con conexión y doble factor, abre <strong>Turno y caja → Iniciar caja</strong>, indica la
-                  base y confirma. El turno queda a tu nombre y autorizado por ti; presenta después el conteo
-                  de apertura. No necesitas la autorización de otro administrador para iniciar tu propio
-                  turno.
+                  Con conexión, abre <strong>Turno y caja → Iniciar caja</strong>, indica la base y confirma.
+                  El turno queda a tu nombre y autorizado por ti; presenta después el conteo de apertura. No
+                  necesitas la autorización de otro administrador para iniciar tu propio turno.
                 </p>
                 <p>
                   Si existe efectivo físico anterior registrado, la aplicación utiliza ese saldo para la
@@ -2290,7 +2285,7 @@
                 data-roles="admin caja apoyo"
                 data-search="Pedidos entregas y cobros"
               >
-                <h3 tabindex="-1">Degustaciones y cambios antes del cobro</h3>
+                <h3 tabindex="-1">Combinados, cambios antes del cobro y degustaciones anteriores</h3>
                 <p>
                   Para un combinado o bomba, elige el tamaño y pulsa <strong>Combinado / bomba</strong>. Toca
                   los sabores que echaste, revisa las porciones y pulsa <strong>Agregar combinado</strong>. Se
@@ -2304,9 +2299,9 @@
                   sabor también permite <strong>Combinado / bomba</strong>.
                 </p>
                 <p>
-                  Registra la degustación con el sabor correspondiente desde Mostrador. Cada degustación
-                  descuenta una onza y una copita. Un pedido con solo degustaciones puede finalizarse sin
-                  venta; no se debe simular un cobro para cerrarlo.
+                  Las degustaciones registradas anteriormente conservan el descuento de una onza y una copita.
+                  Si quedó abierto un pedido que contiene solo degustaciones, usa
+                  <strong>Cerrar solo degustaciones</strong> para finalizarlo.
                 </p>
                 <p>
                   Si registraste una degustación de prueba o por error, usa la papelera de esa degustación
@@ -3035,9 +3030,9 @@
                   <li>
                     El responsable del turno abre
                     <strong>Turno y caja → Presentar arqueo y reanudar</strong> e ingresa únicamente las
-                    cantidades e importes solicitados, sin ver valores esperados. Los líquidos seleccionados
-                    se miden en onzas; los demás artículos se cuentan en unidades enteras. Si la atención
-                    continúa en papel, identifica cada folio y conserva el dinero posterior separado.
+                    cantidades e importes solicitados, sin ver valores esperados. Los insumos físicos se
+                    cuentan en unidades enteras. Si la atención continúa en papel, identifica cada folio y
+                    conserva el dinero posterior separado.
                   </li>
                   <li>
                     Al presentar el conteo con conexión se reanuda la operación. Solo el usuario responsable
@@ -3183,8 +3178,8 @@
                 </p>
                 <p>
                   El apoyo requiere conexión. La administración remota y las operaciones de configuración
-                  requieren conexión y doble factor. El inicio directo de una caja por un administrador
-                  también requiere conexión. Los cupones y promociones con límite global se validan en línea.
+                  requieren conexión. El inicio directo de una caja por un administrador también requiere
+                  conexión. Los cupones y promociones con límite global se validan en línea.
                 </p>
                 <p>
                   En el equipo principal habilitado pueden continuar las operaciones que la aplicación admita
@@ -3213,7 +3208,7 @@
               >
                 <h3 tabindex="-1">Abrir por contingencia</h3>
                 <p>
-                  El permiso debe prepararse antes, con conexión y doble factor, mediante
+                  El permiso debe prepararse antes, con conexión, mediante
                   <strong>Configuración → Equipo y accesos → Apertura de contingencia</strong>, estando el
                   administrador presente en el equipo de caja. Se configura un PIN de contingencia y una
                   autorización cifrada para ese equipo.
@@ -3286,7 +3281,7 @@
                 <p>
                   El bloqueo incluye cierres provisionales. No se agregan gastos, inventario, entregas ni
                   ediciones a ese turno. Abrir otro turno no desbloquea el anterior. Las correcciones quedan a
-                  cargo de un administrador conectado con doble factor.
+                  cargo de un administrador conectado.
                 </p>
               </section>
               <section
@@ -3370,9 +3365,9 @@
                 <p>
                   Después de cerrar, incluso si el cierre offline está provisional, los trabajadores no pueden
                   registrar gastos, inventario, entregas, movimientos ni editar pedidos de ese turno. Abrir
-                  otro turno no desbloquea el anterior. Solo un administrador conectado con doble factor puede
-                  registrar correcciones; en <strong>Registrar gasto → Turno a corregir</strong> puede
-                  vincular un gasto al turno cerrado. El registro original del conteo permanece intacto.
+                  otro turno no desbloquea el anterior. Solo un administrador conectado puede registrar
+                  correcciones; en <strong>Registrar gasto → Turno a corregir</strong> puede vincular un gasto
+                  al turno cerrado. El registro original del conteo permanece intacto.
                 </p>
               </section>
               <section class="topic" id="tema-16-1" data-roles="admin" data-search="Cierre de la jornada">
@@ -3405,8 +3400,8 @@
                     registra entregas reales, conserva soportes y presenta el cierre.
                   </li>
                   <li>
-                    Apoyo: identifica el pedido correcto, registra productos, degustaciones y entregas, cuenta
-                    lo recibido físicamente y comunica novedades al encargado.
+                    Apoyo: identifica el pedido correcto, registra productos y entregas, cuenta lo recibido
+                    físicamente y comunica novedades al encargado.
                   </li>
                   <li>
                     Ambos: utiliza tu cuenta, respeta la unidad de medida y evita repetir una operación que

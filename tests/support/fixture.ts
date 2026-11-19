@@ -27,7 +27,7 @@ export const admin: Actor = {
   deviceId: ids.remote,
   primary: false,
   online: true,
-  aal: 'aal2',
+  aal: 'aal1',
 };
 export const other: Actor = { ...admin, id: ids.other, name: 'Otro administrador' };
 export const owner: Actor = {

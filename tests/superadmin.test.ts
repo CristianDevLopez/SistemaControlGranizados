@@ -45,10 +45,13 @@ it('solo la identidad privada recibe el acceso y no aparece en el equipo de otro
   }
 });
 
-it('exige doble factor al superadministrador', async () => {
-  db.tokens.set(owner.id, { id: owner.id, aal: 'aal1' });
+it('el superadministrador conserva su acceso con una sesión sin doble factor', async () => {
+  db.tokens.set(owner.id, { id: owner.id, aal: 'aal1', sessionId: owner.deviceId });
   try {
-    expect((await request('snapshot')).body.code).toBe('MFA_REQUIRED');
+    const response = await request('snapshot');
+    expect(response.status).toBe(200);
+    expect(response.body.actor).toMatchObject({ superAdmin: true, aal: 'aal1' });
+    expect((await request('platform/view')).status).toBe(200);
   } finally {
     db.tokens.set(owner.id, { id: owner.id, aal: 'aal2', sessionId: owner.deviceId });
   }
@@ -304,7 +307,7 @@ describe('activación privada de un solo uso', () => {
       await db.db.exec('reset role');
     }
   });
-  it('rechaza correos y tokens ajenos, activa una sola identidad y exige MFA después', async () => {
+  it('rechaza correos y tokens ajenos y activa una sola identidad sin MFA', async () => {
     await db.db.exec('delete from private.superadmin_access');
     await db.db.query(
       "insert into private.superadmin_access(email,setup_hash,expires_at) values($1,$2,now()+interval '1 day')",
@@ -323,10 +326,10 @@ describe('activación privada de un solo uso', () => {
     expect(access.setup_hash).toBeNull();
     expect(access.expires_at).toBeNull();
     expect((await request('superadmin/setup', data)).status).toBe(403);
-    db.tokens.set(access.user_id, { id: access.user_id, aal: 'aal1' });
-    expect((await request('snapshot', undefined, { ...owner, id: access.user_id })).body.code).toBe(
-      'MFA_REQUIRED',
-    );
+    db.tokens.set(access.user_id, { id: access.user_id, aal: 'aal1', sessionId: crypto.randomUUID() });
+    const snapshot = await request('snapshot', undefined, { ...owner, id: access.user_id });
+    expect(snapshot.status).toBe(200);
+    expect(snapshot.body.actor.superAdmin).toBe(true);
     expect((await db.db.query('select id from auth.users where email=$1', [email])).rows).toHaveLength(1);
   });
   it('rechaza activaciones vencidas y resuelve carreras sin dejar usuarios huérfanos', async () => {
