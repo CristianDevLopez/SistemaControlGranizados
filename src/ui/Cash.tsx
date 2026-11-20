@@ -1,36 +1,21 @@
 import { useRef, useState } from 'react';
-import {
-  Plus,
-  ClipboardCheck,
-  ArrowUpRight,
-  ShieldCheck,
-  ArrowDownLeft,
-  Check,
-  Wallet,
-  Landmark,
-} from 'lucide-react';
+import { Plus, ClipboardCheck, ShieldCheck, Wallet } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
 import { parseMoney } from '../lib/money.ts';
 import { api } from '../lib/api.ts';
 import {
+  blindCountArticles,
   countArticles,
   countPaymentMethods,
   cashExpected,
-  locationBalance,
   salesByMethod,
 } from '../domain/engine.ts';
-import { canWork, hasPermission, isShiftCashier } from '../domain/access.ts';
-import { closingArchive, visibleCounts } from '../domain/closing-archive.ts';
-import { isNequiAccount, transferAccountName } from './payment-labels.ts';
+import { hasPermission, isShiftCashier, shiftBlocksSales } from '../domain/access.ts';
+import { closingArchive, inRehearsalPeriod, visibleCounts } from '../domain/closing-archive.ts';
+import { transferAccountName } from './payment-labels.ts';
 import type { ClosingPreview, CommandType, Count, Shift } from '../domain/types.ts';
 import { AuditSetupDialog, CountReviewDialog, auditModeLabels } from './CashAudit.tsx';
-import {
-  ClosingApprovalDialog,
-  ClosingComparison,
-  closingHasDifferences,
-  type ClosingValues,
-} from './ClosingReview.tsx';
-import { EmployeeRecoveries } from './EmployeeRecoveries.tsx';
+import { ClosingComparison, closingHasDifferences, type ClosingValues } from './ClosingReview.tsx';
 import {
   Badge,
   Empty,
@@ -301,7 +286,460 @@ export function CountDialog({
     </Modal>
   );
 }
+type EmployeeCountKind = 'opening' | 'closing' | 'opening_audit' | 'audit';
+
+function BlindCountDialog({
+  kind,
+  shift,
+  onClose,
+}: {
+  kind: EmployeeCountKind;
+  shift: Shift;
+  onClose: () => void;
+}) {
+  const app = useApp();
+  const { state } = app.data!;
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const request =
+    kind === 'opening_audit'
+      ? shift.blindOpening?.audit
+      : kind === 'audit'
+        ? state.settings[0].auditRequest
+        : null;
+  const list = blindCountArticles(state).filter((a) => !request || request.items.includes(a.id));
+  const cash = request?.cash !== false || (kind === 'audit' && !list.length);
+  const attempt =
+    (kind === 'opening' && shift.blindOpening?.status === 'recount') ||
+    (kind === 'closing' && shift.blindClosing?.status === 'recount')
+      ? 2
+      : 1;
+  const title =
+    kind === 'opening_audit' || (kind === 'audit' && state.settings[0].auditRequest?.opening)
+      ? 'Arqueo de apertura'
+      : kind === 'audit'
+        ? 'Arqueo sorpresa'
+        : kind === 'opening'
+          ? 'Conteo de apertura'
+          : 'Conteo de cierre';
+  const checklist =
+    kind === 'audit' && state.settings[0].auditRequest?.opening && !shift.openingCountId
+      ? (state.settings[0].openingChecklist ?? [])
+      : [];
+  return (
+    <Modal title={attempt === 2 ? `${title} · Recuento` : title} onClose={onClose}>
+      <form
+        className="fields-form"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setBusy(true);
+          setError('');
+          const data = new FormData(event.currentTarget);
+          const payload = {
+            shiftId: shift.id,
+            cash: cash ? parseMoney(data.get('cash')) : undefined,
+            items: Object.fromEntries(list.map((a) => [a.id, Number(data.get(a.id))])),
+          };
+          try {
+            const result = await app.run(
+              kind === 'opening_audit'
+                ? 'submit_blind_opening_audit'
+                : kind === 'audit'
+                  ? 'finish_audit'
+                  : 'submit_blind_count',
+              {
+                ...payload,
+                ...(kind === 'opening_audit'
+                  ? { auditId: request?.id }
+                  : kind === 'audit'
+                    ? {
+                        auditId: state.settings[0].auditId,
+                        checklist: Object.fromEntries(
+                          checklist.map((_, index) => [index, data.get(`check:${index}`) === 'on']),
+                        ),
+                      }
+                    : { kind, attempt }),
+              },
+              { onlineOnly: true },
+            );
+            app.toast(kind === 'audit' ? 'Arqueo registrado.' : result.message);
+            onClose();
+          } catch (e) {
+            setError((e as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {checklist.map((task, index) => (
+          <label className="check-inline" key={index}>
+            <input name={`check:${index}`} type="checkbox" required />
+            {task}
+          </label>
+        ))}
+        {cash && (
+          <label className="field">
+            <span>Efectivo contado *</span>
+            <MoneyInput name="cash" required />
+          </label>
+        )}
+        <div className="count-list">
+          {list.map((article) => (
+            <label key={article.id}>
+              <span>
+                {article.name}
+                <small>
+                  {article.id.startsWith('cup:')
+                    ? 'Vasos sueltos del paquete abierto'
+                    : article.id.startsWith('package:')
+                      ? 'Paquetes cerrados'
+                      : article.id.startsWith('sealed_bag:')
+                        ? 'Bolsas selladas'
+                        : article.unit}
+                </small>
+              </span>
+              <input
+                aria-label={article.name}
+                name={article.id}
+                type="number"
+                min="0"
+                max="1000000"
+                step="1"
+                inputMode="numeric"
+                required
+              />
+            </label>
+          ))}
+        </div>
+        {error && (
+          <div className="form-error" role="alert">
+            {error}
+          </div>
+        )}
+        <div className="form-actions">
+          <button className="button secondary" type="button" onClick={onClose} disabled={busy}>
+            Cancelar
+          </button>
+          <button className="button primary" disabled={busy || !app.online}>
+            {busy ? 'Enviando…' : 'Enviar conteo'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function employeeShiftStatus(shift: Shift) {
+  const opening = shift.blindOpening?.status;
+  if (
+    opening === 'review' ||
+    opening === 'audit' ||
+    opening === 'authorized' ||
+    (shift.closingReview?.status !== 'approved' &&
+      (shift.blindClosing?.status === 'review' || shift.closingReview?.status === 'pending'))
+  )
+    return 'En revisión';
+  if (opening === 'reviewed' || shift.closingReview?.status === 'approved') return 'Revisado';
+  if (shift.blindClosing?.status === 'matched' || opening === 'matched') return 'Coincidió';
+  return shift.status === 'closed' || shift.status === 'provisional' ? 'En revisión' : undefined;
+}
+
+function EmployeeCash() {
+  const app = useApp();
+  const { state, actor } = app.data!;
+  const shifts = state.shifts.filter((s) => s.cashierId === actor.id);
+  const active = shifts.find((s) => ['open', 'requested', 'provisional'].includes(s.status));
+  const opening = active?.blindOpening?.status;
+  const recount = active?.blindClosing?.status === 'recount';
+  const auditId = state.settings[0].auditId;
+  const owns = hasPermission(actor, 'shifts') && isShiftCashier(actor, active);
+  const canStart = actor.primary && actor.role !== 'apoyo' && hasPermission(actor, 'shifts');
+  const [count, setCount] = useState<EmployeeCountKind | null>(null);
+  const [prompt, setPrompt] = useState<NonNullable<typeof state.shiftReviewPrompt>[number] | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState('');
+  const [handoff, setHandoff] = useState<'request' | string | null>(null);
+  const destinations = state.transferDestinations ?? [];
+  const pendingHandoff = state.cashHandoffs?.find((item) => item.id === handoff);
+  const canHandoff =
+    active?.status === 'open' &&
+    isShiftCashier(actor, active) &&
+    hasPermission(actor, 'transfers') &&
+    !shiftBlocksSales(active) &&
+    !auditId;
+  return (
+    <div className="page-stack">
+      <div className="page-toolbar">
+        <h2>Turno</h2>
+        {!active && canStart && (
+          <button
+            className="button primary"
+            disabled={starting || !app.online}
+            onClick={async () => {
+              setStarting(true);
+              setError('');
+              try {
+                await app.run('request_shift', {}, { onlineOnly: true });
+                setCount('opening');
+              } catch (e) {
+                setError((e as Error).message);
+              } finally {
+                setStarting(false);
+              }
+            }}
+          >
+            <Plus size={17} />
+            {starting ? 'Iniciando…' : 'Abrir turno'}
+          </button>
+        )}
+      </div>
+      {!app.online && canStart && (
+        <div className="notice info">Conéctate para abrir, contar o cerrar el turno.</div>
+      )}
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {active && (
+        <Panel title="Turno actual">
+          <div className="shift-summary">
+            <div className="large-icon">
+              <Wallet size={26} />
+            </div>
+            <div>
+              <h3>{actor.name}</h3>
+              <p>{date(active.openedAt ?? active.requestedAt)}</p>
+            </div>
+            <Badge
+              tone={active.status === 'open' && !shiftBlocksSales(active) && !auditId ? 'green' : 'orange'}
+            >
+              {opening === 'review'
+                ? 'En revisión'
+                : shiftBlocksSales(active) || auditId
+                  ? 'Conteo pendiente'
+                  : stateNames[active.status]}
+            </Badge>
+          </div>
+          {opening === 'review' && (
+            <p className="notice warning">
+              Las ventas están en pausa mientras un administrador revisa la apertura.
+            </p>
+          )}
+          {active.status === 'open' && owns && (
+            <div className="button-row">
+              {opening === 'audit' ? (
+                <button
+                  className="button primary"
+                  disabled={!app.online}
+                  onClick={() => setCount('opening_audit')}
+                >
+                  Presentar arqueo de apertura
+                </button>
+              ) : auditId ? (
+                <button className="button primary" disabled={!app.online} onClick={() => setCount('audit')}>
+                  Presentar arqueo
+                </button>
+              ) : (
+                <>
+                  {(opening === 'pending' ||
+                    opening === 'recount' ||
+                    (!opening && !active.openingCountId && !recount)) && (
+                    <button
+                      className="button primary"
+                      disabled={!app.online}
+                      onClick={() => setCount('opening')}
+                    >
+                      {opening === 'recount' ? 'Volver a contar la apertura' : 'Contar apertura'}
+                    </button>
+                  )}
+                  {(!shiftBlocksSales(active) || recount) && (
+                    <button
+                      className="button primary"
+                      disabled={!app.online}
+                      onClick={() => setCount('closing')}
+                    >
+                      {recount ? 'Volver a contar el cierre' : 'Cerrar turno'}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </Panel>
+      )}
+      {active?.status === 'open' && (
+        <Panel title="Transferencias registradas">
+          {state.transferSummary?.length ? (
+            <div className="stats-grid">
+              {state.transferSummary.map(({ name, amount }, index) => (
+                <Stat key={index} label={name} value={money(amount)} />
+              ))}
+            </div>
+          ) : (
+            <Empty title="Sin transferencias en este turno" />
+          )}
+        </Panel>
+      )}
+      {canHandoff && (destinations.length > 0 || !!state.cashHandoffs?.length) && (
+        <Panel
+          title="Entregas de efectivo desde caja"
+          action={
+            destinations.length > 0 && (
+              <button
+                className="button small secondary"
+                disabled={!app.online}
+                onClick={() => setHandoff('request')}
+              >
+                Solicitar traslado
+              </button>
+            )
+          }
+        >
+          {state.cashHandoffs?.map((item) => (
+            <div className="notice info" key={item.id}>
+              <span>
+                {destinations.find((destination) => destination.id === item.to)?.name ?? 'Destino registrado'}{' '}
+                · {money(item.amount)} · {stateNames[item.status]}
+              </span>
+              {item.status === 'requested' && (
+                <button
+                  className="button small secondary"
+                  disabled={!app.online}
+                  onClick={() => setHandoff(item.id)}
+                >
+                  Registrar entrega
+                </button>
+              )}
+            </div>
+          ))}
+        </Panel>
+      )}
+      {handoff && canHandoff && (
+        <Modal
+          title={handoff === 'request' ? 'Solicitar traslado desde caja' : 'Registrar entrega de efectivo'}
+          onClose={() => setHandoff(null)}
+        >
+          <FieldsForm
+            fields={
+              handoff === 'request'
+                ? [
+                    {
+                      name: 'to',
+                      label: 'Destino',
+                      type: 'select',
+                      required: true,
+                      options: destinations.map(({ id, name }) => ({ value: id, label: name })),
+                    },
+                    { name: 'amount', label: 'Monto', type: 'money', required: true },
+                    { name: 'notes', label: 'Concepto', required: true },
+                  ]
+                : [
+                    {
+                      name: 'delivered',
+                      label: 'Confirmo que entregué el efectivo',
+                      type: 'checkbox',
+                      required: true,
+                    },
+                    {
+                      name: 'evidenceId',
+                      label: 'Comprobante',
+                      type: 'photo',
+                      required: destinations.some(
+                        (item) => item.id === pendingHandoff?.to && item.needsEvidence,
+                      ),
+                    },
+                  ]
+            }
+            onCancel={() => setHandoff(null)}
+            onSubmit={async (values) => {
+              const result =
+                handoff === 'request'
+                  ? await app.run('request_transfer', { ...values, shiftId: active.id })
+                  : await app.run('execute_transfer', { transferId: handoff, evidenceId: values.evidenceId });
+              app.toast(result.message);
+              setHandoff(null);
+            }}
+          />
+        </Modal>
+      )}
+      {!!state.shiftReviewPrompt?.length && (
+        <Panel title="Solicitudes de explicación">
+          {state.shiftReviewPrompt.map((request) => (
+            <div className="notice info" key={request.id}>
+              <span>
+                {request.notes} · {date(request.at)}
+              </span>
+              <button className="button secondary" disabled={!app.online} onClick={() => setPrompt(request)}>
+                Responder
+              </button>
+            </div>
+          ))}
+        </Panel>
+      )}
+      <Panel title="Mis turnos">
+        {shifts.some(employeeShiftStatus) ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Inicio</th>
+                  <th>Cierre</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...shifts]
+                  .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))
+                  .map((shift) => {
+                    const status = employeeShiftStatus(shift);
+                    return status ? (
+                      <tr key={shift.id}>
+                        <td>{date(shift.openedAt ?? shift.requestedAt)}</td>
+                        <td>{date(shift.closedAt)}</td>
+                        <td>{status}</td>
+                      </tr>
+                    ) : null;
+                  })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <Empty title="Aún no hay turnos en tu historial" />
+        )}
+      </Panel>
+      {count && active?.status === 'open' && owns && (
+        <BlindCountDialog
+          key={`${count}:${opening}:${active.blindClosing?.status}`}
+          kind={count}
+          shift={active}
+          onClose={() => setCount(null)}
+        />
+      )}
+      {prompt && (
+        <Modal title="Responder solicitud" onClose={() => setPrompt(null)}>
+          <p>{prompt.notes}</p>
+          <FieldsForm
+            fields={[{ name: 'notes', label: 'Explicación', type: 'textarea', required: true }]}
+            onCancel={() => setPrompt(null)}
+            onSubmit={async ({ notes }) => {
+              await app.run('answer_shift_review', { requestId: prompt.id, notes }, { onlineOnly: true });
+              app.toast('Explicación enviada.');
+              setPrompt(null);
+            }}
+          />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 export function Cash() {
+  const { actor } = useApp().data!;
+  return actor.role === 'admin' ? <AdminCash /> : <EmployeeCash />;
+}
+
+function AdminCash() {
   const app = useApp(),
     { state, actor, profiles } = app.data!;
   const active = state.shifts.find((x) => ['open', 'requested', 'provisional'].includes(x.status)),
@@ -311,16 +749,9 @@ export function Cash() {
   const { auditId, auditRequest, nextOpeningAudit } = state.settings[0];
   const openingAudit = auditRequest?.opening === true;
   const sales = admin && active?.status === 'open' ? salesByMethod(state, active.id) : undefined;
-  const nequiLocations = state.locations.filter(
-    (location) => location.type === 'bank' && isNequiAccount(location),
-  );
-  const otherLocations = sales
-    ? state.locations.filter((location) => !nequiLocations.includes(location))
-    : state.locations;
   const [count, setCount] = useState<'opening' | 'closing' | 'audit' | null>(null),
     [auditSetup, setAuditSetup] = useState<'current' | 'next_opening' | null>(null),
     [reviewCount, setReviewCount] = useState<Count | null>(null),
-    [approvalCount, setApprovalCount] = useState<Count | null>(null),
     [showArchived, setShowArchived] = useState(false),
     [form, setForm] = useState<{
       title: string;
@@ -338,13 +769,7 @@ export function Cash() {
       setError((e as Error).message);
     }
   };
-  const locationOptions = state.locations
-    .filter((x) => x.active)
-    .map((x) => ({ value: x.id, label: x.name }));
   const counts = visibleCounts(state, showArchived);
-  const pendingClosings = state.shifts.filter(
-    (s) => s.closingCountId && !s.closingArchive && s.closingReview?.status !== 'approved',
-  );
   return (
     <div className="page-stack">
       <div className="page-toolbar">
@@ -456,7 +881,7 @@ export function Cash() {
                   </button>
                 </>
               )}
-              {active.status === 'open' && admin && !auditId && (
+              {active.status === 'open' && admin && !auditId && !shiftBlocksSales(active) && (
                 <button
                   className="button secondary"
                   disabled={!app.online}
@@ -500,28 +925,6 @@ export function Cash() {
                   <Stat label="Base del turno" value={money(active.base)} />
                   <Stat label="Cobrado en efectivo" value={money(sales.cash)} />
                 </div>
-                <div className="stats-grid cash-transfer-stats">
-                  <Stat
-                    label="Cobrado por transferencia"
-                    value={money(sales.transfer)}
-                    note={
-                      Object.entries(sales.byAccount)
-                        .map(
-                          ([id, amount]) =>
-                            `${transferAccountName(state.locations.find((x) => x.id === id))}: ${money(amount)}`,
-                        )
-                        .join(' · ') || 'Sin transferencias en este turno'
-                    }
-                  />
-                  {nequiLocations.map((location) => (
-                    <Stat
-                      key={location.id}
-                      label={`Saldo en ${transferAccountName(location)}`}
-                      value={money(locationBalance(state, location.id))}
-                      note="Saldo registrado del negocio"
-                    />
-                  ))}
-                </div>
               </>
             )}
           </>
@@ -536,265 +939,15 @@ export function Cash() {
           />
         )}
       </Panel>
-      {admin && pendingClosings.length > 0 && (
-        <Panel title="Cierres pendientes de aprobación">
-          {pendingClosings.map((s) => {
-            const original = state.counts.find((c) => c.id === s.closingCountId);
-            return (
-              original && (
-                <div className="notice info" key={s.id}>
-                  <span>
-                    {profiles.find((p) => p.id === s.cashierId)?.name} · {date(s.closedAt)} · Pendiente de
-                    aprobación
-                  </span>
-                  <button
-                    className="button secondary"
-                    disabled={!app.online}
-                    onClick={() => setApprovalCount(original)}
-                  >
-                    Revisar y aprobar cierre
-                  </button>
-                </div>
-              )
-            );
-          })}
-        </Panel>
-      )}
-      {admin && <EmployeeRecoveries onReview={setReviewCount} />}
-      {admin && otherLocations.length > 0 && (
-        <div className="stats-grid">
-          {otherLocations.map((location) => (
-            <Stat
-              key={location.id}
-              label={location.name}
-              value={money(locationBalance(state, location.id))}
-              note={`${location.type === 'bank' ? 'Cuenta registrada' : 'Caja principal'} · ${profiles.find((x) => x.id === location.custodianId)?.name ?? 'Administrador'}`}
-            />
-          ))}
-        </div>
-      )}
-      <Panel
-        title="Entregas y consignaciones"
-        action={
-          canWork(actor, state, 'transfers') && (
-            <button
-              className="button secondary"
-              onClick={() =>
-                setForm({
-                  title: 'Solicitar movimiento de dinero',
-                  type: 'request_transfer',
-                  extra: { shiftId: active?.id },
-                  fields: [
-                    ...(admin
-                      ? [
-                          {
-                            name: 'from',
-                            label: 'Origen',
-                            type: 'select' as const,
-                            required: true,
-                            options: [
-                              ...(active ? [{ value: `cash:${active.id}`, label: 'Caja del turno' }] : []),
-                              ...locationOptions,
-                            ],
-                          },
-                        ]
-                      : []),
-                    {
-                      name: 'to',
-                      label: 'Destino registrado',
-                      type: 'select',
-                      options: locationOptions,
-                      required: true,
-                    },
-                    { name: 'amount', label: 'Monto', type: 'money', min: 1, required: true },
-                    { name: 'notes', label: 'Concepto', type: 'textarea', required: true },
-                    ...(admin
-                      ? [
-                          {
-                            name: 'type',
-                            label: 'Tipo',
-                            type: 'select' as const,
-                            value: 'transfer',
-                            options: [
-                              { value: 'transfer', label: 'Traslado dentro del negocio' },
-                              { value: 'profit', label: 'Salida por utilidad (requiere tres aprobaciones)' },
-                            ],
-                          },
-                        ]
-                      : []),
-                  ],
-                })
-              }
-            >
-              <Plus size={16} />
-              Nuevo movimiento
-            </button>
-          )
-        }
-      >
-        {state.transfers.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Movimiento</th>
-                  <th>Monto</th>
-                  <th>Responsables</th>
-                  <th>Estado</th>
-                  <th>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...state.transfers].reverse().map((t) => (
-                  <tr key={t.id}>
-                    <td>
-                      <strong>
-                        {t.type === 'reimbursement'
-                          ? 'Reembolso'
-                          : t.type === 'profit'
-                            ? 'Utilidad'
-                            : 'Traslado'}
-                      </strong>
-                      <small>
-                        {state.locations.find((x) => x.id === t.to)?.name ?? 'Beneficiario'} · {date(t.at)}
-                      </small>
-                      <small>{t.notes}</small>
-                    </td>
-                    <td>{money(t.amount)}</td>
-                    <td>
-                      <small>Entrega: {profiles.find((x) => x.id === t.by)?.name}</small>
-                      <small>Recibe: {profiles.find((x) => x.id === t.recipientId)?.name}</small>
-                    </td>
-                    <td>
-                      <Badge
-                        tone={t.status === 'confirmed' ? 'green' : t.status === 'disputed' ? 'red' : 'orange'}
-                      >
-                        {stateNames[t.status]}
-                      </Badge>
-                      {t.type !== 'transfer' && <small>{t.votes.length}/3 aprobaciones</small>}
-                    </td>
-                    <td>
-                      <div className="table-actions">
-                        {t.type !== 'transfer' &&
-                          t.status === 'requested' &&
-                          admin &&
-                          !t.votes.includes(actor.id) && (
-                            <button
-                              className="button small secondary"
-                              onClick={() =>
-                                setForm({
-                                  title: 'Aprobar salida',
-                                  type: 'approve_payout',
-                                  extra: { transferId: t.id },
-                                  fields: [
-                                    {
-                                      name: 'evidenceId',
-                                      label: 'Comprobante',
-                                      type: 'photo',
-                                      required: !t.evidenceId,
-                                    },
-                                  ],
-                                })
-                              }
-                            >
-                              Aprobar
-                            </button>
-                          )}
-                        {t.status === 'requested' &&
-                          (t.by === actor.id || (admin && t.recipientId !== actor.id)) && (
-                            <button
-                              className="button small secondary"
-                              disabled={
-                                !canWork(
-                                  actor,
-                                  state,
-                                  'transfers',
-                                  t.shiftId ?? (t.from.startsWith('cash:') ? t.from.slice(5) : undefined),
-                                ) ||
-                                (t.type !== 'transfer' && t.votes.length < 3)
-                              }
-                              onClick={() =>
-                                setForm({
-                                  title: 'Registrar entrega o consignación',
-                                  type: 'execute_transfer',
-                                  extra: { transferId: t.id },
-                                  fields: [
-                                    ...(t.from === 'treasury'
-                                      ? [
-                                          {
-                                            name: 'from',
-                                            label: 'Cuenta o caja que paga',
-                                            type: 'select' as const,
-                                            required: true,
-                                            options: locationOptions,
-                                          },
-                                        ]
-                                      : []),
-                                    {
-                                      name: 'evidenceId',
-                                      label: 'Comprobante o evidencia',
-                                      type: 'photo',
-                                      required:
-                                        state.locations.find((x) => x.id === t.to)?.type === 'bank' ||
-                                        t.type !== 'transfer',
-                                      hint: 'Confirma la ejecución real, no una solicitud.',
-                                    },
-                                  ],
-                                })
-                              }
-                            >
-                              <ArrowUpRight size={15} />
-                              Ejecutado
-                            </button>
-                          )}
-                        {t.status === 'in_transit' && t.recipientId === actor.id && t.by !== actor.id && (
-                          <button
-                            className="button small primary"
-                            disabled={!canWork(actor, state, 'transfers', t.shiftId)}
-                            onClick={() =>
-                              setForm({
-                                title: 'Confirmar recepción',
-                                type: 'confirm_transfer',
-                                extra: { transferId: t.id },
-                                fields: [
-                                  {
-                                    name: 'receivedAmount',
-                                    label: 'Monto recibido o verificado en la cuenta',
-                                    type: 'money',
-                                    min: 0,
-                                    required: true,
-                                  },
-                                ],
-                              })
-                            }
-                          >
-                            <ArrowDownLeft size={15} />
-                            Confirmar
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty
-            title="Cada peso tiene su lugar"
-            description="Las entregas y consignaciones aparecerán aquí. Solicitar un traslado no descuenta dinero."
-          />
-        )}
-      </Panel>
       <Panel title="Conteos registrados">
-        {state.shifts.some((s) => s.closingArchive) && (
+        {visibleCounts(state).length < state.counts.length && (
           <label>
             <input
               type="checkbox"
               checked={showArchived}
               onChange={(event) => setShowArchived(event.target.checked)}
             />{' '}
-            Mostrar cierres archivados
+            Mostrar conteos archivados y del período de ensayo
           </label>
         )}
         {counts.length ? (
@@ -819,6 +972,8 @@ export function Cash() {
                   <tr key={c.id}>
                     <td>
                       {c.kind === 'opening' ? 'Apertura' : c.kind === 'closing' ? 'Cierre' : 'Arqueo'}
+                      {c.blindAttempt && <small>{c.blindAttempt === 1 ? 'Primer conteo' : 'Recuento'}</small>}
+                      {inRehearsalPeriod(state, c.at) && <small>Período de ensayo</small>}
                       <small>{date(c.at)}</small>
                       {c.kind === 'closing' && (
                         <small>
@@ -921,9 +1076,6 @@ export function Cash() {
           />
         )}
       {reviewCount && admin && <CountReviewDialog count={reviewCount} onClose={() => setReviewCount(null)} />}
-      {approvalCount && admin && (
-        <ClosingApprovalDialog count={approvalCount} onClose={() => setApprovalCount(null)} />
-      )}
       {form && (
         <Modal title={form.title} onClose={() => setForm(null)}>
           <FieldsForm

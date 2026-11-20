@@ -1,4 +1,7 @@
 import type { Order, State } from './types.ts';
+import { currentPayments } from './engine.ts';
+import { additionsTotal } from './additions.ts';
+import { hasAlcohol, lineFlavorIds } from './flavors.ts';
 import { addDays, businessDay, rangeError } from './business-date.ts';
 export { addDays, businessDay, rangeError } from './business-date.ts';
 
@@ -45,7 +48,12 @@ export function summarizeSales(orders: Order[]): SalesSummary {
     units: orders.reduce((n, o) => n + o.lines.reduce((s, l) => s + l.quantity, 0), 0),
     average: orders.length ? amount / orders.length : 0,
     discounts: orders.reduce(
-      (n, o) => n + Math.max(0, o.lines.reduce((s, l) => s + l.listPrice * l.quantity, 0) - o.total),
+      (n, o) =>
+        n +
+        Math.max(
+          0,
+          o.lines.reduce((s, l) => s + l.listPrice * l.quantity, 0) + additionsTotal(o.additions) - o.total,
+        ),
       0,
     ),
   };
@@ -67,7 +75,7 @@ export function dashboardData(state: State, filter: DashboardFilter) {
       (o) => isSale(o) && matchesShift(o.shiftId) && inRange(o.paidAt!, start - duration, start),
     ),
   );
-  const payments = state.payments.filter((p) => matchesShift(p.shiftId) && inRange(p.at));
+  const payments = currentPayments(state.payments).filter((p) => matchesShift(p.shiftId) && inRange(p.at));
   const refunds = payments.filter((p) => p.amount < 0).reduce((n, p) => n - p.amount, 0);
   const expenses = state.expenses
     .filter((e) => e.status === 'approved' && matchesShift(e.shiftId) && inRange(e.at))
@@ -91,6 +99,15 @@ export function dashboardData(state: State, filter: DashboardFilter) {
   const flavorNames = new Map(state.flavors.map((f) => [f.id, f.name]));
   const sizeNames = new Map(state.sizes.map((s) => [s.id, s.name]));
   const shifts = new Map<string, Order[]>();
+  const sizes = new Map<string, { name: string; units: number; amount: number }>();
+  const flavors = new Map<string, { name: string; units: number; amount: number }>();
+  const alcohol = new Map<string, { name: string; units: number; amount: number }>();
+  const courtesyIds = new Set(state.coupons.filter((coupon) => coupon.courtesy).map((coupon) => coupon.id));
+  let courtesyCost = 0;
+  const addBucket = (map: typeof sizes, key: string, name: string, units: number, amount: number) => {
+    const prior = map.get(key) ?? { name, units: 0, amount: 0 };
+    map.set(key, { name, units: prior.units + units, amount: prior.amount + amount });
+  };
   for (const o of sales) {
     const key = businessDay(o.paidAt!).slice(0, monthly ? 7 : 10),
       bucket = buckets.get(key)!;
@@ -104,7 +121,7 @@ export function dashboardData(state: State, filter: DashboardFilter) {
     shiftOrders.push(o);
     shifts.set(o.shiftId, shiftOrders);
     for (const l of o.lines) {
-      const flavorIds = [...new Set(l.flavorIds?.length ? l.flavorIds : [l.flavorId])].sort();
+      const flavorIds = [...new Set(lineFlavorIds(l))].sort();
       const productKey = JSON.stringify([flavorIds, l.sizeId]);
       const product = products.get(productKey) ?? {
         key: productKey,
@@ -114,8 +131,25 @@ export function dashboardData(state: State, filter: DashboardFilter) {
         amount: 0,
       };
       product.units += l.quantity;
-      product.amount += l.listPrice * l.quantity - l.discount;
+      const amount = l.listPrice * l.quantity - l.discount;
+      product.amount += amount;
       products.set(productKey, product);
+      addBucket(sizes, l.sizeId, product.size, l.quantity, amount);
+      for (const flavorId of flavorIds)
+        addBucket(
+          flavors,
+          flavorId,
+          flavorNames.get(flavorId) ?? 'Sabor archivado',
+          l.quantity / flavorIds.length,
+          amount / flavorIds.length,
+        );
+      const kind = hasAlcohol(l, state.flavors) ? 'Con licor' : 'Sin licor';
+      addBucket(alcohol, kind, kind, l.quantity, amount);
+      if (l.appliedRules?.length) {
+        for (const rule of l.appliedRules)
+          if (rule.promotion.courtesyOnly || (rule.couponId && courtesyIds.has(rule.couponId)))
+            courtesyCost += Math.max(0, l.listPrice - rule.unitAmount) * rule.quantity;
+      } else if (l.couponId && courtesyIds.has(l.couponId)) courtesyCost += l.discount;
     }
   }
   // Incluye turnos sin ventas que estuvieron abiertos dentro del periodo.
@@ -156,8 +190,16 @@ export function dashboardData(state: State, filter: DashboardFilter) {
             ),
           ),
         }));
+  const summary = summarizeSales(sales);
+  const ranked = (map: typeof sizes) =>
+    Array.from(map, ([key, bucket]) => ({ key, ...bucket })).sort(
+      (a, b) => b.units - a.units || b.amount - a.amount,
+    );
   return {
-    ...summarizeSales(sales),
+    ...summary,
+    courtesyCost: Math.min(summary.discounts, courtesyCost),
+    promotionCost: Math.max(0, summary.discounts - courtesyCost),
+    breakdown: { sizes: ranked(sizes), flavors: ranked(flavors), alcohol: ranked(alcohol) },
     previous,
     previousFrom: businessDay(new Date(start - duration)),
     previousTo: addDays(filter.from, -1),

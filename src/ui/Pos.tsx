@@ -16,9 +16,11 @@ import { useApp } from '../lib/store.tsx';
 import { api } from '../lib/api.ts';
 import { getMeta, setMeta } from '../lib/db.ts';
 import { lineTotal } from '../domain/pricing.ts';
+import { additionsTotal, candyAdditions, type CandyAddition } from '../domain/additions.ts';
 import { hasAlcohol, sameFlavors } from '../domain/flavors.ts';
 import { FlavorPortions, flavorName, portionLabel } from './FlavorDetails.tsx';
-import { canWork, hasPermission, isShiftCashier } from '../domain/access.ts';
+import { canWork, hasPermission, isShiftCashier, shiftBlocksSales } from '../domain/access.ts';
+import { operatingShift } from '../domain/employee-view.ts';
 import { FlavorImage } from './FlavorImage.tsx';
 import type { MoneyLocation, Order, OrderLine, State } from '../domain/types.ts';
 import { paymentMethod, cupBalances } from '../domain/engine.ts';
@@ -163,7 +165,7 @@ function Checkout({
   onDone: () => void;
 }) {
   const app = useApp(),
-    { state } = app.data!,
+    { state, actor } = app.data!,
     refund = (order.paymentCredit ?? 0) > order.total,
     // Si hay que devolver dinero, se propone el mismo medio con el que se pagó la venta anulada.
     original = refund
@@ -224,6 +226,9 @@ function Checkout({
         <div className="checkout-amount">
           <small>Total del pedido</small>
           <strong>{money(total)}</strong>
+          {order.additions?.length ? (
+            <span>Incluye {money(additionsTotal(order.additions))} en adiciones</span>
+          ) : null}
           {order.paymentCredit !== undefined && (
             <span>
               Pago anterior aplicado: {money(order.paymentCredit)} · {due < 0 ? 'Devolver' : 'Recibir'}:{' '}
@@ -231,76 +236,78 @@ function Checkout({
             </span>
           )}
         </div>
-        <div className="coupon-entry">
-          <label>
-            Cupón o cortesía <small>Requiere conexión</small>
-            <div className="input-action">
-              <input
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder="Escribir código"
-                aria-label="Código de cupón o cortesía"
-                disabled={!app.online}
-              />
-              <button
-                type="button"
-                className="icon-button"
-                aria-label="Escanear cupón"
-                disabled={!app.online}
-                onClick={() => setScanner(true)}
-              >
-                <ScanLine size={20} />
-              </button>
-              <button
-                type="button"
-                className="button secondary"
-                disabled={!code || !app.online || busy}
-                onClick={() => void validate()}
-              >
-                Validar
-              </button>
-            </div>
-          </label>
-          {codes.length > 0 && (
-            <div className="coupon-tags">
-              {codes.map((c) => (
-                <Badge key={c} tone={unusedCodes.includes(c) ? 'neutral' : 'green'}>
-                  <Ticket size={13} />
-                  {c} {unusedCodes.includes(c) ? '· Sin usar' : '· Aplicado'}
-                </Badge>
-              ))}
-            </div>
-          )}
-          {applications.map((a, index) => {
-            const line = order.lines.find((l) => l.id === a.lineId);
-            return (
-              <p key={index}>
-                {a.code} → {a.quantity} × {state.flavors.find((f) => f.id === line?.flavorId)?.name} ·{' '}
-                {state.sizes.find((s) => s.id === line?.sizeId)?.name}. Por producto: {money(a.unitAmount)}
+        {actor.role === 'admin' && (
+          <div className="coupon-entry">
+            <label>
+              Cupón o cortesía <small>Requiere conexión</small>
+              <div className="input-action">
+                <input
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder="Escribir código"
+                  aria-label="Código de cupón o cortesía"
+                  disabled={!app.online}
+                />
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Escanear cupón"
+                  disabled={!app.online}
+                  onClick={() => setScanner(true)}
+                >
+                  <ScanLine size={20} />
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={!code || !app.online || busy}
+                  onClick={() => void validate()}
+                >
+                  Validar
+                </button>
+              </div>
+            </label>
+            {codes.length > 0 && (
+              <div className="coupon-tags">
+                {codes.map((c) => (
+                  <Badge key={c} tone={unusedCodes.includes(c) ? 'neutral' : 'green'}>
+                    <Ticket size={13} />
+                    {c} {unusedCodes.includes(c) ? '· Sin usar' : '· Aplicado'}
+                  </Badge>
+                ))}
+              </div>
+            )}
+            {applications.map((a, index) => {
+              const line = order.lines.find((l) => l.id === a.lineId);
+              return (
+                <p key={index}>
+                  {a.code} → {a.quantity} × {state.flavors.find((f) => f.id === line?.flavorId)?.name} ·{' '}
+                  {state.sizes.find((s) => s.id === line?.sizeId)?.name}. Por producto: {money(a.unitAmount)}
+                </p>
+              );
+            })}
+            {unusedCodes.length > 0 && (
+              <p className="notice info">
+                Sin canjear: {unusedCodes.join(', ')}. Se conservan disponibles hasta su vencimiento; no
+                generan dinero ni vuelto.
               </p>
-            );
-          })}
-          {unusedCodes.length > 0 && (
-            <p className="notice info">
-              Sin canjear: {unusedCodes.join(', ')}. Se conservan disponibles hasta su vencimiento; no generan
-              dinero ni vuelto.
-            </p>
-          )}
-          {codes.length > 0 && (
-            <button
-              className="text-button"
-              disabled={busy}
-              onClick={() => {
-                setCodes([]);
-                setUnusedCodes([]);
-                setApplications([]);
-                setTotal(order.total);
-              }}
-            >
-              Quitar cupones y revisar de nuevo
-            </button>
-          )}
-        </div>
+            )}
+            {codes.length > 0 && (
+              <button
+                className="text-button"
+                disabled={busy}
+                onClick={() => {
+                  setCodes([]);
+                  setUnusedCodes([]);
+                  setApplications([]);
+                  setTotal(order.total);
+                }}
+              >
+                Quitar cupones y revisar de nuevo
+              </button>
+            )}
+          </div>
+        )}
         {freeCups > 0 && (
           <div className="notice info">
             Cortesía aplicada: {freeCups} vaso{freeCups > 1 ? 's' : ''} completo{freeCups > 1 ? 's' : ''} sin
@@ -414,12 +421,15 @@ export function Pos() {
     [mixFlavors, setMixFlavors] = useState<string[]>([]),
     [flavorGroup, setFlavorGroup] = useState('all'),
     [payment, setPayment] = useState<PaymentChoice>(CASH);
-  const active = state.shifts.find((x) => x.status === 'open'),
+  const active = operatingShift(state),
     order = state.orders.find((x) => x.id === orderId && x.status === 'open'),
     size = state.sizes.find((x) => x.id === sizeId),
     open = state.orders.filter((x) => x.status === 'open');
   const canCash =
-    hasPermission(actor, 'payments') && isShiftCashier({ ...actor, online: app.online }, active);
+    hasPermission(actor, 'payments') &&
+    !!active &&
+    !shiftBlocksSales(active) &&
+    isShiftCashier({ ...actor, online: app.online }, active);
   const canOrders = canWork(actor, state, 'orders', order?.shiftId);
   const canDeliver = canWork(actor, state, 'deliveries', order?.shiftId);
   const canCancel = !!order && !order.replacesId && !order.lines.some((line) => line.delivered > 0);
@@ -458,6 +468,19 @@ export function Pos() {
       flavorIds: l.flavorIds,
       quantity: l.quantity,
     }));
+  const adjustAddition = (id: CandyAddition['id'], delta: number) =>
+    void action(async () => {
+      if (!order) return;
+      const quantities = new Map(order.additions?.map((item) => [item.id, item.quantity]));
+      quantities.set(id, (quantities.get(id) ?? 0) + delta);
+      const additions = [...quantities].flatMap(([id, quantity]) => (quantity > 0 ? [{ id, quantity }] : []));
+      await app.run('update_order', {
+        orderId: order.id,
+        expectedVersion: order.version,
+        lines: inputs(order.lines),
+        additions,
+      });
+    });
   const cancelOrder = async () => {
     if (!order || !canCancel) return;
     await app.run('cancel_order', { orderId: order.id, expectedVersion: order.version });
@@ -528,15 +551,21 @@ export function Pos() {
             : 'Arqueo en curso. Usa la planilla manual y conserva por separado el efectivo recibido después del corte.'}
         </div>
       )}
+      {active && shiftBlocksSales(active) && (
+        <div className="notice warning" role="status">
+          Ventas en pausa mientras se completa el conteo del turno.
+        </div>
+      )}
       {!app.online && (
         <div className="notice warning">
           Sin conexión.{' '}
           {actor.primary
-            ? 'Las ventas se guardan en este equipo. Los cupones esperan conexión.'
+            ? 'Las ventas se guardan en este equipo.'
             : 'Registra pedidos desde el equipo de caja mientras vuelve la conexión.'}
         </div>
       )}
-      {active &&
+      {actor.role === 'admin' &&
+        active &&
         !state.settings[0].auditId &&
         size &&
         size.cups > 0 &&
@@ -826,6 +855,44 @@ export function Pos() {
                     )}
                   </div>
                 ))}
+                {order.lines.length > 0 && (
+                  <details className="cart-line candy-additions">
+                    <summary>
+                      Adiciones{order.additions?.length ? ` · ${money(additionsTotal(order.additions))}` : ''}
+                    </summary>
+                    {candyAdditions.map((addition) => {
+                      const quantity =
+                        order.additions?.find((item) => item.id === addition.id)?.quantity ?? 0;
+                      return (
+                        <div className="list-row" key={addition.id}>
+                          <div>
+                            <strong>{addition.name}</strong>
+                            <small>{money(addition.unitPrice)}</small>
+                          </div>
+                          <div className="quantity-control">
+                            <button
+                              type="button"
+                              aria-label={`Quitar ${addition.name}`}
+                              disabled={busy || !canOrders || quantity === 0}
+                              onClick={() => adjustAddition(addition.id, -1)}
+                            >
+                              <Minus size={13} />
+                            </button>
+                            <span>{quantity}</span>
+                            <button
+                              type="button"
+                              aria-label={`Agregar ${addition.name}`}
+                              disabled={busy || !canOrders || quantity >= 500}
+                              onClick={() => adjustAddition(addition.id, 1)}
+                            >
+                              <Plus size={13} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </details>
+                )}
                 <TastingsEditor
                   order={order}
                   busy={busy}
@@ -866,7 +933,9 @@ export function Pos() {
                     </button>
                     <button className="text-button full" disabled={busy} onClick={() => setCheckout(true)}>
                       <Ticket size={15} />
-                      Cupón, cortesía, vuelto o entregar después
+                      {actor.role === 'admin'
+                        ? 'Cupón, cortesía, vuelto o entregar después'
+                        : 'Vuelto o entregar después'}
                     </button>
                   </>
                 ) : order.lines.length > 0 ? (

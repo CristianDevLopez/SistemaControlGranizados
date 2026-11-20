@@ -7,7 +7,17 @@ import {
   ONLINE_LAG_MS,
 } from '../src/domain/engine.ts';
 import type { Actor, CommandType, Promotion, State } from '../src/domain/types.ts';
-import { NOW, ids, fixture, cashier, admin, cmd, run, countedItems } from './support/fixture.ts';
+import {
+  NOW,
+  ids,
+  fixture,
+  cashier,
+  admin,
+  cmd,
+  run,
+  countedItems,
+  approveChange,
+} from './support/fixture.ts';
 
 // La hora del dispositivo solo se acepta hacia adelante (ver effectiveAt en engine.ts).
 const offline: Actor = { ...cashier, online: false };
@@ -257,7 +267,7 @@ describe('fechas en hora de Colombia', () => {
   });
 
   it('las vigencias de promociones se guardan en UTC', () => {
-    const s = run(
+    const proposal = run(
       fixture(),
       'save_promotion',
       {
@@ -269,7 +279,8 @@ describe('fechas en hora de Colombia', () => {
         endsAt: '2026-10-24T00:00:00-05:00',
       },
       admin,
-    ).state;
+    );
+    const s = approveChange(proposal).state;
     expect(s.promotions.at(-1)).toMatchObject({
       startsAt: '2026-10-23T17:00:00.000Z',
       endsAt: '2026-10-24T05:00:00.000Z',

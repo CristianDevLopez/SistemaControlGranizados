@@ -1515,6 +1515,14 @@ strong {
   font-size: 10px;
   margin-top: 5px;
 }
+.candy-additions summary {
+  cursor: pointer;
+  font-weight: 700;
+  padding-block: 0.35rem;
+}
+.candy-additions .list-row {
+  padding-inline: 0;
+}
 .cart-line-head > strong {
   font-size: 13px;
   white-space: nowrap;
@@ -3025,9 +3033,6 @@ dd {
 .panel > .stats-grid {
   margin: 0 22px 22px;
 }
-.panel > .cash-transfer-stats {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
 .two-columns {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3152,15 +3157,32 @@ dd {
   font-size: 12px;
   margin-top: 12px;
 }
-.liquid-summary {
-  padding: 20px 22px;
+.inventory-disclosure > summary {
+  padding: 16px 22px;
+  color: var(--ink);
 }
-.liquid-summary p {
+.inventory-disclosure > summary strong {
+  font-size: 14px;
+}
+.inventory-disclosure > summary small {
+  display: block;
+  padding: 4px 0 0 17px;
+}
+.inventory-disclosure[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+.inventory-discrepancies > p,
+.inventory-table-note,
+.inventory-fortnight > p {
+  padding: 12px 22px;
   font-size: 12px;
-  margin: 10px 0;
 }
-.liquid-summary small {
-  font-size: 11px;
+.inventory-fortnight > .field {
+  margin: 12px 22px 0;
+  max-width: 220px;
+}
+.inventory-bag-difference {
+  display: block;
 }
 pre {
   white-space: pre-wrap;

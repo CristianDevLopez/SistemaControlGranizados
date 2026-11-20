@@ -1,4 +1,5 @@
 import type { Actor, Order, CommandType, Permission, Profile, Shift, State } from './types.ts';
+import { operatingShift } from './employee-view.ts';
 
 export function canCorrectTastings(actor: Actor, order: Order, activeShift?: Shift): boolean {
   return actor.role === 'admin' || order.shiftId === activeShift?.id;
@@ -9,13 +10,13 @@ export const permissionLabels: Record<Permission, string> = {
   deliveries: 'Registrar entregas y degustaciones',
   payments: 'Cobrar y tramitar correcciones de ventas (solo caja)',
   expenses: 'Registrar gastos (solo caja)',
-  inventory: 'Registrar inventario y recepciones',
+  inventory: 'Registrar aperturas y reportar daños',
   transfers: 'Mover dinero (solo caja)',
   shifts: 'Abrir y cerrar su caja',
 };
 export const roleGuide = {
   admin:
-    'Administra catálogo, usuarios, permisos y cortesías; autoriza turnos y corrige registros cerrados. Requiere conexión.',
+    'Administra catálogo, usuarios y cortesías. Revisa turnos y propone cambios de precios, permisos e inventario.',
   encargado:
     'La caja principal crea y edita pedidos, cobra y realiza el cuadre de su turno. Recibe los pedidos del apoyo con el nombre de quien los tomó.',
   apoyo:
@@ -28,10 +29,11 @@ export function hasPermission(actor: Profile, permission: Permission): boolean {
   return actor.permissions?.[permission] ?? true;
 }
 export function canWork(actor: Profile, state: State, permission: Permission, shiftId?: string): boolean {
+  const shift = operatingShift(state);
+  if (shift && shiftBlocksSales(shift)) return false;
   return (
     hasPermission(actor, permission) &&
-    (actor.role === 'admin' ||
-      state.shifts.some((s) => s.status === 'open' && (!shiftId || s.id === shiftId)))
+    (actor.role === 'admin' || (!!shift && (!shiftId || shift.id === shiftId)))
   );
 }
 export function commandPermission(type: CommandType): Permission | undefined {
@@ -43,7 +45,23 @@ export function commandPermission(type: CommandType): Permission | undefined {
   if (['open_package', 'open_bag', 'exhaust_bag', 'receive_shipment', 'report_damage'].includes(type))
     return 'inventory';
   if (['request_transfer', 'execute_transfer', 'confirm_transfer'].includes(type)) return 'transfers';
-  if (['request_shift', 'count', 'finish_audit'].includes(type)) return 'shifts';
+  if (
+    ['request_shift', 'count', 'finish_audit', 'submit_blind_count', 'submit_blind_opening_audit'].includes(
+      type,
+    )
+  )
+    return 'shifts';
+}
+
+export function shiftBlocksSales(shift: Shift | undefined): boolean {
+  const opening = shift?.blindOpening?.status;
+  return (
+    opening === 'pending' ||
+    opening === 'recount' ||
+    opening === 'review' ||
+    opening === 'audit' ||
+    shift?.blindClosing?.status === 'recount'
+  );
 }
 
 export function isShiftCashier(actor: Actor, shift: Shift | undefined): boolean {

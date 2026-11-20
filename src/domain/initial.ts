@@ -1,5 +1,6 @@
 import { COLLECTIONS, type State, type Size, type Settings } from './types.ts';
 export const SETTINGS_ID = '00000000-0000-4000-8000-000000000001';
+export const DEFAULT_LIQUID_BAG_WINDOW = 5;
 export function initialState(): State {
   const s = Object.fromEntries(COLLECTIONS.map((k) => [k, []])) as unknown as State;
   const settings: Settings = {
@@ -12,6 +13,7 @@ export function initialState(): State {
     cupPackageUnits: 20,
     bagOunces: 202.884136,
     liquidTolerance: null,
+    liquidBagWindow: DEFAULT_LIQUID_BAG_WINDOW,
     syncWarningMinutes: 120,
     skipOpeningCount: false,
     baseline: true,

@@ -16,7 +16,7 @@ async function nav(page: Page) {
     await page.getByRole('button', { name: 'Abrir menú', exact: true }).click();
     await expect(page.locator('.sidebar')).toHaveClass(/mobile-open/);
   }
-  await page.getByRole('navigation').getByRole('button', { name: 'Dashboard', exact: true }).click();
+  await page.getByRole('navigation').getByRole('button', { name: 'Ventas', exact: true }).click();
 }
 async function seedSale(request: APIRequestContext) {
   const headers = {
@@ -71,14 +71,17 @@ test('dashboard muestra ventas reales, filtra por fechas y turno y exporta los m
     '2',
   );
   await expect(page.locator('.dashboard-product')).toContainText('Sabor de prueba con licor');
-  await page.getByRole('button', { name: 'Hoy', exact: true }).click();
+  await page
+    .getByRole('group', { name: 'Periodos rápidos' })
+    .getByRole('button', { name: 'Hoy', exact: true })
+    .click();
   await expect(page.getByLabel('Desde', { exact: true })).toHaveValue(businessDay());
   await page.getByLabel('Turno', { exact: true }).selectOption(ids.shift);
   await expect(kpis).toContainText('28.000');
   await page.getByRole('button', { name: 'Ver tabla de datos', exact: true }).click();
   await expect(page.getByRole('table', { name: 'Ventas por día', exact: true })).toContainText('28.000');
   const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Exportar dashboard', exact: true }).click();
+  await page.getByRole('button', { name: 'Exportar ventas', exact: true }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toContain('dexter-dashboard');
   const contents = await readFile((await download.path())!, 'utf8');
@@ -99,14 +102,14 @@ test('dashboard muestra ventas reales, filtra por fechas y turno y exporta los m
   await expect(page.getByRole('status').filter({ hasText: 'No hay ventas cobradas' })).toBeVisible();
   await page.getByLabel('Desde', { exact: true }).fill('2025-03-01');
   await expect(page.getByRole('alert')).toContainText('La fecha inicial');
-  await expect(page.getByRole('button', { name: 'Exportar dashboard', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Exportar ventas', exact: true })).toBeDisabled();
 });
 
 test('los roles de operación no tienen acceso al dashboard', async ({ page }) => {
   await login(page, 'caja@test.invalid');
   if ((page.viewportSize()?.width ?? 1280) <= 900)
     await page.getByRole('button', { name: 'Abrir menú', exact: true }).click();
-  await expect(
-    page.getByRole('navigation').getByRole('button', { name: 'Dashboard', exact: true }),
-  ).toHaveCount(0);
+  await expect(page.getByRole('navigation').getByRole('button', { name: 'Ventas', exact: true })).toHaveCount(
+    0,
+  );
 });

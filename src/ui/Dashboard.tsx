@@ -88,6 +88,8 @@ export function Dashboard() {
       ['Unidades', data.units],
       ['Ticket promedio COP', data.average],
       ['Descuentos COP', data.discounts],
+      ['Costo de promociones COP', data.promotionCost],
+      ['Costo de cortesías COP', data.courtesyCost],
       ['Recaudo neto COP', data.receipts],
       ['Devoluciones COP', data.refunds],
       ['Gastos aprobados COP', data.expenses],
@@ -128,6 +130,15 @@ export function Dashboard() {
       }),
     );
     data.methods.forEach((m) => add('Recaudo por medio', m.name, m.amount));
+    for (const [label, values] of [
+      ['Tamaño', data.breakdown.sizes],
+      ['Sabor', data.breakdown.flavors],
+      ['Con o sin licor', data.breakdown.alcohol],
+    ] as const) {
+      values.forEach((value) =>
+        rows.push({ Seccion: label, Producto: value.name, Ventas_COP: value.amount, Unidades: value.units }),
+      );
+    }
     downloadFile(
       new TextEncoder().encode(csv(rows)).buffer,
       `dexter-dashboard-${range.from}-${range.to}.csv`,
@@ -142,10 +153,10 @@ export function Dashboard() {
       <div className="page-toolbar">
         <div>
           <h2>El pulso de tu negocio</h2>
-          <p>Consulta las ventas y descubre qué está impulsando cada jornada.</p>
+          <p>Ventas, recaudo y avance de metas del local.</p>
         </div>
         <button className="button secondary" disabled={!data} onClick={exportData}>
-          <Download size={17} /> Exportar dashboard
+          <Download size={17} /> Exportar ventas
         </button>
       </div>
       <section className="panel dashboard-filters" aria-label="Filtros del dashboard">
@@ -475,10 +486,11 @@ export function Dashboard() {
             <Panel title="Seguimiento de la operación">
               <div className="dashboard-operation">
                 <Stat
-                  label="Descuentos aplicados"
-                  value={money(data.discounts)}
-                  note="Incluidos en las ventas netas"
+                  label="Costo de promociones"
+                  value={money(data.promotionCost)}
+                  note="Descuento sobre el precio de lista"
                 />
+                <Stat label="Costo de cortesías" value={money(data.courtesyCost)} note="Valor no cobrado" />
                 <Stat label="Tickets anulados" value={data.voided} note="Según fecha del cobro original" />
                 <Stat label="Pedidos abiertos" value={data.open} note="Creados en el periodo" />
                 <Stat label="Entregado sin pagar" value={money(data.unpaid)} note="Incidentes del periodo" />
@@ -490,6 +502,50 @@ export function Dashboard() {
               )}
             </Panel>
           </div>
+          <Panel title="Ventas por tamaño, sabor y licor">
+            {data.tickets ? (
+              <div className="dashboard-goals">
+                {(
+                  [
+                    ['Tamaño', data.breakdown.sizes],
+                    ['Sabor', data.breakdown.flavors],
+                    ['Con o sin licor', data.breakdown.alcohol],
+                  ] as const
+                ).map(([label, values]) => (
+                  <details key={label} open>
+                    <summary>{label}</summary>
+                    {label === 'Sabor' && (
+                      <p className="dashboard-table-caption">
+                        Las mezclas reparten unidades y valor por igual entre sus sabores.
+                      </p>
+                    )}
+                    <div className="table-wrap">
+                      <table aria-label={`Ventas · ${label}`}>
+                        <thead>
+                          <tr>
+                            <th>{label}</th>
+                            <th>Unidades</th>
+                            <th>Ventas netas</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {values.map((value) => (
+                            <tr key={value.key}>
+                              <td>{value.name}</td>
+                              <td>{number(value.units)}</td>
+                              <td>{money(value.amount)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                ))}
+              </div>
+            ) : (
+              <Empty title="Sin ventas en este periodo" />
+            )}
+          </Panel>
           <Panel title="Resultados por turno" action={<Badge>{data.shifts.length} turnos</Badge>}>
             {!!data.shifts.length && (
               <p className="dashboard-table-caption">

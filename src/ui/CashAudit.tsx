@@ -20,8 +20,9 @@ export const auditModeLabels: Record<AuditMode, string> = {
 
 export function AuditSetupDialog({ shift, onClose }: { shift?: Shift; onClose: () => void }) {
   const app = useApp(),
-    { state, profiles } = app.data!;
+    { state, profiles, actor } = app.data!;
   const schedule = shift ? undefined : state.settings[0].nextOpeningAudit;
+  const methods = shift?.cashierId === actor.id ? closingPaymentMethods(state, shift.id) : [];
   const [mode, setMode] = useState<AuditMode>(schedule?.mode ?? (shift ? 'custom' : 'full'));
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('');
@@ -74,8 +75,8 @@ export function AuditSetupDialog({ shift, onClose }: { shift?: Shift; onClose: (
           </select>
           {mode === 'full' && (
             <small>
-              Incluye efectivo, cuentas de transferencia, bolsas selladas, paquetes de vasos, vasos sueltos y
-              demás insumos físicos.
+              Incluye efectivo, bolsas selladas, paquetes de vasos, vasos sueltos y coronas.
+              {!!methods.length && ' Incluye las transferencias del turno.'}
             </small>
           )}
         </label>
@@ -87,7 +88,7 @@ export function AuditSetupDialog({ shift, onClose }: { shift?: Shift; onClose: (
                 <input type="checkbox" name="cash" defaultChecked={schedule?.cash ?? true} />
                 Efectivo
               </label>
-              {closingPaymentMethods(state, shift?.id).map(({ id, account }) => (
+              {methods.map(({ id, account }) => (
                 <label className="check-inline" key={id}>
                   <input
                     type="checkbox"
@@ -95,7 +96,7 @@ export function AuditSetupDialog({ shift, onClose }: { shift?: Shift; onClose: (
                     value={id}
                     defaultChecked={schedule?.payments.includes(id)}
                   />
-                  {shift ? 'Transferencias' : 'Saldo de apertura'} · {transferAccountName(account)}
+                  Transferencias · {transferAccountName(account)}
                 </label>
               ))}
             </fieldset>
@@ -206,7 +207,7 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
               required: true,
             },
           ]}
-          submit="Confirmar ajuste de inventario"
+          submit="Proponer ajuste de inventario"
           onCancel={() => setAdjusting(null)}
           onSubmit={async ({ notes, confirmed, ...items }) => {
             await app.run('adjust_count_inventory', {
@@ -216,7 +217,6 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
               confirmed,
               expectedItems: adjusting,
             });
-            app.toast('Inventario ajustado. Se conservó el conteo original.');
             setAdjusting(null);
           }}
         />

@@ -1,162 +1,90 @@
-import { useState } from 'react';
-import { PackageOpen, Plus, Droplets, AlertTriangle } from 'lucide-react';
-import { articles, physicalArticles, stockBalances } from '../domain/engine.ts';
-import { liquidReconciliation } from '../domain/liquid.ts';
-import { LiquidFortnightReport } from './LiquidFortnightReport.tsx';
-import { useApp } from '../lib/store.tsx';
-import { Badge, Empty, FieldsForm, Modal, Panel, date, type Field } from './components.tsx';
-import type { CommandType } from '../domain/types.ts';
+import { useState, type ReactNode } from 'react';
+import { AlertTriangle, Droplets, PackageOpen } from 'lucide-react';
 import { canWork } from '../domain/access.ts';
-export function Inventory() {
-  const app = useApp(),
-    { state, actor } = app.data!,
-    admin = actor.role === 'admin',
-    balances = stockBalances(state),
-    list = articles(state);
-  const [query, setQuery] = useState(''),
-    [group, setGroup] = useState('all'),
-    [form, setForm] = useState<{
-      title: string;
-      type: CommandType;
-      fields: Field[];
-      extra?: Record<string, unknown>;
-    } | null>(null),
-    [initial, setInitial] = useState(false);
-  const filtered = list.filter(
-    (x) => (group === 'all' || x.id.startsWith(group)) && x.name.toLowerCase().includes(query.toLowerCase()),
-  );
+import { articles, stockBalances } from '../domain/engine.ts';
+import { operatingShift } from '../domain/employee-view.ts';
+import { DEFAULT_LIQUID_BAG_WINDOW } from '../domain/initial.ts';
+import { inventoryDiscrepancies, inventoryOpenings, liquidBagInventory } from '../domain/inventory.ts';
+import type { CommandType, Snapshot } from '../domain/types.ts';
+import { useApp } from '../lib/store.tsx';
+import { Empty, FieldsForm, Modal, Panel, date, type Field } from './components.tsx';
+import { LiquidFortnightReport } from './LiquidFortnightReport.tsx';
+
+const amount = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 });
+const signed = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 6, signDisplay: 'exceptZero' });
+
+function InventoryTable({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
   return (
-    <div className="page-stack">
-      <div className="page-toolbar">
-        <div>
-          <h2>Insumos en movimiento</h2>
-          <p>Cada entrada, entrega y merma conserva su origen.</p>
-        </div>
-        <div className="button-row">
-          <button
-            className="button secondary"
-            disabled={!canWork(actor, state, 'inventory')}
-            onClick={() =>
-              setForm({
-                title: 'Abrir paquete de vasos',
-                type: 'open_package',
-                fields: [
-                  {
-                    name: 'sizeId',
-                    label: 'Tamaño',
-                    type: 'select',
-                    required: true,
-                    options: state.sizes
-                      .filter((x) => x.cups > 0)
-                      .map((x) => ({ value: x.id, label: x.name })),
-                  },
-                  {
-                    name: 'units',
-                    label: 'Unidades del paquete',
-                    type: 'number',
-                    value: state.settings[0].cupPackageUnits,
-                    min: 1,
-                    required: true,
-                  },
-                  {
-                    name: 'confirmEmpty',
-                    label: 'Confirmo que el paquete anterior está vacío',
-                    type: 'checkbox',
-                  },
-                ],
-              })
-            }
-          >
-            <PackageOpen size={17} />
-            Abrir paquete
-          </button>
-          <button
-            className="button primary"
-            disabled={!canWork(actor, state, 'inventory')}
-            onClick={() =>
-              setForm({
-                title: 'Abrir bolsa de líquido',
-                type: 'open_bag',
-                fields: [
-                  {
-                    name: 'flavorId',
-                    label: 'Sabor',
-                    type: 'select',
-                    required: true,
-                    options: state.flavors.map((x) => ({ value: x.id, label: x.name })),
-                  },
-                  {
-                    name: 'ounces',
-                    label: 'Onzas de la bolsa',
-                    type: 'number',
-                    value: state.settings[0].bagOunces,
-                    step: '0.000001',
-                    min: 0.01,
-                    required: true,
-                  },
-                ],
-              })
-            }
-          >
-            <Droplets size={17} />
-            Abrir bolsa
-          </button>
-        </div>
-      </div>
-      <div className="notice info">
-        {admin
-          ? 'El líquido es un saldo teórico. Los desperdicios y daños se registran; la tolerancia solo determina cuándo alertar.'
-          : 'Los conteos de inventario se presentan a ciegas. El administrador revisa los saldos y las diferencias.'}
-      </div>
-      <Panel
-        title="Inventario"
-        action={
-          <div className="button-row">
-            {admin && (
-              <button className="button small primary" onClick={() => setInitial(true)}>
-                Registrar inventario inicial
-              </button>
-            )}
-            <button
-              className="button small secondary"
-              disabled={!canWork(actor, state, 'inventory')}
-              onClick={() =>
-                setForm({
-                  title: 'Reportar daño o desperdicio',
-                  type: 'report_damage',
-                  fields: [
-                    {
-                      name: 'article',
-                      label: 'Artículo',
-                      type: 'select',
-                      required: true,
-                      options: list.map((x) => ({ value: x.id, label: `${x.name} (${x.unit})` })),
-                    },
-                    {
-                      name: 'quantity',
-                      label: 'Cantidad',
-                      type: 'number',
-                      step: '0.001',
-                      min: 0.001,
-                      required: true,
-                    },
-                    { name: 'notes', label: 'Motivo', type: 'textarea', required: true },
-                    { name: 'evidenceId', label: 'Fotografía', type: 'photo', required: true },
-                    {
-                      name: 'checklist',
-                      label: 'Bolsa: verifiqué empaque, contenido y estado',
-                      type: 'checkbox',
-                    },
-                    { name: 'diagnosis', label: 'Diagnóstico de bolsa (si aplica)', type: 'textarea' },
-                  ],
-                })
-              }
-            >
-              <AlertTriangle size={15} />
-              Reportar daño
-            </button>
+    <details className="panel inventory-disclosure">
+      <summary>
+        <strong>{title}</strong>
+        <small>{description}</small>
+      </summary>
+      {children}
+    </details>
+  );
+}
+
+function AdminInventory({ snapshot, onCorrect }: { snapshot: Snapshot; onCorrect: () => void }) {
+  const [query, setQuery] = useState('');
+  const [group, setGroup] = useState('');
+  const { state, profiles } = snapshot;
+  const settings = state.settings[0];
+  const liquid = liquidBagInventory(state);
+  const discrepancies = inventoryDiscrepancies(state, liquid);
+  const balances = stockBalances(state);
+  for (const row of liquid) balances[`liquid:${row.flavorId}`] = row.remaining;
+  const openings = inventoryOpenings(state);
+  const names = new Map(profiles.map((profile) => [profile.id, profile.name]));
+  const window = settings.liquidBagWindow ?? DEFAULT_LIQUID_BAG_WINDOW;
+  const stock = articles(state).filter(
+    (item) => item.id.startsWith(group) && item.name.toLowerCase().includes(query.trim().toLowerCase()),
+  );
+
+  return (
+    <>
+      <Panel title="Lo que no cuadra" className="inventory-discrepancies">
+        <p>Consulta diferencias de líquido y vasos sueltos para orientar el próximo conteo.</p>
+        {discrepancies.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Artículo</th>
+                  <th>Diferencia</th>
+                  <th>Qué revisar</th>
+                </tr>
+              </thead>
+              <tbody>
+                {discrepancies.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <strong>{row.article}</strong>
+                    </td>
+                    <td className={row.amount < 0 ? 'negative' : ''}>
+                      {signed.format(row.amount)} {row.unit}
+                    </td>
+                    <td>{row.explanation}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        }
+        ) : (
+          <Empty title="Sin diferencias detectadas" />
+        )}
+      </Panel>
+      <InventoryTable
+        title="Saldos de inventario"
+        description="Consulta las existencias teóricas por artículo."
       >
         <div className="table-toolbar">
           <input
@@ -164,258 +92,304 @@ export function Inventory() {
             aria-label="Buscar insumo"
             placeholder="Buscar un insumo…"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(event) => setQuery(event.target.value)}
           />
-          <select aria-label="Tipo de inventario" value={group} onChange={(e) => setGroup(e.target.value)}>
-            <option value="all">Todos los insumos</option>
+          <select
+            aria-label="Tipo de inventario"
+            value={group}
+            onChange={(event) => setGroup(event.target.value)}
+          >
+            <option value="">Todos los insumos</option>
             <option value="sealed_bag:">Bolsas selladas</option>
             <option value="liquid:">Líquido</option>
             <option value="cup:">Vasos sueltos</option>
             <option value="package:">Paquetes</option>
+            <option value="coronita">Coronitas</option>
           </select>
+          <button className="button small secondary" onClick={onCorrect}>
+            Proponer corrección de inventario
+          </button>
         </div>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Artículo</th>
+                <th>Saldo teórico</th>
                 <th>Unidad</th>
-                {admin && (
-                  <>
-                    <th>Saldo teórico</th>
-                    <th>Control</th>
-                  </>
-                )}
               </tr>
             </thead>
             <tbody>
-              {filtered.map((x) => (
-                <tr key={x.id}>
+              {stock.map((row) => (
+                <tr key={row.id}>
                   <td>
-                    <strong>{x.name}</strong>
+                    <strong>{row.name}</strong>
                   </td>
-                  <td>{x.unit}</td>
-                  {admin && (
-                    <>
-                      <td className={(balances[x.id] ?? 0) < 0 ? 'negative' : ''}>
-                        {new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 }).format(
-                          balances[x.id] ?? 0,
-                        )}
-                      </td>
-                      <td>
-                        <Badge
-                          tone={
-                            (balances[x.id] ?? 0) < 0
-                              ? 'red'
-                              : x.id.startsWith('liquid:')
-                                ? 'blue'
-                                : 'neutral'
-                          }
-                        >
-                          {(balances[x.id] ?? 0) < 0
-                            ? 'Revisar faltante'
-                            : x.id.startsWith('liquid:')
-                              ? 'Aproximado'
-                              : 'Conteo exacto'}
-                        </Badge>
-                      </td>
-                    </>
-                  )}
+                  <td className={(balances[row.id] ?? 0) < 0 ? 'negative' : ''}>
+                    {amount.format(balances[row.id] ?? 0)}
+                  </td>
+                  <td>{row.unit}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </Panel>
-      <div className="two-columns">
-        <Panel title="Bolsas abiertas">
-          {state.bags.filter((x) => !x.exhaustedAt).length ? (
-            state.bags
-              .filter((x) => !x.exhaustedAt)
-              .map((b) => (
-                <div className="list-row" key={b.id}>
-                  <div>
-                    <strong>{state.flavors.find((x) => x.id === b.flavorId)?.name}</strong>
-                    <small>
-                      {b.ounces.toFixed(2)} oz · {date(b.openedAt)}
-                    </small>
-                  </div>
-                  <button
-                    className="button small secondary"
-                    disabled={!canWork(actor, state, 'inventory')}
-                    onClick={async () => {
-                      try {
-                        await app.run('exhaust_bag', { bagId: b.id });
-                        app.toast('Bolsa marcada como agotada.');
-                      } catch (e) {
-                        app.toast((e as Error).message);
-                      }
-                    }}
-                  >
-                    Marcar agotada
-                  </button>
-                </div>
-              ))
-          ) : (
-            <Empty title="Sin bolsas abiertas registradas" />
-          )}
-        </Panel>
-        <Panel title="Paquetes abiertos">
-          {state.packages.filter((x) => !x.closedAt).length ? (
-            state.packages
-              .filter((x) => !x.closedAt)
-              .map((p) => (
-                <div className="list-row" key={p.id}>
-                  <div>
-                    <strong>{state.sizes.find((x) => x.id === p.sizeId)?.name}</strong>
-                    <small>
-                      {p.units} unidades · {date(p.openedAt)}
-                    </small>
-                  </div>
-                  <Badge>Abierto</Badge>
-                </div>
-              ))
-          ) : (
-            <Empty title="Sin paquetes abiertos registrados" />
-          )}
-        </Panel>
-      </div>
-      {admin && <LiquidFortnightReport state={state} />}
-      {admin && (
-        <Panel title="Líquido y pérdida aceptable">
-          <div className="liquid-summary">
-            <p>
-              {state.settings[0].baseline
-                ? 'Medición de línea base activa.'
-                : 'Seguimiento de consumo activo.'}{' '}
-              {state.settings[0].liquidTolerance === null
-                ? 'La tolerancia aún no está configurada.'
-                : `Tolerancia: ${(state.settings[0].liquidTolerance * 100).toFixed(1)} %.`}{' '}
-              El residual se estima cuando todas las bolsas abiertas del sabor están agotadas. No genera
-              descuentos ni ajustes automáticos.
-            </p>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Sabor</th>
-                    <th>Abierto</th>
-                    <th>Servido</th>
-                    <th>Degustaciones</th>
-                    <th>Merma aprobada</th>
-                    <th>Residual sin explicar</th>
-                    <th>Control</th>
+      </InventoryTable>
+      <InventoryTable
+        title="Líquido por sabor"
+        description={`Consulta el saldo en uso y la diferencia de hasta ${window} bolsas terminadas por sabor.`}
+      >
+        <p className="inventory-table-note">
+          {settings.liquidTolerance === null
+            ? 'Configura la tolerancia para señalar diferencias positivas.'
+            : `Tolerancia configurada ${amount.format(settings.liquidTolerance * 100)} %.`}{' '}
+          Las degustaciones cuentan como merma esperada. El cálculo excluye el remanente fijo de la máquina.
+        </p>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Sabor</th>
+                <th>Saldo de bolsa en uso</th>
+                <th>Bolsas terminadas</th>
+                <th>Onzas servidas</th>
+                <th>Merma esperada por degustaciones</th>
+                <th>Diferencia acumulada</th>
+              </tr>
+            </thead>
+            <tbody>
+              {liquid.map((row) => (
+                <tr key={row.flavorId}>
+                  <td>
+                    <strong>{row.name}</strong>
+                  </td>
+                  <td>{amount.format(row.remaining)} oz</td>
+                  <td>
+                    {row.completed.length}
+                    {row.completed.map((bag) => (
+                      <small className="inventory-bag-difference" key={bag.id}>
+                        {date(bag.openedAt)} · {amount.format(bag.ounces)} oz · Diferencia{' '}
+                        {signed.format(bag.difference)} oz
+                      </small>
+                    ))}
+                  </td>
+                  <td>{amount.format(row.completed.reduce((sum, bag) => sum + bag.served, 0))} oz</td>
+                  <td>{amount.format(row.completed.reduce((sum, bag) => sum + bag.tastings, 0))} oz</td>
+                  <td>{signed.format(row.difference)} oz</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </InventoryTable>
+      <InventoryTable
+        title="Historial de aperturas"
+        description="Consulta qué se abrió, quién lo registró y a qué turno pertenece."
+      >
+        {openings.length ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Insumo</th>
+                  <th>Registró</th>
+                  <th>Turno</th>
+                  <th>Fecha y hora de apertura</th>
+                </tr>
+              </thead>
+              <tbody>
+                {openings.map((item) => (
+                  <tr key={item.id}>
+                    <td>
+                      <strong>
+                        {item.kind} · {item.article}
+                      </strong>
+                    </td>
+                    <td>{names.get(item.by) ?? item.by}</td>
+                    <td>
+                      {item.shift
+                        ? `${date(item.shift.openedAt)} · ${names.get(item.shift.cashierId) ?? 'Caja'}`
+                        : 'Sin turno vinculado'}
+                    </td>
+                    <td>{date(item.openedAt)}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {liquidReconciliation(state).map((r) => (
-                    <tr key={r.flavorId}>
-                      <td>
-                        {r.name}
-                        <small>
-                          {r.openBags} bolsas abiertas · {r.closedBags} agotadas
-                        </small>
-                      </td>
-                      <td>{r.opened.toFixed(2)} oz</td>
-                      <td>{r.served.toFixed(2)} oz</td>
-                      <td>{r.tastings} oz</td>
-                      <td>{r.approvedWaste.toFixed(2)} oz</td>
-                      <td>
-                        {r.unexplained === null
-                          ? 'Pendiente de agotar bolsas'
-                          : `${r.unexplained.toFixed(2)} oz`}
-                      </td>
-                      <td>
-                        <Badge tone={r.alert ? 'orange' : r.ratio === null ? 'neutral' : 'green'}>
-                          {r.alert
-                            ? 'Supera tolerancia'
-                            : r.ratio === null
-                              ? 'En medición'
-                              : `${(r.ratio * 100).toFixed(1)} % de pérdida estimada`}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
+        ) : (
+          <Empty title="Sin aperturas registradas" />
+        )}
+      </InventoryTable>
+      <InventoryTable
+        title="Merma de líquido por quincena"
+        description="Consulta los saldos y diferencias del histórico por quincena."
+      >
+        <LiquidFortnightReport state={state} />
+      </InventoryTable>
+    </>
+  );
+}
+
+export function Inventory() {
+  const app = useApp();
+  const snapshot = app.data!;
+  const { state, actor } = snapshot;
+  const admin = actor.role === 'admin';
+  const active = operatingShift(state);
+  const canRecord = !!active && canWork(actor, state, 'inventory', active.id);
+  const openings = !admin && active ? inventoryOpenings(state, active) : [];
+  const [form, setForm] = useState<{ title: string; type: CommandType; fields: Field[] } | null>(null);
+  const articleOptions = articles(state).map((item) => ({
+    value: item.id,
+    label: `${item.name} (${item.unit})`,
+  }));
+  const openPackage = () =>
+    setForm({
+      title: 'Abrir paquete de vasos',
+      type: 'open_package',
+      fields: [
+        {
+          name: 'sizeId',
+          label: 'Tamaño',
+          type: 'select',
+          required: true,
+          options: state.sizes
+            .filter((size) => size.cups > 0)
+            .map((size) => ({ value: size.id, label: size.name })),
+        },
+        {
+          name: 'units',
+          label: 'Unidades del paquete',
+          type: 'number',
+          value: state.settings[0].cupPackageUnits,
+          min: 1,
+          max: 1000,
+          required: true,
+        },
+        {
+          name: 'confirmEmpty',
+          label: 'Confirmo que cualquier paquete anterior de este tamaño está vacío',
+          type: 'checkbox',
+          required: true,
+        },
+      ],
+    });
+  const openBag = () =>
+    setForm({
+      title: 'Abrir bolsa de líquido',
+      type: 'open_bag',
+      fields: [
+        {
+          name: 'flavorId',
+          label: 'Sabor',
+          type: 'select',
+          required: true,
+          options: state.flavors.map((flavor) => ({ value: flavor.id, label: flavor.name })),
+        },
+        {
+          name: 'ounces',
+          label: 'Onzas de la bolsa',
+          type: 'number',
+          value: state.settings[0].bagOunces,
+          step: '0.000001',
+          min: 0.000001,
+          max: 10000,
+          required: true,
+        },
+      ],
+    });
+  const reportDamage = () =>
+    setForm({
+      title: 'Reportar daño',
+      type: 'report_damage',
+      fields: [
+        { name: 'article', label: 'Artículo', type: 'select', required: true, options: articleOptions },
+        { name: 'quantity', label: 'Cantidad', type: 'number', step: '0.001', min: 0.001, required: true },
+        { name: 'notes', label: 'Motivo', type: 'textarea', required: true },
+        { name: 'evidenceId', label: 'Fotografía', type: 'photo', required: true },
+        {
+          name: 'checklist',
+          label: 'Bolsa sellada: verifiqué empaque, contenido y estado',
+          type: 'checkbox',
+        },
+        { name: 'diagnosis', label: 'Diagnóstico de bolsa sellada (si aplica)', type: 'textarea' },
+      ],
+    });
+  const proposeCorrection = () =>
+    setForm({
+      title: 'Proponer corrección de inventario',
+      type: 'correct_inventory',
+      fields: [
+        { name: 'article', label: 'Artículo', type: 'select', required: true, options: articleOptions },
+        {
+          name: 'quantity',
+          label: 'Ajuste de cantidad',
+          type: 'number',
+          step: '0.000001',
+          min: -1_000_000,
+          max: 1_000_000,
+          required: true,
+          hint: 'Usa una cantidad positiva para sumar o una negativa para restar.',
+        },
+        { name: 'notes', label: 'Motivo', type: 'textarea', required: true },
+      ],
+    });
+  return (
+    <div className="page-stack">
+      <div className="page-toolbar">
+        <h2>Inventario</h2>
+        <div className="button-row">
+          <button className="button secondary" disabled={!canRecord} onClick={openPackage}>
+            <PackageOpen size={17} /> Abrir paquete de vasos
+          </button>
+          <button className="button primary" disabled={!canRecord} onClick={openBag}>
+            <Droplets size={17} /> Abrir bolsa de líquido
+          </button>
+          <button className="button secondary" disabled={admin ? false : !canRecord} onClick={reportDamage}>
+            <AlertTriangle size={17} /> Reportar daño
+          </button>
+        </div>
+      </div>
+      {admin ? (
+        <AdminInventory snapshot={snapshot} onCorrect={proposeCorrection} />
+      ) : (
+        <Panel title="Aperturas del turno">
+          {openings.length ? (
+            openings.map((item) => (
+              <div className="list-row" key={item.id}>
+                <div>
+                  <strong>
+                    {item.kind} · {item.article}
+                  </strong>
+                  <small>{date(item.openedAt)}</small>
+                </div>
+              </div>
+            ))
+          ) : (
+            <Empty title="Sin aperturas en el turno" />
+          )}
         </Panel>
       )}
       {form && (
         <Modal title={form.title} onClose={() => setForm(null)}>
+          {form.type === 'open_bag' && (
+            <p className="modal-intro">
+              Al abrir una bolsa, se da por terminada la anterior del mismo sabor.
+            </p>
+          )}
           <FieldsForm
             fields={form.fields}
+            submit={form.type === 'correct_inventory' ? 'Proponer corrección' : 'Registrar'}
             onCancel={() => setForm(null)}
             onSubmit={async (values) => {
-              await app.run(form.type, { ...form.extra, ...values });
-              app.toast('Movimiento registrado.');
+              await app.run(form.type, values);
+              if (form.type !== 'correct_inventory') app.toast('Movimiento registrado.');
               setForm(null);
             }}
           />
         </Modal>
       )}
-      {initial && <InitialInventory onClose={() => setInitial(false)} />}
     </div>
-  );
-}
-function InitialInventory({ onClose }: { onClose: () => void }) {
-  const app = useApp(),
-    list = physicalArticles(app.data!.state),
-    [error, setError] = useState(''),
-    [busy, setBusy] = useState(false);
-  return (
-    <Modal title="Inventario físico inicial" onClose={onClose}>
-      <p className="modal-intro">
-        Registra las cantidades que deseas agregar al inventario. Cada registro suma las cantidades ingresadas
-        al saldo existente; los artículos en cero conservan su saldo.
-      </p>
-      <form
-        className="fields-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setBusy(true);
-          const form = new FormData(e.currentTarget);
-          try {
-            await app.run('initialize_stock', {
-              items: Object.fromEntries(list.map((x) => [x.id, Number(form.get(x.id) ?? 0)])),
-            });
-            onClose();
-          } catch (e) {
-            setError((e as Error).message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <div className="count-list">
-          {list.map((x) => (
-            <label key={x.id}>
-              <span>
-                {x.name}
-                <small>{x.unit}</small>
-              </span>
-              <input
-                name={x.id}
-                aria-label={x.name}
-                type="number"
-                step="1"
-                min="0"
-                defaultValue="0"
-                required
-              />
-            </label>
-          ))}
-        </div>
-        {error && (
-          <div className="form-error" role="alert">
-            {error}
-          </div>
-        )}
-        <button className="button primary" disabled={busy}>
-          {busy ? 'Guardando…' : 'Confirmar inventario inicial'}
-        </button>
-      </form>
-    </Modal>
   );
 }

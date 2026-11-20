@@ -144,6 +144,44 @@ describe('dashboard administrativo', () => {
     expect(data.products).toHaveLength(1);
     expect(data.products[0]).toMatchObject({ units: 2, amount: 28000 });
     expect(data.units).toBe(2);
+    expect(data.breakdown.flavors.map(({ units, amount }) => [units, amount])).toEqual([
+      [1, 14000],
+      [1, 14000],
+    ]);
+    expect(data.breakdown.alcohol).toEqual([
+      { key: 'Con licor', name: 'Con licor', units: 2, amount: 28000 },
+    ]);
+  });
+
+  it('separa el valor de las cortesías del resto de descuentos', () => {
+    const state = fixture();
+    const order = sale();
+    const couponId = crypto.randomUUID();
+    order.lines[0].couponId = couponId;
+    order.lines[0].discount = 14000;
+    order.total = 0;
+    state.coupons = [
+      {
+        id: couponId,
+        code: 'COURTESY',
+        promotionId: 'promo',
+        issuedBy: ids.admin,
+        status: 'redeemed',
+        issuedAt: order.createdAt,
+        expiresAt: order.paidAt!,
+        courtesy: true,
+      },
+    ];
+    const paidWithPromo = sale();
+    paidWithPromo.lines[0].discount = 4000;
+    paidWithPromo.total = 10000;
+    state.orders = [order, paidWithPromo];
+    expect(dashboardData(state, filter)).toMatchObject({
+      amount: 10000,
+      discounts: 18000,
+      courtesyCost: 14000,
+      promotionCost: 4000,
+    });
   });
   it('rellena días sin ventas y compara con un intervalo anterior de igual duración', () => {
     const state = fixture();

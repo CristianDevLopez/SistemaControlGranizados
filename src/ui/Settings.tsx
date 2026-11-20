@@ -12,7 +12,8 @@ import {
 import { useApp } from '../lib/store.tsx';
 import { api } from '../lib/api.ts';
 import { getMeta, setMeta, type OfflineAuthorizer } from '../lib/db.ts';
-import type { CommandType } from '../domain/types.ts';
+import type { CommandType, Result } from '../domain/types.ts';
+import { DEFAULT_LIQUID_BAG_WINDOW } from '../domain/initial.ts';
 import { hasPermission, permissionLabels, roleGuide } from '../domain/access.ts';
 import { FlavorImage } from './FlavorImage.tsx';
 import {
@@ -35,6 +36,7 @@ export function Settings() {
     [form, setForm] = useState<{
       title: string;
       fields: Field[];
+      submit?: string;
       initial?: Record<string, unknown>;
       save: (values: Record<string, any>) => Promise<unknown>;
     } | null>(null),
@@ -51,6 +53,7 @@ export function Settings() {
       title,
       fields,
       initial,
+      submit: type === 'save_size' ? 'Enviar propuesta' : undefined,
       save: async (v) => {
         await app.run(type, { ...extra, ...v });
       },
@@ -102,9 +105,9 @@ export function Settings() {
   ];
   const invoke = async (path: string, body: unknown) => {
     try {
-      await api(path, body);
+      const { result } = await api<{ result?: Result }>(path, body);
       await app.load();
-      app.toast('Cambio guardado.');
+      app.toast(result?.message ?? 'Cambio guardado.');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -122,10 +125,7 @@ export function Settings() {
       <div className="page-toolbar">
         <div>
           <h2>El negocio, a tu medida</h2>
-          <p>
-            El catálogo y los parámetros se guardan directamente con tu usuario, sin aprobación de otro admin.
-            Cada cambio conserva su histórico.
-          </p>
+          <p>Los cambios de precios y permisos se revisan en Registro de cambios.</p>
         </div>
       </div>
       <div className="tabs">
@@ -255,7 +255,7 @@ export function Settings() {
                           className="text-button"
                           onClick={() =>
                             businessForm(
-                              `Configurar ${s.name}`,
+                              `Proponer cambio de ${s.name}`,
                               'save_size',
                               [
                                 { name: 'alcoholPrice', label: 'Precio con licor', type: 'money', min: 1 },
@@ -289,7 +289,7 @@ export function Settings() {
                             )
                           }
                         >
-                          Configurar
+                          Proponer cambio
                         </button>
                       </td>
                     </tr>
@@ -299,6 +299,30 @@ export function Settings() {
             </div>
           </Panel>
         </>
+      )}
+      {tab === 'parameters' && (
+        <Panel title="Aprobaciones de cambios">
+          <FieldsForm
+            key={settings.requiredChangeApprovals ?? 1}
+            fields={[
+              {
+                name: 'required',
+                label: 'Aprobaciones de otros administradores',
+                type: 'select',
+                required: true,
+                options: [
+                  { value: '1', label: '1 aprobación' },
+                  { value: '2', label: '2 aprobaciones' },
+                ],
+              },
+            ]}
+            initial={{ required: String(settings.requiredChangeApprovals ?? 1) }}
+            submit="Proponer nuevo requisito"
+            onSubmit={async ({ required }) => {
+              await app.run('set_approval_requirement', { required: Number(required) });
+            }}
+          />
+        </Panel>
       )}
       {tab === 'parameters' && (
         <Panel title="Parámetros de operación">
@@ -333,7 +357,13 @@ export function Settings() {
                 min: 0,
                 required: true,
               },
-              { name: 'cupPackageUnits', label: 'Vasos por paquete', type: 'number', min: 1, required: true },
+              {
+                name: 'cupPackageUnits',
+                label: 'Vasos por paquete',
+                type: 'number',
+                min: 1,
+                required: true,
+              },
               {
                 name: 'bagOunces',
                 label: 'Onzas de referencia por bolsa',
@@ -349,7 +379,15 @@ export function Settings() {
                 min: 0,
                 max: 100,
                 step: '0.1',
-                hint: 'Deja en blanco mientras se mide la línea base. No se descuenta automáticamente.',
+                hint: 'Se aplica a las bolsas terminadas para señalar sobrantes sin explicar.',
+              },
+              {
+                name: 'liquidBagWindow',
+                label: 'Bolsas terminadas por sabor para calcular la diferencia',
+                type: 'number',
+                min: 1,
+                max: 100,
+                required: true,
               },
               {
                 name: 'syncWarningMinutes',
@@ -384,6 +422,7 @@ export function Settings() {
               openingChecklist: (settings.openingChecklist ?? []).join('\n'),
               closingChecklist: (settings.closingChecklist ?? []).join('\n'),
               liquidTolerance: settings.liquidTolerance === null ? '' : settings.liquidTolerance * 100,
+              liquidBagWindow: settings.liquidBagWindow ?? DEFAULT_LIQUID_BAG_WINDOW,
             }}
             submit="Publicar configuración"
             onSubmit={async (v) => {
@@ -456,8 +495,9 @@ export function Settings() {
                       },
                     ],
                     save: async (v) => {
-                      await api('users', v);
+                      const { result } = await api<{ result?: Result }>('users', v);
                       await app.load();
+                      app.toast(result?.message ?? 'Usuario creado.');
                     },
                   })
                 }
@@ -504,10 +544,11 @@ export function Settings() {
                               onClick={() =>
                                 setForm({
                                   title: `Permisos de ${p.name}`,
+                                  submit: 'Enviar propuesta',
                                   fields: Object.entries(permissionLabels)
                                     .filter(
                                       ([key]) =>
-                                        p.role !== 'apoyo' ||
+                                        (p.role !== 'apoyo' && key !== 'expenses') ||
                                         ['orders', 'deliveries', 'inventory'].includes(key),
                                     )
                                     .map(([key, label]) => ({ name: key, label, type: 'checkbox' as const })),
@@ -515,7 +556,7 @@ export function Settings() {
                                     Object.keys(permissionLabels)
                                       .filter(
                                         (key) =>
-                                          p.role !== 'apoyo' ||
+                                          (p.role !== 'apoyo' && key !== 'expenses') ||
                                           ['orders', 'deliveries', 'inventory'].includes(key),
                                       )
                                       .map((key) => [
@@ -524,34 +565,32 @@ export function Settings() {
                                       ]),
                                   ),
                                   save: async (values) => {
-                                    await api('users/update', { userId: p.id, permissions: values });
+                                    const { result } = await api<{ result: Result }>('users/update', {
+                                      userId: p.id,
+                                      permissions: values,
+                                    });
                                     await app.load();
+                                    app.toast(result.message);
                                   },
                                 })
                               }
                             >
-                              Editar permisos
+                              Proponer permisos
                             </button>
                           )}
                           {p.role !== 'admin' && p.active && (
                             <button
                               className="button small secondary"
-                              onClick={() =>
-                                setForm({
-                                  title: `Registrar equipo de ${p.name}`,
-                                  fields: [
-                                    {
-                                      name: 'primary',
-                                      label: 'Será el equipo principal de caja (sin turno abierto)',
-                                      type: 'checkbox',
-                                    },
-                                  ],
-                                  save: async (v) => {
-                                    const result = await api('devices/invite', { userId: p.id, ...v });
-                                    setCode(result.code);
-                                  },
-                                })
-                              }
+                              onClick={async () => {
+                                try {
+                                  const result = await api<{ code: string }>('devices/invite', {
+                                    userId: p.id,
+                                  });
+                                  setCode(result.code);
+                                } catch (error) {
+                                  setError((error as Error).message);
+                                }
+                              }}
                             >
                               Registrar dispositivo
                             </button>
@@ -561,7 +600,7 @@ export function Settings() {
                             disabled={p.id === actor.id}
                             onClick={() => void invoke('users/update', { userId: p.id, active: !p.active })}
                           >
-                            {p.active ? 'Desactivar' : 'Activar'}
+                            {p.active ? 'Desactivar' : 'Proponer activación'}
                           </button>
                         </div>
                       </td>
@@ -603,7 +642,7 @@ export function Settings() {
                               className="text-button"
                               onClick={() => void invoke('devices/update', { deviceId: d.id, primary: true })}
                             >
-                              Hacer principal
+                              Proponer como principal
                             </button>
                           )}
                           <button
@@ -613,7 +652,7 @@ export function Settings() {
                               void invoke('devices/update', { deviceId: d.id, active: !d.active })
                             }
                           >
-                            {d.active ? 'Desactivar' : 'Activar'}
+                            {d.active ? 'Desactivar' : 'Proponer activación'}
                           </button>
                         </div>
                       </td>
@@ -845,6 +884,7 @@ export function Settings() {
         <Modal title={form.title} onClose={() => setForm(null)}>
           <FieldsForm
             fields={form.fields}
+            submit={form.submit}
             initial={form.initial}
             onCancel={() => setForm(null)}
             onSubmit={async (v) => {

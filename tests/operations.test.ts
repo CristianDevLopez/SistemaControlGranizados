@@ -5,12 +5,14 @@ import { quoteOrder } from '../src/domain/pricing.ts';
 import type { Actor, CommandType, Promotion, State } from '../src/domain/types.ts';
 import {
   admin,
+  other,
   cashier,
   support,
   ids,
   NOW,
   fixture,
   run,
+  approveChange,
   order,
   cmd,
   countedItems,
@@ -19,7 +21,7 @@ import {
 const line = (s: State, quantity = 1) => ({ flavorId: ids.flavor, sizeId: s.sizes[0].id, quantity });
 function benefits(quantity = 3, stackable = true) {
   let s = fixture();
-  s = run(
+  const proposal = run(
     s,
     'save_promotion',
     {
@@ -34,7 +36,8 @@ function benefits(quantity = 3, stackable = true) {
       endsAt: '2027-01-01T00:00:00Z',
     },
     admin,
-  ).state;
+  );
+  s = approveChange(proposal).state;
   for (let i = 0; i < quantity; i++)
     s = run(
       s,
@@ -152,7 +155,7 @@ describe('cierre definitivo y provisional', () => {
         /conexión/,
       );
       expect(
-        run(s, 'execute_transfer', { transferId, evidenceId: ids.photo }, admin).state.transfers[0].status,
+        run(s, 'execute_transfer', { transferId, evidenceId: ids.photo }, other).state.transfers[0].status,
       ).toBe('in_transit');
     });
   it('un turno abierto nuevo no permite modificar el anterior con identificadores manipulados', () => {
@@ -212,7 +215,8 @@ describe('cuadre dinámico por cuentas', () => {
     });
     const blind = redactState(s, cashier);
     expect(blind.payments).toEqual([]);
-    expect(closingPaymentMethods(blind, ids.shift).map((m) => m.account.id)).toContain(ids.location);
+    expect(blind.transferSummary).toContainEqual({ name: s.locations[0].name, amount: 14000 });
+    expect(blind.locations.map((account) => account.id)).not.toContain(ids.location);
     expect(() =>
       run(s, 'count', {
         kind: 'closing',
@@ -238,11 +242,7 @@ describe('cortesías por producto', () => {
     const paid = applyCommand(s.state, command, cashier, NOW).state;
     expect(paid.coupons.every((c) => c.status === 'redeemed')).toBe(true);
     expect(paid.payments).toHaveLength(0);
-    expect(
-      redactState(paid, cashier)
-        .orders[0].lines[0].appliedRules?.map((r) => r.couponCode)
-        .sort(),
-    ).toEqual([...codes].sort());
+    expect(redactState(paid, cashier).orders[0].lines[0].appliedRules).toEqual([]);
     expect(paid.orders[0].lines[0].appliedRules?.every((r) => r.quantity === 1 && r.unitAmount === 0)).toBe(
       true,
     );
@@ -297,12 +297,13 @@ describe('cortesías por producto', () => {
       run(fixture(), 'save_promotion', { ...s.promotions[0], id: undefined, sizeIds: [] }, admin),
     ).toThrow(/exactos/);
     const original = structuredClone(s.coupons[0].benefit);
-    const changed = run(
+    const proposal = run(
       s,
       'save_promotion',
       { ...s.promotions[0], sizeIds: [s.sizes[1].id], flavorIds: [ids.plain] },
       admin,
-    ).state;
+    );
+    const changed = approveChange(proposal).state;
     const created = order(changed);
     expect(quotePayment(created.state, created.order, NOW, true, [s.coupons[0].code]).total).toBe(0);
     expect(changed.coupons[0].benefit).toEqual(original);

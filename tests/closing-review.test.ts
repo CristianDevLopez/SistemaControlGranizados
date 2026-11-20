@@ -8,7 +8,18 @@ import {
   redactState,
   stockBalances,
 } from '../src/domain/engine.ts';
-import { admin, cashier, cmd, fixture, ids, NOW, order, run, support } from './support/fixture.ts';
+import {
+  admin,
+  approveChange,
+  cashier,
+  cmd,
+  fixture,
+  ids,
+  NOW,
+  order,
+  run,
+  support,
+} from './support/fixture.ts';
 import type { State } from '../src/domain/types.ts';
 import { suggestedCupCharge } from '../src/domain/reconciliation.ts';
 
@@ -69,12 +80,8 @@ it('ajusta faltantes y sobrantes una vez, con referencia al conteo, y la siguien
   const otherCup = `cup:${state.sizes[1].id}`;
   const items = { ...closingPreview(state, ids.shift).expectedItems, [cup]: 16, [otherCup]: 2 };
   state = close(state, { items });
-  const approved = run(
-    state,
-    'approve_closing',
-    approval(state, ids.shift, { employeeCharge: 2000 }),
-    admin,
-  ).state;
+  const proposed = run(state, 'approve_closing', approval(state, ids.shift, { employeeCharge: 2000 }), admin);
+  const approved = approveChange(proposed).state;
   expect(stockBalances(approved)[cup]).toBe(16);
   expect(stockBalances(approved)[otherCup]).toBe(2);
   expect(approved.stock.filter((m) => m.reason === 'closing_adjustment')).toHaveLength(2);
@@ -109,7 +116,7 @@ it('un cierre anterior conserva su diferencia sin duplicar el ajuste de un arque
   const closed = close(audited, {
     items: { ...closingPreview(audited, ids.shift).expectedItems, [cup]: 16 },
   });
-  const adjusted = run(
+  const proposed = run(
     closed,
     'adjust_count_inventory',
     {
@@ -120,7 +127,8 @@ it('un cierre anterior conserva su diferencia sin duplicar el ajuste de un arque
       confirmed: true,
     },
     admin,
-  ).state;
+  );
+  const adjusted = approveChange(proposed).state;
   const approved = run(adjusted, 'approve_closing', approval(adjusted), admin).state;
   expect(stockBalances(approved)[cup]).toBe(16);
   expect(approved.counts.at(-1)?.differences?.[cup]).toBe(-4);
@@ -218,7 +226,7 @@ it('aprobar un cierre anterior después de otro conteo no repite el mismo faltan
     shiftId: later,
     at: '2026-10-23T18:00:00.000Z',
   });
-  state = run(state, 'approve_closing', approval(state), admin).state;
+  state = approveChange(run(state, 'approve_closing', approval(state), admin)).state;
   expect(closingPreview(state, later, state.counts[1]).expectedItems[cup]).toBe(16);
   const approved = run(state, 'approve_closing', approval(state, later), admin).state;
   expect(stockBalances(approved)[cup]).toBe(16);
@@ -246,20 +254,21 @@ it('una corrección de recetas en un turno anterior se considera junto con su aj
     reason: 'recipe_correction',
     referenceId: created.order.id,
   });
-  state = run(state, 'approve_closing', approval(state), admin).state;
+  state = approveChange(run(state, 'approve_closing', approval(state), admin)).state;
   expect(closingPreview(state, later, state.counts[1]).expectedItems[cup]).toBe(15);
   state = run(state, 'approve_closing', approval(state, later), admin).state;
   expect(stockBalances(state)[cup]).toBe(15);
 });
 
-it('el recordatorio de vasos funciona en la vista de caja y el replay local, y el arqueo sigue ocultando esperados', () => {
+it('la apertura se puede registrar localmente sin exponer saldos de vasos ni esperados', () => {
   const state = run(fixture(), 'open_package', { sizeId: fixture().sizes[0].id }).state;
   const view = redactState(state, cashier);
   expect(view.stock).toEqual([]);
-  expect(cupBalances(view)[cup]).toBe(20);
-  expect(cupBalances(redactState(view, cashier))[cup]).toBe(20);
+  expect(cupBalances(view)[cup]).toBeUndefined();
+  expect(redactState(view, cashier).cupBalances).toBeUndefined();
   const local = run(view, 'open_package', { sizeId: fixture().sizes[0].id, confirmEmpty: true }).state;
-  expect(cupBalances(local)[cup]).toBe(40);
+  expect(local.packages).toHaveLength(2);
+  expect(redactState(local, cashier).stock).toEqual([]);
   const audited = run(state, 'start_audit', { shiftId: ids.shift, items: [cup] }, admin).state;
   expect(redactState(audited, cashier).cupBalances).toBeUndefined();
 });
@@ -275,12 +284,13 @@ it('una merma reportada antes del cierre y aprobada después no se descuenta otr
   state = close(reported.state, {
     items: { ...closingPreview(reported.state, ids.shift).expectedItems, [cup]: 16 },
   });
-  state = run(
+  const proposed = run(
     state,
     'resolve_request',
     { requestId: reported.result.referenceId, approve: true },
     admin,
-  ).state;
+  );
+  state = approveChange(proposed).state;
   expect(closingPreview(state, ids.shift, state.counts[0]).expectedItems[cup]).toBe(16);
   state = run(state, 'approve_closing', approval(state), admin).state;
   expect(stockBalances(state)[cup]).toBe(16);

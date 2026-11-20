@@ -1,20 +1,130 @@
 import { it, expect } from 'vitest';
-import { liquidFortnight, liquidReconciliation } from '../src/domain/liquid.ts';
-import { fixture, ids, run, order } from './support/fixture.ts';
-it('separa degustaciones de desperdicio y espera agotar bolsas para medir residual', () => {
-  let s = run(fixture(), 'open_bag', { flavorId: ids.flavor, ounces: 100 }).state;
-  s = run(s, 'taste', { flavorId: ids.flavor }).state;
-  const a = order(s);
-  s = run(a.state, 'pay', { orderId: a.order.id, deliver: true }).state;
-  expect(liquidReconciliation(s)[0].ratio).toBeNull();
-  s = run(s, 'exhaust_bag', { bagId: s.bags[0].id }).state;
-  s.settings[0].liquidTolerance = 0.1;
-  const r = liquidReconciliation(s)[0];
-  expect(r.served).toBe(12);
-  expect(r.tastings).toBe(1);
-  expect(r.unexplained).toBe(87);
-  expect(r.alert).toBe(true);
-  expect(s.stock.some((m) => m.reason === 'automatic_loss')).toBe(false);
+import { liquidFortnight } from '../src/domain/liquid.ts';
+import { applyCommand } from '../src/domain/engine.ts';
+import {
+  inventoryDiscrepancies,
+  inventoryDiscrepanciesAt,
+  inventoryOpenings,
+  liquidBagInventory,
+} from '../src/domain/inventory.ts';
+import { admin, cashier, cmd, fixture, ids, other, run, order, NOW } from './support/fixture.ts';
+
+it('completa la bolsa anterior al abrir otra del mismo sabor y separa las degustaciones', () => {
+  let state = run(fixture(), 'open_bag', { flavorId: ids.flavor, ounces: 100 }).state;
+  state = run(state, 'open_bag', { flavorId: ids.plain, ounces: 100 }).state;
+  state = run(state, 'taste', { flavorId: ids.flavor }).state;
+  const created = order(state);
+  state = run(created.state, 'pay', { orderId: created.order.id, deliver: true }).state;
+  expect(liquidBagInventory(state)[0]).toMatchObject({ completed: [], remaining: 87 });
+  expect(() => run(state, 'exhaust_bag', { bagId: state.bags[0].id })).toThrow(/mismo sabor/);
+
+  const nextAt = '2026-10-23T17:00:00.000Z';
+  const next = cmd('open_bag', { flavorId: ids.flavor, ounces: 100 }, cashier, { at: nextAt });
+  state = applyCommand(state, next, cashier, nextAt).state;
+  state.settings[0].liquidTolerance = 0.1;
+  expect(state.bags.map((bag) => bag.exhaustedAt)).toEqual([nextAt, undefined, undefined]);
+  expect(inventoryOpenings(state, state.shifts[0]).map((opening) => opening.shiftId)).toEqual([
+    ids.shift,
+    ids.shift,
+    ids.shift,
+  ]);
+  expect(liquidBagInventory(state)[0]).toMatchObject({
+    completed: [{ served: 12, tastings: 1, difference: 87 }],
+    remaining: 100,
+    aboveTolerance: true,
+  });
+  expect(state.stock.some((movement) => movement.reason === 'automatic_loss')).toBe(false);
+});
+
+it('señala el saldo negativo del sabor al servir más de su bolsa en uso', () => {
+  const opened = run(fixture(), 'open_bag', { flavorId: ids.flavor, ounces: 6 }).state;
+  const created = order(opened);
+  const state = run(created.state, 'pay', { orderId: created.order.id, deliver: true }).state;
+  expect(inventoryDiscrepancies(state)).toContainEqual(
+    expect.objectContaining({
+      id: `liquid:${ids.flavor}`,
+      amount: -6,
+      explanation: expect.stringMatching(/bolsa abierta sin registrar/i),
+    }),
+  );
+});
+
+it('acumula solo la ventana configurada y avisa por dos bolsas con poco consumo', () => {
+  const state = fixture();
+  state.settings[0].liquidTolerance = 0.2;
+  for (let day = 1; day <= 7; day++) {
+    const date = `2026-11-0${day}`;
+    state.bags.push({
+      id: date,
+      flavorId: ids.flavor,
+      openedAt: `${date}T12:00:00Z`,
+      ounces: 100,
+      by: cashier.id,
+    });
+    served(state, `${date}T15:00:00Z`, day === 1 ? 0 : day > 4 ? 50 : 100);
+  }
+  expect(liquidBagInventory(state)[0]).toMatchObject({
+    difference: 100,
+    consecutiveLow: true,
+    aboveTolerance: false,
+  });
+  expect(liquidBagInventory(state)[0].completed).toHaveLength(5);
+  state.settings[0].liquidBagWindow = 2;
+  expect(liquidBagInventory(state)[0]).toMatchObject({ difference: 100, aboveTolerance: true });
+  state.settings[0].liquidBagWindow = 1;
+  expect(liquidBagInventory(state)[0]).toMatchObject({ difference: 50, consecutiveLow: true });
+});
+
+it('conserva el saldo de la última bolsa abierta al ordenar el archivo del ensayo', () => {
+  const state = run(fixture(), 'open_bag', { flavorId: ids.flavor, ounces: 100 }).state;
+  state.settings[0].rehearsalBaseline = {
+    countId: crypto.randomUUID(),
+    at: '2026-10-24T05:00:00Z',
+    by: ids.admin,
+  };
+  served(state, NOW, 60);
+  served(state, '2026-10-24T07:00:00Z', 46);
+  expect(liquidBagInventory(state)[0]).toMatchObject({ completed: [], remaining: -6 });
+});
+
+it('calcula las diferencias de ayer con las bolsas y el consumo de ese corte', () => {
+  const state = run(fixture(), 'open_bag', { flavorId: ids.flavor, ounces: 100 }).state;
+  served(state, NOW, 106);
+  const today = '2026-10-24T07:00:00.000Z';
+  const yesterdayEnd = '2026-10-24T04:59:59.999Z';
+  const next = cmd('open_bag', { flavorId: ids.flavor, ounces: 100 }, cashier, { at: today });
+  const latest = applyCommand(state, next, cashier, today).state;
+
+  expect(inventoryDiscrepanciesAt(latest, yesterdayEnd)).toMatchObject([
+    { id: `liquid:${ids.flavor}`, amount: -6 },
+  ]);
+  expect(inventoryDiscrepancies(latest)).toMatchObject([{ id: `liquid:${ids.flavor}:closed`, amount: -6 }]);
+  latest.settings[0].rehearsalBaseline = { countId: crypto.randomUUID(), at: today, by: admin.id };
+  expect(inventoryDiscrepanciesAt(latest, yesterdayEnd)).toBeUndefined();
+});
+
+it('la apertura corregida solo entra en el turno y en inventario con la aprobación de otro admin', () => {
+  const state = fixture();
+  const openedAt = '2026-10-23T14:15:00.000Z';
+  const payload = {
+    correction: true,
+    shiftId: ids.shift,
+    flavorId: ids.flavor,
+    openedAt,
+    notes: 'Confirmado en el arqueo',
+  };
+  expect(() => run(state, 'open_bag', payload, cashier)).toThrow(/administrador/);
+  const proposal = run(state, 'open_bag', payload, admin);
+  expect(proposal.state.bags).toHaveLength(0);
+  expect(proposal.state.stock).toHaveLength(0);
+  const approved = run(
+    proposal.state,
+    'resolve_change',
+    { requestId: proposal.result.referenceId, approve: true },
+    other,
+  ).state;
+  expect(approved.bags).toMatchObject([{ shiftId: ids.shift, openedAt, by: ids.other }]);
+  expect(approved.stock).toMatchObject([{ at: openedAt }, { at: openedAt }]);
 });
 
 function served(state: ReturnType<typeof fixture>, date: string, ounces: number, flavorId = ids.flavor) {

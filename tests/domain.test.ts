@@ -19,6 +19,7 @@ import {
   support,
   cmd,
   run,
+  approveChange,
   order,
   countedItems,
 } from './support/fixture.ts';
@@ -46,18 +47,22 @@ const promo = (extra: Partial<Promotion> = {}): Promotion => ({
   ...extra,
 });
 describe('Operación del mostrador', () => {
-  it('permite agregar inventario inicial varias veces sin reemplazar saldos ni duplicar reintentos', () => {
-    let s = run(fixture(), 'initialize_stock', { items: { copita: 10, coronita: 4 } }, admin).state;
-    expect(s.settings[0].inventoryInitialized).toBe(true);
-    const previousStock = structuredClone(s.stock);
-    const command = cmd('initialize_stock', { items: { copita: 5, coronita: 0 } }, admin);
-    s = applyCommand(s, command, admin, NOW).state;
-    expect(stockBalances(s)).toMatchObject({ copita: 15, coronita: 4 });
-    expect(s.stock).toHaveLength(previousStock.length + 1);
-    expect(s.stock.slice(0, previousStock.length)).toEqual(previousStock);
-    expect(applyCommand(s, command, admin, NOW).state.stock).toEqual(s.stock);
-    for (const actor of [cashier, support, { ...admin, online: false }])
-      expect(() => run(s, 'initialize_stock', { items: { copita: 1 } }, actor)).toThrow(/administrador/);
+  it('conserva el inventario inicial y rechaza altas nuevas por ese comando', () => {
+    const state = fixture();
+    state.stock.push({
+      id: crypto.randomUUID(),
+      eventId: crypto.randomUUID(),
+      article: 'copita',
+      quantity: 10,
+      reason: 'initial',
+      referenceId: crypto.randomUUID(),
+      by: ids.admin,
+      at: NOW,
+    });
+    expect(() => run(state, 'initialize_stock', { items: { coronita: 4 } }, admin)).toThrow(/corrección/);
+    const tasted = run(state, 'taste', { flavorId: ids.flavor }).state;
+    expect(stockBalances(tasted)).toMatchObject({ copita: 10, [`liquid:${ids.flavor}`]: -1 });
+    expect(tasted.stock[0]).toEqual(state.stock[0]);
   });
   it('retira efectivo al ejecutarse y lo conserva en tránsito hasta la confirmación', () => {
     let s = run(fixture(), 'request_transfer', {
@@ -125,12 +130,12 @@ describe('Operación del mostrador', () => {
     for (const actor of [support, admin, { ...cashier, deviceId: ids.remote }])
       expect(() => run(state, 'pay', { orderId: o.id }, actor)).toThrow(/encargado|permiso/);
   });
-  it('conserva degustaciones sin venta y descuenta una copita y una onza', () => {
+  it('conserva degustaciones sin venta y descuenta una onza', () => {
     let s = run(fixture(), 'taste', { flavorId: ids.flavor }).state;
     const oid = s.orders[0].id;
     s = run(s, 'close_tastings', { orderId: oid }).state;
     expect(s.orders[0].status).toBe('tasting_only');
-    expect(stockBalances(s)).toMatchObject({ copita: -1, [`liquid:${ids.flavor}`]: -1 });
+    expect(stockBalances(s)).toEqual({ [`liquid:${ids.flavor}`]: -1 });
     expect(s.payments).toHaveLength(0);
   });
   it('permite cancelar un pedido sin entrega conservando trazabilidad', () => {
@@ -150,7 +155,7 @@ describe('Operación del mostrador', () => {
     expect(state.orders[0].status).toBe('tasting_only');
     expect(state.orders[0].tastings).toEqual(before.orders[0].tastings);
     expect(state.stock).toEqual(before.stock);
-    expect(stockBalances(state)).toMatchObject({ copita: -1, [`liquid:${ids.flavor}`]: -1 });
+    expect(stockBalances(state)).toEqual({ [`liquid:${ids.flavor}`]: -1 });
     expect(state.payments).toHaveLength(0);
     expect(state.deliveries).toHaveLength(0);
   });
@@ -216,13 +221,13 @@ describe('Operación del mostrador', () => {
     expect(() =>
       run(s, 'execute_transfer', { transferId: s.transfers[0].id, evidenceId: ids.photo }),
     ).toThrow(/cerrado/);
-    s = run(s, 'execute_transfer', { transferId: s.transfers[0].id, evidenceId: ids.photo }, admin).state;
+    s = run(s, 'execute_transfer', { transferId: s.transfers[0].id, evidenceId: ids.photo }, other).state;
     expect(openingExpectedCash(s)).toBe(5000);
     s = run(s, 'confirm_transfer', { transferId: s.transfers[0].id, receivedAmount: 16000 }, admin).state;
     expect(s.transfers[0].status).toBe('confirmed');
     expect(s.counts[0].cash).toBe(21000);
   });
-  it('no revela valores esperados ni contenido del envío antes del conteo', () => {
+  it('no incluye conteos, pagos ni saldos en la proyección del empleado', () => {
     const s = fixture();
     s.counts.push({
       id: crypto.randomUUID(),
@@ -239,7 +244,7 @@ describe('Operación del mostrador', () => {
       notes: '',
     });
     const view = redactState(s, cashier);
-    expect(view.counts[0].expectedCash).toBeUndefined();
+    expect(view.counts).toHaveLength(0);
     expect(view.payments).toHaveLength(0);
     expect(view.stock).toHaveLength(0);
   });
@@ -252,6 +257,8 @@ describe('Operación del mostrador', () => {
       run(s, 'resolve_request', { requestId: rid, approve: true }, { ...admin, id: ids.cashier }),
     ).toThrow(/propia/);
     s = run(s, 'resolve_request', { requestId: rid, approve: true }, admin).state;
+    expect(stockBalances(s)[`cup:${s.sizes[0].id}`]).toBe(0);
+    expect(stockBalances(s)[`liquid:${ids.flavor}`]).toBe(0);
     s = run(s, 'replace_order', {
       orderId: o.id,
       sameDelivery: true,
@@ -262,6 +269,31 @@ describe('Operación del mostrador', () => {
     expect(s.payments.reduce((n, p) => n + p.amount, 0)).toBe(14000);
     expect(stockBalances(s)[`liquid:${ids.flavor}`]).toBe(-12);
     expect(s.deliveries).toHaveLength(1);
+  });
+  it('reintegra las cantidades descontadas al aprobar una sola vez, sin tocar degustaciones', () => {
+    const created = order(fixture(), 3);
+    const orderId = created.order.id;
+    const tasted = run(created.state, 'taste', { orderId, flavorId: ids.flavor }).state;
+    const paid = run(tasted, 'pay', { orderId, deliver: true }).state;
+    const requested = run(paid, 'request_void', {
+      orderId,
+      notes: 'Error de digitación',
+      evidenceId: ids.photo,
+    }).state;
+    const cup = `cup:${paid.sizes[0].id}`,
+      liquid = `liquid:${ids.flavor}`;
+    expect(stockBalances(requested)).toMatchObject({ [cup]: -3, [liquid]: -37 });
+    const requestId = requested.requests.find((item) => item.type === 'void')!.id;
+    expect(() => run(requested, 'resolve_request', { requestId, approve: true })).toThrow(/administrador/);
+    expect(run(requested, 'resolve_request', { requestId, approve: false }, admin).state.stock).toEqual(
+      paid.stock,
+    );
+    const command = cmd('resolve_request', { requestId, approve: true }, admin);
+    const restored = applyCommand(requested, command, admin, NOW).state;
+    expect(stockBalances(restored)).toMatchObject({ [cup]: 0, [liquid]: -1 });
+    expect(restored.stock.filter((item) => item.reason === 'void_return')).toHaveLength(2);
+    expect(applyCommand(restored, command, admin, NOW).state.stock).toEqual(restored.stock);
+    expect(restored.payments).toEqual(paid.payments);
   });
   it('rechaza precios cero en catálogo y conserva negativos de inventario', () => {
     expect(() => run(fixture(), 'save_size', { id: fixture().sizes[0].id, alcoholPrice: 0 }, admin)).toThrow(
@@ -274,29 +306,36 @@ describe('Operación del mostrador', () => {
     let s = run(
       fixture(),
       'create_shipment',
-      { from: 'Medellín', supplier: 'Prueba', items: [{ article: 'copita', quantity: 10, unitCost: 20 }] },
+      { from: 'Medellín', supplier: 'Prueba', items: [{ article: 'coronita', quantity: 10, unitCost: 20 }] },
       admin,
     ).state;
     s = run(s, 'receive_shipment', {
       shipmentId: s.shipments[0].id,
-      items: { copita: 5 },
-      damaged: { copita: 1 },
+      items: { coronita: 5 },
+      damaged: { coronita: 1 },
       evidenceId: ids.photo,
     }).state;
-    expect(stockBalances(s).copita).toBe(4);
+    expect(stockBalances(s).coronita).toBe(4);
     expect(s.shipments[0].status).toBe('partial');
-    expect(s.receipts[0].differences!.copita).toBe(-5);
+    expect(s.receipts[0].differences!.coronita).toBe(-5);
   });
   it('no justifica ni descuenta daño pendiente; solo al aprobarlo', () => {
     let s = run(fixture(), 'report_damage', {
-      article: 'copita',
+      article: 'coronita',
       quantity: 2,
       notes: 'Daño visible',
       evidenceId: ids.photo,
     }).state;
     expect(s.stock).toHaveLength(0);
-    s = run(s, 'resolve_request', { requestId: s.requests[0].id, approve: true }, admin).state;
-    expect(stockBalances(s).copita).toBe(-2);
+    const proposed = run(s, 'resolve_request', { requestId: s.requests[0].id, approve: true }, admin);
+    expect(proposed.state.stock).toHaveLength(0);
+    s = run(
+      proposed.state,
+      'resolve_change',
+      { requestId: proposed.result.referenceId, approve: true },
+      other,
+    ).state;
+    expect(stockBalances(s).coronita).toBe(-2);
   });
   it('mantiene cierre offline provisional hasta la validación del servidor', () => {
     const s = run(
@@ -331,7 +370,7 @@ describe('Promociones y cupones', () => {
       admin,
     ).state;
     const a = order(s);
-    s = run(a.state, 'save_promotion', { ...s.promotions[0], active: false }, admin).state;
+    s = approveChange(run(a.state, 'save_promotion', { ...s.promotions[0], active: false }, admin)).state;
     expect(() =>
       applyCommand(
         s,

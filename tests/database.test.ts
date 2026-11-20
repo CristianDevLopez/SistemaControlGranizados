@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, it, expect } from 'vitest';
 import { PgBackend } from './support/backend.ts';
-import { admin, cashier, support, ids, cmd, NOW } from './support/fixture.ts';
+import { admin, cashier, other, support, ids, cmd, NOW } from './support/fixture.ts';
 import { createGateway } from '../src/server/gateway.ts';
 import { applyCommand } from '../src/domain/engine.ts';
 let db: PgBackend, gateway: (req: Request) => Promise<Response>;
@@ -131,12 +131,8 @@ it('elimina una degustación por API y persiste la restitución sin duplicar los
   const stored = await db.db.query<any>('select data from public.orders where id=$1', [orderId]);
   expect(stored.rows[0].data).toMatchObject({ status: 'cancelled', tastings: [] });
   const adjustments = (await db.load()).state.stock.filter((movement) => movement.referenceId === orderId);
-  expect(adjustments).toHaveLength(4);
-  expect(
-    adjustments
-      .filter((movement) => movement.article === 'copita')
-      .reduce((sum, movement) => sum + movement.quantity, 0),
-  ).toBe(0);
+  expect(adjustments).toHaveLength(2);
+  expect(adjustments.some((movement) => movement.article === 'copita')).toBe(false);
   expect(
     adjustments
       .filter((movement) => movement.article === `liquid:${ids.flavor}`)
@@ -168,6 +164,13 @@ it('resuelve dos canjes concurrentes con un solo ganador', async () => {
   );
   let r = await request('commands', { commands: [promotion] }, admin);
   expect(r.body.results[0].status).toBe('accepted');
+  const proposalId = r.body.results[0].referenceId;
+  r = await request(
+    'commands',
+    { commands: [cmd('resolve_change', { requestId: proposalId, approve: true }, other)] },
+    other,
+  );
+  expect(r.body.results[0].status).toBe('accepted');
   const promoId = r.body.results[0].referenceId;
   state = (await db.load()).state;
   const issue = cmd('issue_coupon', { promotionId: promoId, expiresAt: '2026-11-01T00:00:00Z' }, admin, {
@@ -188,20 +191,34 @@ it('resuelve dos canjes concurrentes con un solo ganador', async () => {
     const a = await request('commands', { commands: [create] });
     orders.push(a.body.results[0].referenceId);
   }
-  state = (await db.load()).state;
-  const results = await Promise.all(
-    orders.map((orderId) =>
-      request('commands', {
-        commands: [
-          cmd('pay', { orderId, codes: [coupon.code], deliver: true }, cashier, {
-            configVersion: state.settings[0].version,
-          }),
-        ],
-      }),
-    ),
-  );
-  expect(results.map((r) => r.body.results[0].status).sort()).toEqual(['accepted', 'conflict']);
-  expect((await db.load()).state.coupons.find((c) => c.id === coupon.id)?.status).toBe('redeemed');
+  const assignCashier = (cashierId: string, deviceId: string) =>
+    db.db.query('update public.shifts set data=data||$2::jsonb where id=$1', [
+      ids.shift,
+      { cashierId, deviceId },
+    ]);
+  await assignCashier(admin.id, admin.deviceId);
+  try {
+    state = (await db.load()).state;
+    const results = await Promise.all(
+      orders.map((orderId) =>
+        request(
+          'commands',
+          {
+            commands: [
+              cmd('pay', { orderId, codes: [coupon.code], deliver: true }, admin, {
+                configVersion: state.settings[0].version,
+              }),
+            ],
+          },
+          admin,
+        ),
+      ),
+    );
+    expect(results.map((r) => r.body.results[0].status).sort()).toEqual(['accepted', 'conflict']);
+    expect((await db.load()).state.coupons.find((c) => c.id === coupon.id)?.status).toBe('redeemed');
+  } finally {
+    await assignCashier(cashier.id, cashier.deviceId);
+  }
 });
 it('rechaza acciones administrativas de empleado aunque se invoquen por API', async () => {
   const c = cmd('configure', { cashLimit: 1 });

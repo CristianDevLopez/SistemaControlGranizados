@@ -3,7 +3,9 @@ import { Check, Search, FilePlus2, Plus, Trash2, ArrowRightLeft } from 'lucide-r
 import { useApp } from '../lib/store.tsx';
 import type { CommandType, Order, Payment } from '../domain/types.ts';
 import { canWork, hasPermission, isShiftCashier } from '../domain/access.ts';
-import { paymentMethod } from '../domain/engine.ts';
+import { currentPayments, paymentMethod } from '../domain/engine.ts';
+import { orderPaymentLabels } from '../domain/payment-methods.ts';
+import { operatingShift } from '../domain/employee-view.ts';
 import { FlavorPortions, flavorName, portionLabel } from './FlavorDetails.tsx';
 import { transferAccountName } from './payment-labels.ts';
 import { TastingsEditor } from './TastingsEditor.tsx';
@@ -197,6 +199,10 @@ export function Orders() {
       extra: Record<string, unknown>;
     } | null>(null);
   const details = state.orders.find((order) => order.id === detailsId);
+  const active = operatingShift(state);
+  const payments = currentPayments(state.payments);
+  const showPaymentMethod = filter !== 'pending';
+  const paymentMethods = showPaymentMethod ? orderPaymentLabels(state) : undefined;
   const paymentLabel = (x: Payment) =>
     paymentMethod(x) === 'cash'
       ? 'Efectivo'
@@ -211,7 +217,7 @@ export function Orders() {
   const refundField = (o: Order): Field[] => {
     const accounts = transferAccounts(state, true);
     if (!accounts.length) return [];
-    const paid = state.payments.find((x) => x.orderId === o.id && x.amount > 0);
+    const paid = payments.find((x) => x.orderId === o.id && x.amount > 0);
     const value =
       paid && paymentMethod(paid) === 'transfer' && accounts.some((a) => a.id === paid.accountId)
         ? `transfer:${paid.accountId}`
@@ -234,15 +240,12 @@ export function Orders() {
     ];
   };
   const canCash =
-    hasPermission(actor, 'payments') &&
-    isShiftCashier(
-      { ...actor, online: app.online },
-      state.shifts.find((s) => s.status === 'open'),
-    );
+    hasPermission(actor, 'payments') && isShiftCashier({ ...actor, online: app.online }, active);
   const rows = [...state.orders]
     .reverse()
     .filter(
       (o) =>
+        (actor.role === 'admin' || o.shiftId === active?.id) &&
         (filter === 'all' ||
           (filter === 'pending' &&
             (['open', 'void_requested', 'unpaid_incident'].includes(o.status) ||
@@ -282,7 +285,7 @@ export function Orders() {
               Cobrados
             </button>
             <button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>
-              Historial
+              {actor.role === 'admin' ? 'Historial' : 'Todos del turno'}
             </button>
           </div>
           <input
@@ -301,6 +304,7 @@ export function Orders() {
                   <th>Pedido</th>
                   <th>Productos</th>
                   <th>Total</th>
+                  {showPaymentMethod && <th>Medio de pago</th>}
                   <th>Estado</th>
                   <th>Acciones</th>
                 </tr>
@@ -333,8 +337,14 @@ export function Orders() {
                         </div>
                       ))}
                       {o.tastings.length > 0 && <small>{o.tastings.length} degustaciones</small>}
+                      {o.additions?.map((item) => (
+                        <small key={item.id}>
+                          {item.quantity} × {item.name}
+                        </small>
+                      ))}
                     </td>
                     <td>{money(o.total)}</td>
+                    {showPaymentMethod && <td>{paymentMethods?.[o.id]?.join(' / ') ?? '—'}</td>}
                     <td>
                       <Badge
                         tone={
@@ -391,7 +401,30 @@ export function Orders() {
                             Solicitar anulación
                           </button>
                         )}
-                        {o.status === 'voided' && !o.resolvedAt && canCash && (
+                        {actor.role !== 'admin' &&
+                          o.status === 'paid' &&
+                          canWork(actor, state, 'orders', o.shiftId) &&
+                          (state.paymentChangeOrderIds?.includes(o.id) ? (
+                            <small>Cambio de medio solicitado</small>
+                          ) : (
+                            <button
+                              className="button small secondary"
+                              disabled={!app.online}
+                              onClick={() =>
+                                setForm({
+                                  title: 'Pedir cambio de medio de pago',
+                                  type: 'request_payment_change',
+                                  extra: { orderId: o.id },
+                                  fields: [
+                                    { name: 'notes', label: 'Nota', type: 'textarea', required: true },
+                                  ],
+                                })
+                              }
+                            >
+                              Pedir cambio de medio de pago
+                            </button>
+                          ))}
+                        {actor.role === 'admin' && o.status === 'voided' && !o.resolvedAt && canCash && (
                           <>
                             <button className="button small secondary" onClick={() => setReplace(o)}>
                               <ArrowRightLeft size={15} />
@@ -469,7 +502,7 @@ export function Orders() {
               <dd>{details.origin === 'paper' ? `Planilla · ${details.paperFolio}` : 'App'}</dd>
               <dt>Cobrado</dt>
               <dd>{date(details.paidAt)}</dd>
-              {state.payments
+              {payments
                 .filter((x) => x.orderId === details.id)
                 .map((x) => (
                   <Fragment key={x.id}>
@@ -505,6 +538,14 @@ export function Orders() {
                     ))}
                 </div>
                 <strong>{money(l.listPrice * l.quantity - l.discount)}</strong>
+              </div>
+            ))}
+            {details.additions?.map((item) => (
+              <div className="list-row" key={item.id}>
+                <span>
+                  {item.quantity} × {item.name}
+                </span>
+                <strong>{money(item.quantity * item.unitPrice)}</strong>
               </div>
             ))}
             <TastingsEditor order={details} showDates />

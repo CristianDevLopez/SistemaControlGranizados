@@ -44,9 +44,11 @@ export interface Settings {
   expenseLimit: number;
   expenseCategories: string[];
   courtesyQuota: number;
+  requiredChangeApprovals?: 1 | 2;
   cupPackageUnits: number;
   bagOunces: number;
   liquidTolerance: number | null;
+  liquidBagWindow?: number;
   syncWarningMinutes: number;
   skipOpeningCount: boolean;
   baseline: boolean;
@@ -59,6 +61,7 @@ export interface Settings {
   auditId?: ID;
   auditRequest?: AuditRequest;
   nextOpeningAudit?: ScheduledOpeningAudit;
+  rehearsalBaseline?: { countId: ID; at: string; by: ID };
 }
 export type AuditMode = 'full' | 'cash' | 'custom';
 export interface AuditSelection {
@@ -111,6 +114,7 @@ export interface Tasting {
   at: string;
 }
 export interface Order {
+  additions?: import('./additions.ts').CandyAddition[];
   id: ID;
   number: string;
   shiftId: ID;
@@ -132,6 +136,7 @@ export interface Order {
   paymentCredit?: number;
   paymentTransferFromId?: ID;
   inventoryTransferred?: boolean;
+  voidInventoryRestoredAt?: string;
   couponCode?: string;
   resolvedAt?: string;
 }
@@ -150,6 +155,9 @@ export interface Payment {
   reference?: string;
   at: string;
   eventId: ID;
+  /** Entradas compensatorias conservan intacto el recaudo original. */
+  reversesId?: ID;
+  correctsId?: ID;
 }
 export type PaymentMethod = 'cash' | 'transfer';
 export interface Delivery {
@@ -171,6 +179,17 @@ export interface StockMovement {
   by: ID;
   eventId: ID;
 }
+export interface BlindOpening {
+  status: 'pending' | 'recount' | 'review' | 'audit' | 'matched' | 'authorized' | 'reviewed';
+  countIds?: ID[];
+  audit?: { id: ID; cash: boolean; items: string[]; by?: ID; at?: string };
+  auditCountIds?: ID[];
+  review?: { by: ID; at: string; notes?: string };
+}
+export interface BlindClosing {
+  status: 'recount' | 'review' | 'matched';
+  countIds?: ID[];
+}
 export interface Shift {
   id: ID;
   cashierId: ID;
@@ -183,6 +202,8 @@ export interface Shift {
   openingSkipped: boolean;
   openingCountId?: ID;
   closingCountId?: ID;
+  blindOpening?: BlindOpening;
+  blindClosing?: BlindClosing;
   retained?: number;
   remittance?: number;
   closedAt?: string;
@@ -205,6 +226,12 @@ export interface Shift {
     employeeCharge?: number;
     recoveries?: { id: ID; amount: number; paidOn: string; at: string; by: ID }[];
   };
+  operationsReview?: {
+    verifiedTransfers?: Record<ID, { by: ID; at: string }>;
+    camera?: { at: string; notes: string; by: ID };
+    openingResolution?: { notes: string; at: string; by: ID };
+    resolution?: { outcome: 'shortage' | 'surplus' | 'matched'; notes: string; at: string; by: ID };
+  };
 }
 export interface Count {
   id: ID;
@@ -212,6 +239,7 @@ export interface Count {
   shiftId?: ID;
   by: ID;
   at: string;
+  blindAttempt?: 1 | 2;
   cash?: number;
   items: Record<string, number>;
   expectedCash?: number;
@@ -308,6 +336,8 @@ export interface Transfer {
   status: 'requested' | 'in_transit' | 'confirmed' | 'disputed' | 'cancelled';
   at: string;
   executedAt?: string;
+  executedBy?: ID;
+  cancellation?: { at: string; by?: ID; notes: string; originalExecutedAt?: string };
   confirmedAt?: string;
   confirmedBy?: ID;
   receivedAmount?: number;
@@ -366,7 +396,16 @@ export interface Coupon {
 }
 export interface Request {
   id: ID;
-  type: 'sync' | 'void' | 'damage' | 'difference' | 'unpaid' | 'courtesy_excess';
+  type:
+    | 'sync'
+    | 'void'
+    | 'damage'
+    | 'difference'
+    | 'unpaid'
+    | 'courtesy_excess'
+    | 'change'
+    | 'payment_change'
+    | 'shift_explanation';
   by: ID;
   at: string;
   status: 'pending' | 'approved' | 'rejected';
@@ -383,6 +422,27 @@ export interface Request {
   originalCommand?: Command;
   resolutionNotes?: string;
   resolutionId?: ID;
+  response?: { notes: string; at: string };
+  change?: ChangeProposal;
+}
+export interface ChangeVote {
+  by: ID;
+  name: string;
+  at: string;
+}
+export interface ChangeRecord {
+  kind: CommandType;
+  label: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  proposedBy: ChangeVote;
+  votes: ChangeVote[];
+  access?: 'user' | 'device';
+}
+export interface ChangeProposal extends ChangeRecord {
+  command: Command;
+  requiredApprovals: 1 | 2;
+  inventoryDelta?: Record<string, number>;
 }
 export interface Goal {
   id: ID;
@@ -416,6 +476,7 @@ export interface Audit {
   action: string;
   referenceId?: ID;
   detail: string;
+  change?: ChangeRecord;
   inventoryAdjustment?: {
     notes: string;
     items: Record<string, number>;
@@ -436,6 +497,7 @@ export interface Package {
   sizeId: ID;
   units: number;
   openedAt: string;
+  shiftId?: ID;
   by: ID;
   closedAt?: string;
   priorDifference?: number;
@@ -445,6 +507,7 @@ export interface Bag {
   flavorId: ID;
   ounces: number;
   openedAt: string;
+  shiftId?: ID;
   by: ID;
   exhaustedAt?: string;
 }
@@ -466,6 +529,15 @@ export interface Outage {
   until?: string;
 }
 export interface State {
+  transferDestinations?: { id: ID; name: string; needsEvidence: boolean }[];
+  cashHandoffs?: Pick<Transfer, 'id' | 'to' | 'amount' | 'status' | 'notes'>[];
+  sharedShift?: { id: ID; blocked: boolean };
+  paymentChangeOrderIds?: ID[];
+  orderPaymentMethods?: Record<ID, string[]>;
+  shiftReviewPrompt?: { id: ID; notes: string; at: string }[];
+  resolvedSyncIds?: ID[];
+  /** Resumen por cuenta del turno propio en la vista del empleado. */
+  transferSummary?: { name: string; amount: number }[];
   /** Proyección operativa para mostrador, sin movimientos privados de inventario. */
   cupBalances?: Record<string, number>;
   settings: Settings[];
@@ -523,6 +595,10 @@ export const COLLECTIONS = [
 ] as const;
 export type Collection = (typeof COLLECTIONS)[number];
 export type CommandType =
+  | 'request_payment_change'
+  | 'review_shift'
+  | 'answer_shift_review'
+  | 'archive_rehearsal'
   | 'record_paper'
   | 'cancel_order'
   | 'report_damage'
@@ -530,12 +606,19 @@ export type CommandType =
   | 'request_courtesy_excess'
   | 'refund_order'
   | 'initialize_stock'
+  | 'correct_inventory'
   | 'save_flavor'
   | 'save_size'
+  | 'change_access'
+  | 'resolve_change'
+  | 'set_approval_requirement'
   | 'configure'
   | 'request_shift'
   | 'authorize_shift'
   | 'count'
+  | 'submit_blind_count'
+  | 'review_blind_opening'
+  | 'submit_blind_opening_audit'
   | 'approve_closing'
   | 'record_employee_recovery'
   | 'start_audit'
@@ -565,6 +648,7 @@ export type CommandType =
   | 'request_transfer'
   | 'execute_transfer'
   | 'confirm_transfer'
+  | 'cancel_transfer'
   | 'approve_payout'
   | 'save_promotion'
   | 'issue_coupon'
@@ -590,6 +674,7 @@ export interface Result {
   code?: string;
   /** Validación denegada antes de guardar, sin una solicitud de conciliación en el servidor. */
   finalRejection?: true;
+  approvalPending?: true;
   referenceId?: ID;
   revision?: number;
   at?: string;

@@ -8,7 +8,8 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { applyCommand, redactState } from '../domain/engine.ts';
+import { applyCommand } from '../domain/engine.ts';
+import { employeeView, operatingShift } from '../domain/employee-view.ts';
 import {
   type Actor,
   type Command,
@@ -41,6 +42,7 @@ import {
   belongsToBranch,
   awaitsSync,
   isFinalRejection,
+  offlineSnapshot,
   type DeviceCredential,
   type OfflineAuthorizer,
   type OutboxEntry,
@@ -87,6 +89,9 @@ const ONLINE_TYPES = new Set<CommandType>([
   'record_paper',
   'save_flavor',
   'save_size',
+  'change_access',
+  'resolve_change',
+  'set_approval_requirement',
   'configure',
   'initialize_stock',
   'save_promotion',
@@ -97,12 +102,24 @@ const ONLINE_TYPES = new Set<CommandType>([
   'approve_expense',
   'resolve_request',
   'approve_payout',
+  'request_transfer',
+  'execute_transfer',
+  'confirm_transfer',
+  'cancel_transfer',
   'request_courtesy_excess',
   'start_audit',
   'finish_audit',
   'adjust_count_inventory',
+  'correct_inventory',
   'approve_closing',
   'record_employee_recovery',
+  'submit_blind_count',
+  'submit_blind_opening_audit',
+  'review_blind_opening',
+  'request_payment_change',
+  'review_shift',
+  'answer_shift_review',
+  'archive_rehearsal',
 ]);
 export function AppProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<Snapshot | null>(null),
@@ -149,18 +166,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     current.current = value;
     setData(value);
-    const cached =
-      value.actor.role === 'admin'
-        ? {
-            ...value,
-            actor: { ...value.actor, superAdmin: undefined },
-            state: redactState(value.state, { ...value.actor, role: 'encargado' }),
-          }
-        : { ...value };
-    cached.access = undefined;
+    const cached = offlineSnapshot(value);
     await setMeta('snapshot', cached);
     if (value.actor.branchId) await setMeta(`snapshot:${value.actor.branchId}:${value.actor.id}`, cached);
   }, []);
+  const reset = useCallback(() => {
+    preview.current = null;
+    setPreviewRole(null);
+    setViewRole(null);
+    current.current = null;
+    setData(null);
+    setOutbox([]);
+    setPhotosPending(0);
+  }, []);
+  const revokeCachedAccess = useCallback(
+    async (error: unknown) => {
+      const saved = current.current;
+      if (
+        !saved ||
+        switchingBranch.current ||
+        !(error instanceof ApiError) ||
+        !['DEVICE_REVOKED', 'USER_REVOKED', 'NO_BRANCHES'].includes(error.code)
+      )
+        return false;
+      reset();
+      setOnline(false);
+      toast(error.message);
+      const { id, branchId } = saved.actor;
+      await db.transaction('rw', db.meta, async () => {
+        const latest = await getMeta<Snapshot>('snapshot');
+        if (latest?.actor.id === id && latest.actor.branchId === branchId) await db.meta.delete('snapshot');
+        if (branchId) await db.meta.delete(`snapshot:${branchId}:${id}`);
+      });
+      return true;
+    },
+    [reset, toast],
+  );
   const updatePending = useCallback(async () => {
     const all = await db.outbox.toArray();
     setOutbox(
@@ -190,7 +231,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       if (entry.status === 'conflict') {
         const review = result.state.requests.find((r) => r.type === 'sync' && r.id === entry.id);
-        if (review && review.status !== 'pending') {
+        if ((review && review.status !== 'pending') || result.state.resolvedSyncIds?.includes(entry.id)) {
           await db.outbox.update(entry.id, { status: 'reconciled' });
           continue;
         }
@@ -211,7 +252,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         /* The raw operation stays available in the incident queue. */
       }
     }
-    await remember({ ...result, state });
+    await remember({
+      ...result,
+      state: result.actor.role === 'admin' ? state : employeeView(state, result.actor),
+    });
     const at = new Date().toISOString();
     setLastSync(at);
     await setMeta('lastSync', at);
@@ -241,11 +285,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (result?.id !== entry.id || !['accepted', 'review', 'conflict'].includes(result.status))
           throw new Error('Respuesta incompleta del servidor.');
         recentResults.current.set(entry.id, result);
-        const status = isFinalRejection(entry, result)
-          ? 'rejected'
-          : result.status === 'conflict'
-            ? 'conflict'
-            : 'acknowledged';
+        const status =
+          result.finalRejection || isFinalRejection(entry, result)
+            ? 'rejected'
+            : result.status === 'conflict'
+              ? 'conflict'
+              : 'acknowledged';
         await db.outbox.update(entry.id, {
           status,
           result,
@@ -284,9 +329,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       await load();
     } catch (e) {
+      if (await revokeCachedAccess(e)) return;
       if (e instanceof ApiError) {
         setError(e.message);
-        if (['UNAUTHORIZED', 'FORBIDDEN', 'DEVICE_REQUIRED'].includes(e.code)) setOnline(false);
+        if (['UNAUTHORIZED', 'FORBIDDEN', 'DEVICE_REQUIRED', 'DEVICE_REVOKED'].includes(e.code))
+          setOnline(false);
       } else {
         setOnline(false);
         setError('Sin conexión con el servidor. Los registros locales se conservan.');
@@ -302,7 +349,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         finishSync();
       }
     }
-  }, [load, toast, updatePending]);
+  }, [load, revokeCachedAccess, toast, updatePending]);
   const run = useCallback(
     (
       type: CommandType,
@@ -328,6 +375,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const requiresOnline =
             options.onlineOnly ||
             ONLINE_TYPES.has(type) ||
+            ((type === 'open_bag' || type === 'open_package') && payload.correction === true) ||
             (type === 'count' && payload.preview !== undefined) ||
             (type === 'request_shift' && snapshot.actor.role === 'admin' && isOnline) ||
             snapshot.actor.role === 'apoyo' ||
@@ -335,9 +383,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             (type === 'pay' && Array.isArray(payload.codes) && payload.codes.length > 0);
           if (requiresOnline && (!navigator.onLine || !online))
             throw new Error('Esta operación requiere conexión.');
-          const shift = snapshot.state.shifts.find(
-            (x) => x.status === 'open' || x.status === 'requested' || x.status === 'provisional',
-          );
+          const shift =
+            operatingShift(snapshot.state) ??
+            snapshot.state.shifts.find((x) => x.status === 'requested' || x.status === 'provisional');
           const sequence = ((await getMeta<number>('sequence')) ?? 0) + 1;
           const command: Command = {
             id: crypto.randomUUID(),
@@ -361,7 +409,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
               { ...snapshot.actor, online: isOnline },
               new Date().toISOString(),
             );
-            next = applied.state;
+            next =
+              snapshot.actor.role === 'admin' ? applied.state : employeeView(applied.state, snapshot.actor);
             result = applied.result;
           }
           await db.transaction('rw', db.meta, db.outbox, async () => {
@@ -376,15 +425,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             });
             await db.meta.put({ key: 'sequence', value: sequence });
             if (optimistic) {
-              const cache = {
-                ...snapshot,
-                access: undefined,
-                actor: { ...snapshot.actor, superAdmin: undefined },
-                state:
-                  snapshot.actor.role === 'admin'
-                    ? redactState(next, { ...snapshot.actor, role: 'encargado' })
-                    : next,
-              };
+              const cache = offlineSnapshot({ ...snapshot, state: next });
               await db.meta.put({ key: 'snapshot', value: cache });
               if (snapshot.actor.branchId)
                 await db.meta.put({
@@ -410,13 +451,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
             throw new Error(
               'Validación pendiente. No repitas la operación; se reintentará con el mismo identificador.',
             );
-          return (
-            saved?.result ??
+          const confirmed = saved?.result ??
             recentResults.current.get(command.id) ?? {
               ...result,
               referenceId: current.current?.state.audit.find((x) => x.eventId === command.id)?.referenceId,
-            }
-          );
+            };
+          if (confirmed.approvalPending) toast(confirmed.message);
+          return confirmed;
         } finally {
           if (!committed) localWrites.current--;
         }
@@ -425,7 +466,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       commandLock.current = promise.catch(() => {});
       return promise;
     },
-    [online, sync, updatePending],
+    [online, sync, toast, updatePending],
   );
   const photo = useCallback(
     async (file: File) => {
@@ -515,15 +556,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     },
     [run],
   );
-  const reset = useCallback(() => {
-    preview.current = null;
-    setPreviewRole(null);
-    setViewRole(null);
-    current.current = null;
-    setData(null);
-    setOutbox([]);
-    setPhotosPending(0);
-  }, []);
   const changeView = useCallback(
     (role: Role | null) => {
       if (!current.current?.actor.superAdmin) return false;
@@ -674,7 +706,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 setData(current.current);
               }
             })
-            .catch(() => setOnline(false))
+            .catch(async (error) => {
+              if (!(await revokeCachedAccess(error))) setOnline(false);
+            })
             .finally(() => {
               syncLock.current = false;
             });
@@ -688,7 +722,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('offline', changed);
       window.removeEventListener('focus', changed);
     };
-  }, [sync, load, pending, photosPending]);
+  }, [sync, load, pending, photosPending, revokeCachedAccess]);
   return (
     <Context.Provider
       value={{

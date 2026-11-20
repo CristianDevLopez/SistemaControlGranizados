@@ -209,83 +209,83 @@ it('las vistas usan los permisos y la identidad del rol sin alterar la sesión d
   expect(() => rolePreview({ ...snapshot, actor: admin }, 'encargado')).toThrow(/exclusivo/);
 });
 
-it.each([admin, owner])(
-  '$name guarda el catálogo y la configuración siendo el único admin activo',
-  async (actor) => {
-    const profiles = await db.profiles();
-    try {
-      for (const profile of profiles.filter((p) => p.role === 'admin' && p.id !== actor.id))
-        await db.saveProfile({ ...profile, active: false });
-      expect((await db.profiles()).filter((p) => p.active && p.role === 'admin')).toHaveLength(1);
-      const before = (await db.load()).state;
-      const commands: [CommandType, Record<string, unknown>][] = [
-        ['save_flavor', { name: `Sabor de ${actor.name}`, alcohol: false, active: true }],
-        ['save_size', { ...before.sizes[0], alcoholPrice: 13000, plainPrice: 9000, active: true }],
-        ['configure', { courtesyQuota: 7, cashLimit: 120000 }],
-        [
-          'save_promotion',
-          {
-            name: `Promoción de ${actor.name}`,
-            effect: 'fixed',
-            delivery: 'schedule',
-            fixedPrice: 8000,
-            startsAt: '2026-10-01T00:00:00Z',
-            endsAt: '2026-11-01T00:00:00Z',
-          },
-        ],
-        [
-          'save_goal',
-          {
-            period: 'week',
-            startsAt: '2026-10-25T00:00:00Z',
-            endsAt: '2026-11-01T00:00:00Z',
-            cups: 100,
-            amount: 1000000,
-          },
-        ],
-      ];
-      const events: string[] = [];
-      for (const [type, payload] of commands) {
-        const state = (await db.load()).state;
-        const command = cmd(type, payload, actor, { configVersion: state.settings[0].version });
-        const response = await request('commands', { commands: [command] }, actor);
-        expect(response.status).toBe(200);
-        expect(response.body.results[0]).toMatchObject({ id: command.id, status: 'accepted' });
-        events.push(command.id);
-      }
+it.each([admin, owner])('$name propone precios y promociones siendo el único admin activo', async (actor) => {
+  const profiles = await db.profiles();
+  try {
+    for (const profile of profiles.filter((p) => p.role === 'admin' && p.id !== actor.id))
+      await db.saveProfile({ ...profile, active: false });
+    expect((await db.profiles()).filter((p) => p.active && p.role === 'admin')).toHaveLength(1);
+    const before = (await db.load()).state;
+    const commands: [CommandType, Record<string, unknown>][] = [
+      ['save_flavor', { name: `Sabor de ${actor.name}`, alcohol: false, active: true }],
+      ['save_size', { ...before.sizes[0], alcoholPrice: 13000, plainPrice: 9000, active: true }],
+      ['configure', { courtesyQuota: 7, cashLimit: 120000 }],
+      [
+        'save_promotion',
+        {
+          name: `Promoción de ${actor.name}`,
+          effect: 'fixed',
+          delivery: 'schedule',
+          fixedPrice: 8000,
+          startsAt: '2026-10-01T00:00:00Z',
+          endsAt: '2026-11-01T00:00:00Z',
+        },
+      ],
+      [
+        'save_goal',
+        {
+          period: 'week',
+          startsAt: '2026-10-25T00:00:00Z',
+          endsAt: '2026-11-01T00:00:00Z',
+          cups: 100,
+          amount: 1000000,
+        },
+      ],
+    ];
+    const events: string[] = [];
+    for (const [type, payload] of commands) {
       const state = (await db.load()).state;
-      expect(state.flavors).toContainEqual(
-        expect.objectContaining({ name: `Sabor de ${actor.name}`, active: true }),
-      );
-      expect(state.sizes.find((s) => s.id === before.sizes[0].id)).toMatchObject({
-        alcoholPrice: 13000,
-        plainPrice: 9000,
-        active: true,
-      });
-      expect(state.settings[0]).toMatchObject({ courtesyQuota: 7, cashLimit: 120000 });
-      expect(state.promotions.find((p) => p.name === `Promoción de ${actor.name}`)).toMatchObject({
-        by: actor.id,
-      });
-      expect(state.goals.find((g) => !before.goals.some((previous) => previous.id === g.id))).toMatchObject({
-        cups: 100,
-        amount: 1000000,
-        by: actor.id,
-      });
-      expect(state.requests).toEqual(before.requests);
-      expect(state.audit.filter((a) => events.includes(a.eventId))).toHaveLength(commands.length);
-      expect(state.audit.filter((a) => events.includes(a.eventId)).every((a) => a.by === actor.id)).toBe(
-        true,
-      );
-      const versions = state.parameters.filter(
-        (p) => !before.parameters.some((previous) => previous.id === p.id),
-      );
-      expect(versions).toHaveLength(4);
-      expect(versions.every((p) => p.by === actor.id)).toBe(true);
-    } finally {
-      for (const profile of profiles) await db.saveProfile(profile);
+      const command = cmd(type, payload, actor, { configVersion: state.settings[0].version });
+      const response = await request('commands', { commands: [command] }, actor);
+      expect(response.status).toBe(200);
+      expect(response.body.results[0]).toMatchObject({ id: command.id, status: 'accepted' });
+      events.push(command.id);
     }
-  },
-);
+    const state = (await db.load()).state;
+    expect(state.flavors).toContainEqual(
+      expect.objectContaining({ name: `Sabor de ${actor.name}`, active: true }),
+    );
+    expect(state.sizes).toEqual(before.sizes);
+    expect(state.settings[0]).toMatchObject({ courtesyQuota: 7, cashLimit: 120000 });
+    expect(state.promotions).toEqual(before.promotions);
+    expect(state.goals.find((g) => !before.goals.some((previous) => previous.id === g.id))).toMatchObject({
+      cups: 100,
+      amount: 1000000,
+      by: actor.id,
+    });
+    expect(state.requests.filter((r) => !before.requests.some((prior) => prior.id === r.id))).toEqual(
+      expect.arrayContaining(
+        ['save_size', 'save_promotion'].map((type) =>
+          expect.objectContaining({
+            type: 'change',
+            status: 'pending',
+            by: actor.id,
+            change: expect.objectContaining({ kind: type }),
+          }),
+        ),
+      ),
+    );
+    expect(state.audit.filter((a) => events.includes(a.eventId))).toHaveLength(commands.length);
+    expect(state.audit.filter((a) => events.includes(a.eventId)).every((a) => a.by === actor.id)).toBe(true);
+    const versions = state.parameters.filter(
+      (p) => !before.parameters.some((previous) => previous.id === p.id),
+    );
+    expect(versions).toHaveLength(2);
+    expect(versions.every((p) => p.by === actor.id)).toBe(true);
+  } finally {
+    for (const profile of profiles) await db.saveProfile(profile);
+  }
+});
 
 describe('activación privada de un solo uso', () => {
   const token = 'b'.repeat(64),

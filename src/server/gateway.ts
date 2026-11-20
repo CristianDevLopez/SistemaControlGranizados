@@ -8,10 +8,38 @@ import {
   type State,
 } from '../domain/types.ts';
 import { quoteOrder } from '../domain/pricing.ts';
-import { hasPermission, isShiftCashier, permissionLabels } from '../domain/access.ts';
+import { hasPermission, isShiftCashier } from '../domain/access.ts';
+import type { ApprovalAccess } from '../domain/change-approval.ts';
 import type { Access } from '../domain/platform.ts';
 import type { Backend, DeviceSecret } from './backend.ts';
 import { constantEqual, couponCode, encryptPermit, pinHash, randomToken, sha256 } from './crypto.ts';
+
+const staffCommands = new Set([
+  'request_shift',
+  'submit_blind_count',
+  'submit_blind_opening_audit',
+  'finish_audit',
+  'create_order',
+  'update_order',
+  'cancel_order',
+  'taste',
+  'update_tasting',
+  'remove_tasting',
+  'close_tastings',
+  'deliver',
+  'pay',
+  'request_void',
+  'unpaid',
+  'request_payment_change',
+  'request_transfer',
+  'execute_transfer',
+  'answer_shift_review',
+  'open_package',
+  'open_bag',
+  'report_damage',
+  'register_attachment',
+  'outage',
+]);
 
 export interface GatewayOptions {
   backend: Backend;
@@ -156,7 +184,12 @@ export function createGateway(options: GatewayOptions) {
           });
           assert(enrollment, 'Código de registro vencido o utilizado.', 'FORBIDDEN');
           store = store.forBranch(enrollment.branch_id);
-          assert((await store.profile(profile.id))?.active, 'Sin acceso al local.', 'FORBIDDEN');
+          const branchProfile = await store.profile(profile.id);
+          assert(
+            branchProfile?.active && branchProfile.role !== 'admin',
+            'Sin acceso operativo al local.',
+            'FORBIDDEN',
+          );
           returnedToken = randomToken();
           device = {
             id: crypto.randomUUID(),
@@ -167,7 +200,6 @@ export function createGateway(options: GatewayOptions) {
             tokenHash: await sha256(returnedToken),
           };
           await store.saveDevice(device);
-          if (enrollment.is_primary) await store.setPrimary(device.id);
         } else {
           device = (await store.devices()).find(
             (x) => x.id === body.deviceId && x.userId === profile.id && x.active,
@@ -177,6 +209,13 @@ export function createGateway(options: GatewayOptions) {
               typeof body.deviceToken === 'string' &&
               constantEqual(await sha256(body.deviceToken), device.tokenHash),
             'Este dispositivo debe registrarlo un administrador.',
+            'FORBIDDEN',
+          );
+          if (device.branchId) store = store.forBranch(device.branchId);
+          const branchProfile = await store.profile(profile.id);
+          assert(
+            branchProfile?.active && branchProfile.role !== 'admin',
+            'Sin acceso operativo al local.',
             'FORBIDDEN',
           );
         }
@@ -192,10 +231,19 @@ export function createGateway(options: GatewayOptions) {
         identity = await store.verifyUser(auth);
       assert(identity, 'Inicia sesión para continuar.', 'UNAUTHORIZED');
       let profile = await store.profile(identity.id);
-      assert(profile?.active, 'El usuario está desactivado o no tiene acceso.', 'FORBIDDEN');
+      assert(profile?.active, 'El usuario está desactivado o no tiene acceso.', 'USER_REVOKED');
       const ownerId = (await store.superAdmin('owner'))?.userId;
       const isSuperAdmin = profile.role === 'admin' && profile.id === ownerId;
       const access: Access = await store.platform(profile.id, 'access');
+      access.branches = access.branches.map((branch) =>
+        branch.role === 'admin'
+          ? branch
+          : {
+              ...branch,
+              monthlyFee: null,
+              billingStart: null,
+            },
+      );
       if (route === 'access') return json(access);
       if (route.startsWith('platform/')) {
         assert(profile.role === 'admin', 'Esta operación requiere un administrador.', 'FORBIDDEN');
@@ -277,15 +325,15 @@ export function createGateway(options: GatewayOptions) {
         (!requestedBranch
           ? (access.branches.find((b) => b.id === access.legacyBranchId) ?? access.branches[0])
           : undefined);
-      assert(branch, 'No tienes acceso a este local.', 'FORBIDDEN');
+      assert(branch, 'No tienes acceso a este local.', 'USER_REVOKED');
       store = store.forBranch(branch.id);
       const branchProfile = await store.profile(profile.id);
       assert(
         branchProfile?.active || isSuperAdmin,
         'El usuario no tiene acceso activo al local.',
-        'FORBIDDEN',
+        'USER_REVOKED',
       );
-      profile = { ...profile, ...branchProfile, role: branch.role };
+      profile = { ...profile, ...branchProfile, role: branchProfile?.role ?? branch.role };
       headers['X-Branch-Id'] = branch.id;
       headers['X-Legacy-Branch'] = String(branch.id === access.legacyBranchId);
       const previewRole = req.headers.get('x-preview-role');
@@ -306,6 +354,13 @@ export function createGateway(options: GatewayOptions) {
       if (route === 'devices/self') {
         admin();
         assert(!isSuperAdmin, 'Tu acceso de superadministrador no requiere registrar equipos.', 'FORBIDDEN');
+        const previousId = req.headers.get('x-device-id');
+        assert(
+          !previousId || !(await store.devices()).some((d) => d.id === previousId && !d.active),
+          'El dispositivo fue desactivado. Solicita su reactivación a un administrador.',
+          'DEVICE_REVOKED',
+        );
+        assert(body.primary !== true, 'Propón la asignación como equipo principal después de registrarlo.');
         const token = randomToken();
         const d: DeviceSecret = {
           id: crypto.randomUUID(),
@@ -316,7 +371,6 @@ export function createGateway(options: GatewayOptions) {
           tokenHash: await sha256(token),
         };
         await store.saveDevice(d);
-        if (body.primary === true) await store.setPrimary(d.id);
         await store.securityAudit(profile.id, d.id, 'register_device', d.name);
         return json({ deviceId: d.id, deviceToken: token });
       }
@@ -358,12 +412,17 @@ export function createGateway(options: GatewayOptions) {
         );
       } else {
         device = allDevices.find(
-          (x) => x.id === deviceId && x.active && (x.userId === profile.id || profile.role === 'admin'),
+          (x) => x.id === deviceId && (x.userId === profile.id || profile.role === 'admin'),
         );
         assert(
           device && deviceToken && constantEqual(await sha256(deviceToken), device.tokenHash),
           'Dispositivo desactivado o no registrado.',
           'DEVICE_REQUIRED',
+        );
+        assert(
+          device.active,
+          'El dispositivo fue desactivado. Solicita su reactivación a un administrador.',
+          'DEVICE_REVOKED',
         );
       }
       const actor: Actor = {
@@ -375,6 +434,61 @@ export function createGateway(options: GatewayOptions) {
         online: true,
         aal: identity.aal,
       };
+      const commitBusinessCommand = async (command: Command, context: Actor) => {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const loaded = await store.load();
+          if (
+            command.type === 'request_transfer' &&
+            (context.role !== 'admin' || String(command.payload.from ?? '').startsWith('cash:'))
+          ) {
+            const destination = loaded.state.locations.find((item) => item.id === command.payload.to);
+            const receiver = destination ? await store.profile(destination.custodianId) : undefined;
+            assert(
+              receiver?.active && receiver.role === 'admin',
+              'Selecciona un destino a cargo de un administrador activo.',
+            );
+          }
+          let approvalAccess: ApprovalAccess | undefined;
+          if (command.type === 'change_access' || command.type === 'resolve_change') {
+            const [profiles, devices] = await Promise.all([store.profiles(), store.devices()]);
+            approvalAccess = { profiles, devices, privateOwnerId: ownerId };
+          }
+          const applied = applyCommand(loaded.state, command, context, now().toISOString(), approvalAccess);
+          // Finaliza un cierre de contingencia cuando ya llegaron sus eventos anteriores.
+          if (
+            command.payload.offline === true &&
+            command.type === 'count' &&
+            command.payload.kind === 'closing'
+          ) {
+            const shift = applied.state.shifts.find((s) => s.closingCountId === applied.result.referenceId);
+            if (shift) shift.status = 'closed';
+          }
+          try {
+            return await store.commit(loaded.revision, command, applied.state, applied.result);
+          } catch (error) {
+            if (
+              (error as { code?: string }).code !== '40001' &&
+              !(error as Error).message.includes('REVISION_CONFLICT')
+            )
+              throw error;
+          }
+        }
+        throw new DomainError('Hay otra operación en curso. Se reintentará sin duplicar.', 'CONFLICT');
+      };
+      const updateAccess = async (payload: Record<string, unknown>) => {
+        const command: Command = {
+          id: crypto.randomUUID(),
+          branchId: branch.id,
+          type: 'change_access',
+          actorId: actor.id,
+          deviceId: actor.deviceId,
+          at: now().toISOString(),
+          configVersion: 1,
+          sequence: 1,
+          payload,
+        };
+        return commitBusinessCommand(command, actor);
+      };
       const publicDevices = (all: DeviceSecret[]): Device[] =>
         all
           .filter((x) => x.userId !== ownerId)
@@ -385,14 +499,33 @@ export function createGateway(options: GatewayOptions) {
         if (url.searchParams.get('since') === String(revision))
           return json({ unchanged: true, revision, actor, branch, access, serverAt: now().toISOString() });
         const loaded = await store.load();
+        const state = redactState(loaded.state, actor);
+        const profiles = await store.profiles();
+        if (
+          actor.role === 'encargado' &&
+          hasPermission(actor, 'transfers') &&
+          actor.primary &&
+          state.shifts.some((shift) => shift.status === 'open' && shift.deviceId === actor.deviceId)
+        ) {
+          const admins = new Set(
+            profiles
+              .filter((person) => person.active && person.role === 'admin' && person.id !== actor.id)
+              .map((person) => person.id),
+          );
+          state.transferDestinations = loaded.state.locations
+            .filter((item) => item.active && admins.has(item.custodianId))
+            .map(({ id, name, type }) => ({ id, name, needsEvidence: type === 'bank' }));
+        }
+        const sellers = new Set(state.orders.map((order) => order.sellerId));
         return json({
           branch,
           access,
-          state: redactState(loaded.state, actor),
+          state,
           revision: loaded.revision,
           actor,
-          profiles: (await store.profiles())
+          profiles: profiles
             .filter((p) => isSuperAdmin || p.id !== ownerId)
+            .filter((p) => actor.role === 'admin' || p.id === actor.id || sellers.has(p.id))
             .map((p) =>
               profile.role === 'admin' ? p : { id: p.id, name: p.name, role: p.role, active: p.active },
             ),
@@ -408,6 +541,7 @@ export function createGateway(options: GatewayOptions) {
         );
       }
       if (route === 'closing-preview') {
+        admin();
         const loaded = await store.load();
         const shift = loaded.state.shifts.find((s) => s.id === body.shiftId);
         assert(shift && !loaded.state.settings[0].auditId, 'Turno no disponible o arqueo en curso.');
@@ -419,6 +553,7 @@ export function createGateway(options: GatewayOptions) {
         return json(closingPreview(loaded.state, shift.id));
       }
       if (route === 'quote') {
+        admin();
         await rate(`coupon-quote:${profile.id}`, 20, 60);
         const loaded = await store.load();
         const order = loaded.state.orders.find((o) => o.id === body.orderId && o.status === 'open');
@@ -449,6 +584,10 @@ export function createGateway(options: GatewayOptions) {
       }
       if (route === 'users') {
         admin();
+        assert(
+          body.permissions === undefined,
+          'Propón los permisos personalizados después de crear el usuario.',
+        );
         assert(['admin', 'encargado', 'apoyo'].includes(body.role), 'Rol inválido.');
         assert(
           typeof body.name === 'string' && body.name.trim() && body.name.length <= 100,
@@ -480,7 +619,7 @@ export function createGateway(options: GatewayOptions) {
             name: body.name.trim(),
             username: body.username,
             role: body.role,
-            active: true,
+            active: body.role !== 'admin',
           });
         } catch (error) {
           await store.deleteAuthUser(uid);
@@ -491,7 +630,11 @@ export function createGateway(options: GatewayOptions) {
           await store.security('staff_set', { userId: uid, salt, hash: await pinHash(body.pin, salt) });
         }
         await store.securityAudit(profile.id, device.id, 'create_user', `${body.name} · ${body.role}`);
-        return json({ id: uid });
+        const result =
+          body.role === 'admin'
+            ? await updateAccess({ kind: 'user', targetId: uid, active: true })
+            : undefined;
+        return json({ id: uid, result });
       }
       if (route === 'users/update') {
         admin();
@@ -502,53 +645,27 @@ export function createGateway(options: GatewayOptions) {
           'El acceso privado de superadministrador no se modifica desde el equipo del negocio.',
           'FORBIDDEN',
         );
-        if (
-          (body.active === false || (body.role !== undefined && body.role !== 'admin')) &&
-          target.role === 'admin'
-        )
-          assert(
-            (await store.profiles()).filter((x) => x.active && x.role === 'admin' && x.id !== target.id)
-              .length > 0,
-            'Debe quedar al menos un admin activo.',
-          );
-        if (body.active !== undefined) target.active = body.active === true;
-        if (body.role !== undefined) {
-          assert(['admin', 'encargado', 'apoyo'].includes(body.role), 'Rol inválido.');
-          assert(target.id !== profile.id, 'Otro admin debe cambiar tu rol.');
-          target.role = body.role;
-        }
+        const changesAccess =
+          body.active !== undefined || body.role !== undefined || body.permissions !== undefined;
         if (body.pin !== undefined) {
+          assert(!changesAccess, 'Cambia el PIN en una operación independiente.');
           assert(
-            target.role !== 'admin' && /^\d{6}$/.test(String(body.pin)),
+            target.role !== 'admin' && typeof body.pin === 'string' && /^\d{6}$/.test(body.pin),
             'Solo empleados: PIN de seis dígitos.',
           );
           const salt = randomToken(16);
           await store.security('staff_set', { userId: target.id, salt, hash: await pinHash(body.pin, salt) });
+          await store.securityAudit(profile.id, device.id, 'reset_pin', target.name);
         }
-        if (body.permissions !== undefined) {
-          assert(
-            body.permissions &&
-              typeof body.permissions === 'object' &&
-              !Array.isArray(body.permissions) &&
-              Object.entries(body.permissions).every(
-                ([key, value]) => Object.hasOwn(permissionLabels, key) && typeof value === 'boolean',
-              ),
-            'Permisos inválidos.',
-          );
-          assert(target.role !== 'admin', 'Los administradores conservan sus facultades de administración.');
-          target.permissions = body.permissions;
-        }
-        await store.saveProfile(target);
-        await store.securityAudit(
-          profile.id,
-          device.id,
-          'update_user',
-          `${target.name} · activo=${target.active} · ${target.role} · permisos=${JSON.stringify(target.permissions ?? {})}`,
-        );
-        return json({ ok: true });
+        const { active, role, permissions } = body;
+        const result = changesAccess
+          ? await updateAccess({ kind: 'user', targetId: target.id, active, role, permissions })
+          : undefined;
+        return json({ ok: true, result });
       }
       if (route === 'devices/invite') {
         admin();
+        assert(body.primary !== true, 'Propón la asignación como equipo principal después de registrarlo.');
         const target = await store.profile(id(body.userId));
         assert(target?.active && target.role !== 'admin', 'Selecciona un empleado activo.');
         const token = randomToken(12);
@@ -556,7 +673,7 @@ export function createGateway(options: GatewayOptions) {
           hash: await sha256(token),
           userId: target.id,
           expiresAt: new Date(now().getTime() + 15 * 60000).toISOString(),
-          primary: body.primary === true,
+          primary: false,
         });
         await store.securityAudit(profile.id, device.id, 'invite_device', target.name);
         return json({ code: token, expiresInMinutes: 15 });
@@ -570,18 +687,13 @@ export function createGateway(options: GatewayOptions) {
           'El acceso privado de superadministrador no se configura como equipo de caja.',
           'FORBIDDEN',
         );
-        if (body.primary === true) await store.setPrimary(target.id);
-        if (body.active !== undefined) {
-          target.active = body.active === true;
-          await store.saveDevice(target);
-        }
-        await store.securityAudit(
-          profile.id,
-          device.id,
-          'update_device',
-          `${target.name} · activo=${target.active}`,
-        );
-        return json({ ok: true });
+        const result = await updateAccess({
+          kind: 'device',
+          targetId: target.id,
+          active: body.active,
+          primary: body.primary,
+        });
+        return json({ ok: true, result });
       }
       if (route === 'offline-authorizer') {
         admin();
@@ -645,6 +757,24 @@ export function createGateway(options: GatewayOptions) {
             'FORBIDDEN',
           );
           try {
+            if (actor.role !== 'admin') {
+              assert(
+                staffCommands.has(command.type),
+                'Esta operación requiere un administrador.',
+                'FORBIDDEN',
+              );
+              if (command.type === 'request_shift')
+                assert(command.payload.offline !== true, 'La apertura requiere conexión.', 'ONLINE_REQUIRED');
+              assert(
+                command.type !== 'pay' ||
+                  command.payload.codes === undefined ||
+                  (Array.isArray(command.payload.codes) && command.payload.codes.length === 0),
+                'Los cupones los aplica un administrador.',
+                'FORBIDDEN',
+              );
+            }
+            if (['submit_blind_count', 'submit_blind_opening_audit'].includes(command.type))
+              assert(command.payload.offline !== true, 'El conteo requiere conexión.', 'ONLINE_REQUIRED');
             const existing = await store.receipt(id(command.id));
             if (existing) {
               assert(existing.actorId === profile.id, 'Identificador de operación ocupado.', 'CONFLICT');
@@ -674,35 +804,7 @@ export function createGateway(options: GatewayOptions) {
               assert(command.payload.offline !== true, 'El cupón no se puede canjear offline.');
               await rate(`coupon:${profile.id}`, 20, 60);
             }
-            let completed = false;
-            for (let attempt = 0; attempt < 5; attempt++) {
-              const loaded = await store.load();
-              const applied = applyCommand(loaded.state, command, context, now().toISOString());
-              // An offline close is final only once its preceding local events reached this transaction.
-              if (
-                command.payload.offline === true &&
-                command.type === 'count' &&
-                command.payload.kind === 'closing'
-              ) {
-                const shift = applied.state.shifts.find(
-                  (x) => x.closingCountId === applied.result.referenceId,
-                );
-                if (shift) shift.status = 'closed';
-              }
-              try {
-                const result = await store.commit(loaded.revision, command, applied.state, applied.result);
-                results.push(result);
-                completed = true;
-                break;
-              } catch (error) {
-                if (
-                  (error as { code?: string }).code !== '40001' &&
-                  !(error as Error).message.includes('REVISION_CONFLICT')
-                )
-                  throw error;
-              }
-            }
-            assert(completed, 'Hay otra operación en curso. Se reintentará sin duplicar.', 'CONFLICT');
+            results.push(await commitBusinessCommand(command, context));
             if (context.offlineAdminId)
               await store.security('permit_use', {
                 hash: await sha256(String(command.payload.offlinePermit)),
@@ -710,23 +812,25 @@ export function createGateway(options: GatewayOptions) {
               });
           } catch (error) {
             const e = error as Error & { code?: string };
-            const needsReview = [
-              'create_order',
-              'update_order',
-              'deliver',
-              'pay',
-              'count',
-              'taste',
-              'update_tasting',
-              'remove_tasting',
-              'authorize_shift',
-              'replace_order',
-              'refund_order',
-              'receive_shipment',
-              'expense',
-              'execute_transfer',
-              'confirm_transfer',
-            ].includes(command.type);
+            const needsReview =
+              (actor.role === 'admin' || e.code !== 'FORBIDDEN') &&
+              [
+                'create_order',
+                'update_order',
+                'deliver',
+                'pay',
+                'count',
+                'taste',
+                'update_tasting',
+                'remove_tasting',
+                'authorize_shift',
+                'replace_order',
+                'refund_order',
+                'receive_shipment',
+                'expense',
+                'execute_transfer',
+                'confirm_transfer',
+              ].includes(command.type);
             if (needsReview) await store.security('sync_conflict', { command, message: e.message });
             const rejectedRecovery =
               command.type === 'record_employee_recovery' &&
@@ -734,10 +838,15 @@ export function createGateway(options: GatewayOptions) {
             results.push({
               id: command.id,
               status: 'conflict',
-              message: e.message,
+              message:
+                error instanceof DomainError || actor.role === 'admin'
+                  ? e.message
+                  : 'El servidor no pudo validar este registro.',
               code: e.code ?? 'VALIDATION',
               ...(rejectedRecovery ||
-              (!needsReview && error instanceof DomainError && error.code === 'VALIDATION')
+              (!needsReview &&
+                error instanceof DomainError &&
+                ['FORBIDDEN', 'VALIDATION', 'ONLINE_REQUIRED'].includes(error.code))
                 ? { finalRejection: true }
                 : {}),
             });
@@ -838,7 +947,10 @@ export function createGateway(options: GatewayOptions) {
       const statuses: Record<string, number> = {
         UNAUTHORIZED: 401,
         FORBIDDEN: 403,
+        '42501': 403,
         DEVICE_REQUIRED: 403,
+        DEVICE_REVOKED: 403,
+        USER_REVOKED: 403,
         BRANCH_INACTIVE: 403,
         RATE_LIMIT: 429,
         CONFLICT: 409,
