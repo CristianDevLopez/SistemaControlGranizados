@@ -189,7 +189,7 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
         onSubmit={async (form) => {
           const confirmedCharge = employeeCharge === null ? suggestedCharge : parseMoney(employeeCharge);
           if (confirmedCharge === null) throw new Error('Escribe el monto confirmado o 0.');
-          await app.run('approve_closing', {
+          const result = await app.run('approve_closing', {
             shiftId: shift.id,
             ...form,
             preview,
@@ -199,7 +199,7 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
               Object.keys(preview.expectedPayments).map((key) => [key, form[key]]),
             ),
           });
-          app.toast('Cierre aprobado. El ajuste de vasos quedó registrado.');
+          if (!result.approvalPending) app.toast('Cierre aprobado.');
           onClose();
         }}
       >

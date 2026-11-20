@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { PgBackend } from './support/backend.ts';
 import { createGateway } from '../src/server/gateway.ts';
-import { applyCommand, closingPreview, countArticles, stockBalances } from '../src/domain/engine.ts';
+import { blindCountArticles, stockBalances } from '../src/domain/engine.ts';
 import { admin, cashier, cmd, ids, NOW, support } from './support/fixture.ts';
 import type { Actor, Command } from '../src/domain/types.ts';
 
@@ -55,134 +55,94 @@ async function submit(command: Command, actor: Actor = cashier) {
   return (await request('commands', { commands: [{ ...command, branchId }] }, actor)).body.results[0];
 }
 
-it('la comparación solo revela los esperados al cajero autorizado de ese turno, sin guardar un conteo', async () => {
-  expect((await request('closing-preview', { shiftId: ids.shift })).body.expectedCash).toBe(20000);
+it('limita la proyección de empleados y conserva los dos conteos ciegos para el administrador', async () => {
+  const denied = await request('closing-preview', { shiftId: ids.shift });
+  expect(denied.status).toBe(403);
+  expect(denied.body).not.toHaveProperty('expectedCash');
   expect((await request('closing-preview', { shiftId: ids.shift }, support)).status).toBe(403);
-  expect((await request('closing-preview', { shiftId: ids.shift }, admin)).status).toBe(403);
-  await request('users/update', { userId: cashier.id, permissions: { shifts: false } }, admin);
-  expect((await request('closing-preview', { shiftId: ids.shift })).status).toBe(403);
-  await request('users/update', { userId: cashier.id, permissions: { shifts: true } }, admin);
-  expect((await db.load()).state.counts).toHaveLength(0);
+  const before = (await db.load()).state;
+  const items = Object.fromEntries(
+    blindCountArticles(before).map(({ id }) => [id, stockBalances(before)[id] ?? 0]),
+  );
+  const payload = { kind: 'closing', shiftId: ids.shift, cash: 15000, items };
+  const first = cmd('submit_blind_count', { ...payload, attempt: 1 });
+  const firstResult = await submit(first);
+  expect(firstResult).toMatchObject({
+    code: 'COUNT_RECOUNT',
+    message: 'Algo no coincide. Vuelve a contar todo.',
+  });
+  expect(await submit(first)).toEqual(firstResult);
+  expect(JSON.stringify(firstResult)).not.toMatch(/expected|5000|20000|difference/i);
+  const snapshot = (await request('snapshot', {}, cashier)).body;
+  expect(snapshot.state.payments).toEqual([]);
+  expect(snapshot.state.counts).toEqual([]);
+  expect(snapshot.state.stock).toEqual([]);
+  expect(snapshot.state.settings[0]).not.toHaveProperty('liquidTolerance');
+  expect(snapshot.state.shifts[0]).not.toHaveProperty('base');
+  expect(snapshot.state.shifts[0].blindClosing).toEqual({ status: 'recount' });
+  const assistant = (await request('snapshot', {}, support)).body;
+  expect(assistant.state.shifts).toEqual([]);
+  expect(assistant.state.sharedShift).toEqual({ id: ids.shift, blocked: true });
+  expect((await submit(cmd('count', payload))).code).toBe('FORBIDDEN');
+  const second = await submit(cmd('submit_blind_count', { ...payload, attempt: 2 }));
+  expect(second).toMatchObject({ code: 'COUNT_REVIEW', message: 'Turno enviado a revisión' });
+  const employeeView = (await request('snapshot', {}, cashier)).body.state;
+  expect(employeeView.counts).toEqual([]);
+  expect(employeeView.shifts[0].blindClosing).toEqual({ status: 'review' });
+  const adminView = (await request('snapshot', {}, admin)).body.state;
+  expect(adminView.counts).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ cash: 15000, expectedCash: 20000, difference: -5000, blindAttempt: 1 }),
+      expect.objectContaining({ cash: 15000, expectedCash: 20000, difference: -5000, blindAttempt: 2 }),
+    ]),
+  );
+  expect((await submit(cmd('submit_blind_count', { ...payload, attempt: 2 }))).status).toBe('conflict');
+  expect((await db.load()).state.counts).toHaveLength(2);
+  const resolved = await submit(
+    cmd(
+      'review_shift',
+      {
+        shiftId: ids.shift,
+        action: 'resolve',
+        outcome: 'shortage',
+        notes: 'Se contó dos veces.',
+      },
+      admin,
+    ),
+    admin,
+  );
+  expect(resolved.status).toBe('accepted');
+  expect((await db.load()).state.counts).toEqual(adminView.counts);
+  expect((await request('snapshot', {}, cashier)).body.state.shifts[0].closingReview).toEqual({
+    status: 'approved',
+  });
 });
 
-it('persiste la revisión y el ajuste atómicamente, exige admin también en SQL y no duplica al reintentar', async () => {
-  let state = (await db.load()).state;
-  const cup = `cup:${state.sizes[0].id}`;
-  expect((await submit(cmd('open_package', { sizeId: state.sizes[0].id }))).status).toBe('accepted');
-  const preview = (await request('closing-preview', { shiftId: ids.shift })).body;
-  expect(preview.expectedItems[cup]).toBe(20);
-  const payload = {
-    kind: 'closing',
-    shiftId: ids.shift,
-    cash: 20000,
-    retained: 20000,
-    payments: preview.expectedPayments,
-    items: { ...preview.expectedItems, [cup]: 16 },
-    preview,
-  };
-  expect((await submit(cmd('count', payload))).status).toBe('accepted');
-  state = (await db.load()).state;
-  const original = structuredClone(state.counts[0]);
-  const approval = {
-    shiftId: ids.shift,
-    cash: 20000,
-    items: original.items,
-    payments: original.payments,
-    verified: true,
-    notes: 'Recontamos: faltan cuatro vasos de exhibición.',
-    employeeCharge: 10000,
-    preview: closingPreview(state, ids.shift, original),
-  };
-  expect((await submit(cmd('approve_closing', approval))).status).toBe('conflict');
-  const invalid = cmd(
-    'approve_closing',
-    { ...approval, preview: { ...approval.preview, expectedCash: 1 } },
-    admin,
-  );
-  expect((await submit(invalid, admin)).code).toBe('CLOSING_CHANGED');
-  const command = cmd('approve_closing', approval, admin, { branchId });
-  const candidate = applyCommand(state, command, admin, NOW);
-  const loaded = await db.forBranch(branchId).load();
-  const forged = { ...command, id: crypto.randomUUID(), actorId: cashier.id, deviceId: cashier.deviceId };
-  await expect(
-    db
-      .forBranch(branchId)
-      .commit(loaded.revision, forged, candidate.state, { ...candidate.result, id: forged.id }),
-  ).rejects.toThrow(/ADMIN_REQUIRED/);
-  expect((await submit(command, admin)).status).toBe('accepted');
-  expect((await submit(command, admin)).status).toBe('accepted');
-  state = (await db.load()).state;
-  expect(state.counts[0]).toEqual(original);
-  expect(state.counts).toHaveLength(2);
-  expect(stockBalances(state)[cup]).toBe(16);
-  expect(state.stock.filter((m) => m.reason === 'closing_adjustment')).toHaveLength(1);
-  expect(state.shifts[0].closingReview?.status).toBe('approved');
-  const deduction = {
-    shiftId: ids.shift,
-    amount: 4000,
-    paidOn: '2026-10-23',
-    confirmed: true,
-    expectedRecovered: 0,
-  };
-  const recover = cmd('record_employee_recovery', deduction, admin, { branchId });
-  const proposed = applyCommand(state, recover, admin, NOW);
-  const latest = await db.forBranch(branchId).load();
-  const forbidden = { ...recover, id: crypto.randomUUID(), actorId: cashier.id, deviceId: cashier.deviceId };
-  await expect(
-    db.forBranch(branchId).commit(latest.revision, forbidden, proposed.state, {
-      ...proposed.result,
-      id: forbidden.id,
-    }),
-  ).rejects.toThrow(/ADMIN_REQUIRED/);
-  expect((await submit(cmd('record_employee_recovery', deduction))).status).toBe('conflict');
-  expect((await submit(recover, admin)).status).toBe('accepted');
-  expect((await submit(recover, admin)).status).toBe('accepted');
-  expect((await submit(cmd('record_employee_recovery', deduction, admin), admin)).code).toBe(
-    'RECOVERY_CHANGED',
-  );
-  expect(
-    (
-      await submit(
-        cmd('record_employee_recovery', { ...deduction, expectedRecovered: 4000, amount: 7000 }, admin),
-        admin,
-      )
-    ).status,
-  ).toBe('conflict');
-  const recovered = (await db.load()).state;
-  expect(recovered.shifts[0].closingReview?.recoveries).toEqual([
-    expect.objectContaining({ by: admin.id, amount: 4000, paidOn: '2026-10-23' }),
+it('archiva avisos previos al arqueo de referencia sin eliminarlos de PostgreSQL', async () => {
+  const auditId = crypto.randomUUID();
+  const cutoff = '2026-11-18T18:00:00.000Z';
+  const noticeId = crypto.randomUUID();
+  await db.db.query('insert into public.counts(id,branch_id,data) values($1,$2,$3)', [
+    auditId,
+    branchId,
+    { id: auditId, at: cutoff, by: admin.id, kind: 'audit', notes: '', items: {} },
   ]);
-  expect(recovered.payments).toEqual(state.payments);
-  const cashierView = await gateway(
-    new Request('http://localhost/dexter/snapshot', {
-      headers: {
-        authorization: `Bearer ${cashier.id}`,
-        'x-device-id': cashier.deviceId,
-        'x-device-token': 'test-device-token',
-        'x-branch-id': branchId,
-      },
-    }),
-  );
-  expect((await cashierView.json()).state.shifts[0].closingReview).toEqual({ status: 'approved' });
-  expect((await submit(cmd('request_shift', { base: 0 }, admin, { shiftId: undefined }), admin)).status).toBe(
+  await db.db.query('insert into public.notifications(id,branch_id,data) values($1,$2,$3)', [
+    noticeId,
+    branchId,
+    {
+      id: noticeId,
+      at: '2026-11-19T19:00:00.000Z',
+      channel: 'mermas',
+      text: 'Aviso reciente',
+      status: 'pending',
+      attempts: 0,
+    },
+  ]);
+  expect((await submit(cmd('archive_rehearsal', { countId: auditId }, admin), admin)).status).toBe(
     'accepted',
   );
-  state = (await db.load()).state;
-  const next = state.shifts.find((s) => s.status === 'open')!;
-  const opening = cmd(
-    'count',
-    {
-      kind: 'opening',
-      shiftId: next.id,
-      cash: 20000,
-      items: Object.fromEntries(
-        countArticles(state, 'opening').map((a) => [a.id, Math.max(0, stockBalances(state)[a.id] ?? 0)]),
-      ),
-    },
-    admin,
-    { shiftId: next.id },
-  );
-  expect((await submit(opening, admin)).status).toBe('accepted');
-  const count = (await db.load()).state.counts.find((c) => c.shiftId === next.id)!;
-  expect(count.differences?.[cup]).toBe(0);
+  const store = db.forBranch(branchId);
+  expect((await store.load()).state.notifications).toHaveLength(2);
+  expect(await store.security('notifications_claim')).toEqual([expect.objectContaining({ id: noticeId })]);
 });

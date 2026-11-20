@@ -9,7 +9,9 @@ export function liquidReconciliation(state: State) {
       opened = bags.reduce((n, b) => n + b.ounces, 0),
       served = -state.stock
         .filter(
-          (m) => m.article === `liquid:${flavor.id}` && ['delivery', 'recipe_correction'].includes(m.reason),
+          (m) =>
+            m.article === `liquid:${flavor.id}` &&
+            ['delivery', 'recipe_correction', 'replacement_delivery', 'void_return'].includes(m.reason),
         )
         .reduce((n, m) => n + m.quantity, 0),
       tastings = state.orders.flatMap((o) => o.tastings).filter((t) => t.flavorId === flavor.id).length,
@@ -75,7 +77,7 @@ export function liquidFortnight(state: State, day: string, now = new Date()) {
         bagsOpened: entered.length,
         opened: entered.reduce((total, bag) => total + bag.ounces, 0),
         initial: sum('initial'),
-        served: 0 - sum('delivery', 'recipe_correction'),
+        served: 0 - sum('delivery', 'recipe_correction', 'replacement_delivery', 'void_return'),
         tastings: 0 - sum('tasting', 'tasting_correction'),
         waste: 0 - sum('approved_damage'),
       };

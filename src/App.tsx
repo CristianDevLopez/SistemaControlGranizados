@@ -19,6 +19,7 @@ import {
   ArrowUpRight,
   Download,
   Building2,
+  LayoutDashboard,
 } from 'lucide-react';
 import { useApp } from './lib/store.tsx';
 import { logout, supabase } from './lib/api.ts';
@@ -33,8 +34,14 @@ import { Purchasing } from './ui/Purchasing.tsx';
 import { Promotions } from './ui/Promotions.tsx';
 import { Settings } from './ui/Settings.tsx';
 import { Control } from './ui/Control.tsx';
+import { Dashboard } from './ui/Dashboard.tsx';
+import { TurnReview } from './ui/TurnReview.tsx';
+import { ChangeLog } from './ui/ChangeLog.tsx';
+import { Today } from './ui/Today.tsx';
+import { Money } from './ui/Money.tsx';
 import { Platform } from './ui/Platform.tsx';
 import { branchStatusLabels } from './domain/platform.ts';
+import { rehearsalShift } from './domain/closing-archive.ts';
 import { Badge, Modal, date } from './ui/components.tsx';
 import { downloadFile } from './lib/export.ts';
 import type { OutboxEntry } from './lib/db.ts';
@@ -45,9 +52,14 @@ const pages = [
   { id: 'orders', label: 'Pedidos', icon: ClipboardList },
   { id: 'inventory', label: 'Inventario', icon: Package },
   { id: 'cash', label: 'Turno y caja', icon: Wallet },
-  { id: 'purchases', label: 'Compras y gastos', icon: Truck },
-  { id: 'promotions', label: 'Promociones', icon: Ticket, admin: true, group: 'ADMINISTRACIÓN' },
+  { id: 'purchases', label: 'Compras y gastos', icon: Truck, admin: true },
+  { id: 'today', label: 'Hoy', icon: LayoutDashboard, admin: true, group: 'ADMINISTRACIÓN' },
+  { id: 'money', label: 'Dinero', icon: Wallet, admin: true },
+  { id: 'dashboard', label: 'Ventas', icon: LayoutDashboard, admin: true },
+  { id: 'promotions', label: 'Promociones', icon: Ticket, admin: true },
   { id: 'control', label: 'Control y aprobaciones', icon: ShieldCheck, admin: true },
+  { id: 'review', label: 'Revisar turnos', icon: ClipboardList, admin: true },
+  { id: 'changes', label: 'Registro de cambios', icon: ShieldCheck, admin: true },
   { id: 'settings', label: 'Configuración', icon: SettingsIcon, admin: true },
   { id: 'locals', label: 'Locales y mensualidades', icon: Building2, admin: true },
 ];
@@ -96,16 +108,24 @@ export function App() {
     );
   if (!app.data) return <Login onRecover={() => setRecovery('request')} />;
   const { state, actor } = app.data,
-    nav = pages.filter(
-      (p) =>
-        (!p.admin || actor.role === 'admin') &&
-        (p.id !== 'locals' || app.data?.branch?.isOwner || (app.sessionActor?.superAdmin && !app.viewRole)),
-    ),
+    nav = pages
+      .filter(
+        (p) =>
+          (!p.admin || actor.role === 'admin') &&
+          (p.id !== 'locals' || app.data?.branch?.isOwner || (app.sessionActor?.superAdmin && !app.viewRole)),
+      )
+      .map((item) => (item.id === 'cash' && actor.role !== 'admin' ? { ...item, label: 'Turno' } : item)),
     active = nav.find((p) => p.id === page) ?? pages[0],
     pending = app.pending.filter((p) => p.status === 'pending').length + app.photosPending,
     conflicts = app.pending.filter((p) => p.status === 'conflict').length,
     firstConflict = app.pending.find((p) => p.status === 'conflict');
   const canUpdate = app.online && !app.syncing && !updating;
+  const openingAlert =
+    actor.role === 'admin' &&
+    state.shifts.some(
+      (shift) =>
+        shift.blindOpening?.status === 'review' && !shift.closingArchive && !rehearsalShift(state, shift),
+    );
   const sessionActor = app.sessionActor ?? actor;
   const changeView = (role: Role | null) => {
     if (app.changeView(role)) {
@@ -340,11 +360,13 @@ export function App() {
               <p>
                 {active.id === 'pos'
                   ? 'Todo lo que necesitas, a un toque de distancia.'
-                  : active.id === 'cash'
-                    ? 'Un turno claro. Cada peso con su destino.'
-                    : active.id === 'inventory'
-                      ? 'De la primera bolsa al último vaso.'
-                      : 'La información del negocio, siempre a la mano.'}
+                  : active.id === 'dashboard'
+                    ? 'Ventas, tendencias y resultados para decidir con claridad.'
+                    : active.id === 'cash'
+                      ? 'Un turno claro. Cada peso con su destino.'
+                      : active.id === 'inventory'
+                        ? 'De la primera bolsa al último vaso.'
+                        : 'La información del negocio, siempre a la mano.'}
               </p>
             </div>
             {active.id === 'pos' && (
@@ -358,6 +380,14 @@ export function App() {
           {app.error && (
             <div className="notice warning" role="status">
               {app.error}
+            </div>
+          )}
+          {openingAlert && active.id !== 'review' && (
+            <div className="notice warning" role="status">
+              <span>Una apertura sigue en revisión. Las ventas de ese turno están en pausa.</span>
+              <button className="button small secondary" onClick={() => navigate('review')}>
+                Revisar apertura
+              </button>
             </div>
           )}
           {!app.online && actor.role === 'apoyo' && (
@@ -411,10 +441,20 @@ export function App() {
               <Cash />
             ) : active.id === 'purchases' ? (
               <Purchasing />
+            ) : active.id === 'dashboard' ? (
+              <Dashboard />
+            ) : active.id === 'today' ? (
+              <Today />
+            ) : active.id === 'money' ? (
+              <Money />
             ) : active.id === 'promotions' ? (
               <Promotions />
             ) : active.id === 'control' ? (
               <Control />
+            ) : active.id === 'review' ? (
+              <TurnReview />
+            ) : active.id === 'changes' ? (
+              <ChangeLog />
             ) : active.id === 'locals' ? (
               <Platform />
             ) : (

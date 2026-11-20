@@ -4,6 +4,7 @@ import { useApp } from '../lib/store.tsx';
 import { api } from '../lib/api.ts';
 import { exportZip, downloadFile } from '../lib/export.ts';
 import { articles, countHasDifferences, stockBalances } from '../domain/engine.ts';
+import { inRehearsalPeriod, rehearsalRequest, visibleCounts } from '../domain/closing-archive.ts';
 import { Badge, Empty, Panel, Stat, date, money, stateNames, Modal, FieldsForm } from './components.tsx';
 import { EvidenceButton } from './Purchasing.tsx';
 export function Control() {
@@ -13,7 +14,14 @@ export function Control() {
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [reconcile, setReconcile] = useState<{ requestId: string; approve: boolean } | null>(null);
-  const pending = state.requests.filter((r) => r.status === 'pending'),
+  const requests = state.requests.filter(
+    (request) =>
+      !['change', 'payment_change', 'shift_explanation'].includes(request.type) &&
+      !rehearsalRequest(state, request),
+  );
+  const notifications = state.notifications.filter((item) => !inRehearsalPeriod(state, item.at));
+  const pending = requests.filter((r) => r.status === 'pending'),
+    counts = visibleCounts(state),
     stock = stockBalances(state),
     negative = Object.entries(stock).filter(([, v]) => v < 0);
   const labels: Record<string, string> = {
@@ -25,13 +33,20 @@ export function Control() {
     sync: 'Conflicto de sincronización',
   };
   const resolve = async (requestId: string, approve: boolean) => {
-    if (state.requests.find((r) => r.id === requestId)?.type === 'sync') {
+    const request = state.requests.find((item) => item.id === requestId);
+    if (request?.type === 'sync') {
       setReconcile({ requestId, approve });
       return;
     }
     try {
-      await app.run('resolve_request', { requestId, approve });
-      app.toast(approve ? 'Solicitud aprobada.' : 'Solicitud rechazada.');
+      const result = await app.run('resolve_request', { requestId, approve });
+      app.toast(
+        approve
+          ? request?.type === 'void'
+            ? result.message
+            : 'Solicitud aprobada.'
+          : 'Solicitud rechazada.',
+      );
     } catch (e) {
       setError((e as Error).message);
     }
@@ -90,9 +105,9 @@ export function Control() {
           </select>
         }
       >
-        {state.requests.filter((x) => filter === 'all' || x.status === 'pending').length ? (
+        {requests.filter((x) => filter === 'all' || x.status === 'pending').length ? (
           <div className="requests-list">
-            {[...state.requests]
+            {[...requests]
               .reverse()
               .filter((x) => filter === 'all' || x.status === 'pending')
               .map((r) => {
@@ -162,7 +177,7 @@ export function Control() {
         )}
       </Panel>
       <Panel title="Diferencias para revisar">
-        {negative.length || state.counts.some(countHasDifferences) ? (
+        {negative.length || counts.some(countHasDifferences) ? (
           <div className="anomaly-grid">
             {negative.map(([article, amount]) => (
               <div className="anomaly" key={article}>
@@ -177,7 +192,7 @@ export function Control() {
                 </div>
               </div>
             ))}
-            {state.counts.filter(countHasDifferences).map((c) => (
+            {counts.filter(countHasDifferences).map((c) => (
               <div className="anomaly" key={c.id}>
                 <AlertTriangle size={18} />
                 <div>
@@ -229,7 +244,7 @@ export function Control() {
           </button>
         }
       >
-        {state.notifications.length ? (
+        {notifications.length ? (
           <div className="table-wrap">
             <table>
               <thead>
@@ -240,7 +255,7 @@ export function Control() {
                 </tr>
               </thead>
               <tbody>
-                {[...state.notifications]
+                {[...notifications]
                   .reverse()
                   .slice(0, 100)
                   .map((n) => (

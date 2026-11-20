@@ -1,5 +1,6 @@
 import { DomainError, type Coupon, type OrderLine, type Promotion, type State } from './types.ts';
 import { hasAlcohol, lineFlavorIds } from './flavors.ts';
+import { additionsTotal, type CandyAddition } from './additions.ts';
 
 interface Unit {
   line: OrderLine;
@@ -77,6 +78,7 @@ export function quoteOrder(
   at: string,
   online: boolean,
   codes: string[] = [],
+  additions?: CandyAddition[],
 ): Quote {
   const normalized = [...new Set(codes.map((x) => x.trim().toUpperCase()).filter(Boolean))];
   if (normalized.length > 10) throw new DomainError('Máximo diez cupones por pedido.');
@@ -113,7 +115,7 @@ export function quoteOrder(
         : [];
     }),
   );
-  return best;
+  return { ...best, total: best.total + additionsTotal(additions) };
 }
 
 function calculateQuote(

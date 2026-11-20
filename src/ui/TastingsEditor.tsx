@@ -40,9 +40,7 @@ export function TastingsEditor({
         expectedVersion: order.version,
       });
       app.toast(
-        flavorId
-          ? 'Sabor de la degustación corregido.'
-          : 'Degustación eliminada. Se restituyeron una copita y 1 oz.',
+        flavorId ? 'Sabor de la degustación corregido.' : 'Degustación eliminada. Se restituyó 1 oz.',
       );
       if (!flavorId && order.status === 'open' && !order.lines.length && order.tastings.length === 1)
         onEmpty?.();
@@ -83,7 +81,7 @@ export function TastingsEditor({
             ) : (
               <span>{state.flavors.find((flavor) => flavor.id === tasting.flavorId)?.name}</span>
             )}
-            <small>1 oz · 1 copita{showDates ? ` · ${date(tasting.at)}` : ''}</small>
+            <small>1 oz{showDates ? ` · ${date(tasting.at)}` : ''}</small>
           </div>
           {editable && (
             <button

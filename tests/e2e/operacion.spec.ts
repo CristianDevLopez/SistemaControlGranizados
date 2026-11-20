@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { decodeGeneratedQr } from '../support/qr.ts';
-import { admin, cashier, support, cmd, ids } from '../support/fixture.ts';
+import { admin, cashier, other, support, cmd, ids } from '../support/fixture.ts';
 import type { CommandType } from '../../src/domain/types.ts';
 import type { OutboxEntry } from '../../src/lib/db.ts';
 
@@ -12,16 +12,21 @@ const headers = {
 async function snapshot(request: APIRequestContext) {
   return (await request.get('http://127.0.0.1:5180/dexter/snapshot', { headers })).json();
 }
-async function execute(request: APIRequestContext, type: CommandType, payload: Record<string, unknown>) {
+async function execute(
+  request: APIRequestContext,
+  type: CommandType,
+  payload: Record<string, unknown>,
+  actor = admin,
+) {
   const s = await snapshot(request);
-  const command = cmd(type, payload, admin, {
+  const command = cmd(type, payload, actor, {
     at: new Date().toISOString(),
     branchId: s.branch.id,
     shiftId: s.state.shifts.find((shift: any) => shift.status === 'open')?.id,
     configVersion: s.state.settings[0].version,
   });
   const response = await request.post('http://127.0.0.1:5180/dexter/commands', {
-    headers,
+    headers: { ...headers, authorization: `Bearer ${actor.id}`, 'x-device-id': actor.deviceId },
     data: { commands: [command] },
   });
   const body = await response.json();
@@ -228,17 +233,22 @@ test('un conflicto de cobro conserva la cola hasta que un administrador lo conci
   expect(after.audit.filter((a: { eventId: string }) => a.eventId === next.id)).toHaveLength(1);
 });
 
-test('al agotar veinte vasos recuerda registrar otro paquete desde Mostrador', async ({ page, request }) => {
+test('el empleado registra paquetes desde Inventario sin recibir avisos de saldo', async ({
+  page,
+  request,
+}) => {
   await login(page, 'caja@test.invalid');
-  await nav(page, 'Mostrador');
-  await page.getByRole('button', { name: 'Registrar apertura de paquete', exact: true }).click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog.getByLabel('Unidades del paquete', { exact: false })).toHaveValue('20');
-  await dialog.getByRole('button', { name: 'Registrar apertura', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Registrar apertura de paquete', exact: true })).toHaveCount(
-    0,
-  );
+  const openPackage = async () => {
+    await nav(page, 'Inventario');
+    await page.getByRole('button', { name: 'Abrir paquete de vasos', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByLabel('Unidades del paquete', { exact: false })).toHaveValue('20');
+    await dialog.getByRole('combobox').selectOption({ label: '12 oz' });
+    await dialog.getByRole('checkbox').check();
+    await dialog.getByRole('button', { name: 'Registrar', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+  };
+  await openPackage();
   const s = await snapshot(request);
   const created = await execute(request, 'create_order', {
     lines: [{ sizeId: s.state.sizes[0].id, flavorId: ids.flavor, quantity: 20 }],
@@ -256,13 +266,10 @@ test('al agotar veinte vasos recuerda registrar otro paquete desde Mostrador', a
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
   await nav(page, 'Mostrador');
-  await page.getByRole('button', { name: 'Registrar apertura de paquete', exact: true }).click();
-  await dialog.getByLabel('Confirmo que el paquete anterior está vacío', { exact: false }).check();
-  await dialog.getByRole('button', { name: 'Registrar apertura', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Registrar apertura de paquete', exact: true })).toHaveCount(
     0,
   );
+  await openPackage();
   await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('Sincronizado');
   const final = (await snapshot(request)).state;
   expect(final.packages).toHaveLength(2);
@@ -306,11 +313,12 @@ test('el apoyo envía un pedido, caja identifica al vendedor y lo edita y cobra'
   }
 });
 
-test('admin edita permisos e imagen; el cierre presenta cuentas y conserva diferencias', async ({
+test('admin aprueba permisos y revisa diferencias ciegas y transferencias', async ({
   page,
   request,
   browser,
 }, testInfo) => {
+  test.setTimeout(75_000);
   await login(page, 'admin@test.invalid');
   await nav(page, 'Configuración');
   await page.getByRole('button', { name: 'Equipo y accesos', exact: true }).click();
@@ -318,11 +326,17 @@ test('admin edita permisos e imagen; el cierre presenta cuentas y conserva difer
   await page
     .getByRole('row')
     .filter({ hasText: support.name })
-    .getByRole('button', { name: 'Editar permisos', exact: true })
+    .getByRole('button', { name: 'Proponer permisos', exact: true })
     .click();
   await page.getByRole('dialog').getByLabel('Crear y editar pedidos', { exact: true }).uncheck();
-  await page.getByRole('dialog').getByRole('button', { name: 'Guardar', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Enviar propuesta', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  const waiting = await snapshot(request);
+  expect(waiting.profiles.find((p: any) => p.id === support.id).permissions.orders).toBeUndefined();
+  const permission = waiting.state.requests.find(
+    (r: any) => r.type === 'change' && r.change.access === 'user',
+  );
+  await execute(request, 'resolve_change', { requestId: permission.id, approve: true }, other);
   expect((await snapshot(request)).profiles.find((p: any) => p.id === support.id).permissions.orders).toBe(
     false,
   );
@@ -365,102 +379,63 @@ test('admin edita permisos e imagen; el cierre presenta cuentas y conserva difer
   try {
     const cash = await context.newPage();
     await login(cash, 'caja@test.invalid');
-    await nav(cash, 'Mostrador');
-    await cash.getByRole('button', { name: 'Registrar apertura de paquete', exact: true }).click();
-    await expect(cash.getByRole('dialog').getByLabel('Unidades del paquete', { exact: false })).toHaveValue(
-      '20',
+    await nav(cash, 'Inventario');
+    await cash.getByRole('button', { name: 'Abrir paquete de vasos', exact: true }).click();
+    const inventory = cash.getByRole('dialog');
+    await inventory.getByRole('combobox').selectOption({ label: '16 oz' });
+    await inventory.getByRole('checkbox').check();
+    await inventory.getByRole('button', { name: 'Registrar', exact: true }).click();
+    await expect(inventory).toHaveCount(0);
+    await nav(cash, 'Turno');
+    await cash.getByRole('button', { name: 'Cerrar turno', exact: true }).click();
+    for (const attempt of [1, 2]) {
+      if (attempt === 2) await cash.getByRole('button', { name: 'Volver a contar el cierre' }).click();
+      const dialog = cash.getByRole('dialog');
+      await dialog.getByLabel('Efectivo contado *', { exact: true }).fill('37.000');
+      for (const input of await dialog.getByRole('spinbutton').all()) await input.fill('0');
+      await dialog.getByRole('spinbutton', { name: 'Vasos · 16 oz', exact: true }).fill('19');
+      await expect(dialog).not.toContainText(/Esperado|Transferencias verificadas/);
+      await dialog.getByRole('button', { name: 'Enviar conteo', exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+    }
+    await expect(cash.getByRole('table')).toContainText('En revisión');
+    await expect(cash.getByRole('navigation').getByRole('button', { name: 'Compras y gastos' })).toHaveCount(
+      0,
     );
-    await cash.getByRole('dialog').getByRole('button', { name: 'Registrar apertura', exact: true }).click();
-    await expect(cash.getByRole('dialog')).toHaveCount(0);
-    await nav(cash, 'Turno y caja');
-    await cash.getByRole('button', { name: 'Cerrar y contar caja', exact: true }).click();
-    const dialog = cash.getByRole('dialog');
-    await dialog.getByLabel('Efectivo contado *', { exact: true }).fill('20.000');
-    await dialog
-      .getByLabel('Transferencias verificadas · Cuenta de prueba *', { exact: true })
-      .fill('13.000');
-    await dialog.getByLabel('Efectivo reservado para la siguiente apertura', { exact: false }).fill('20.000');
-    for (const input of await dialog.locator('.count-list input').all()) await input.fill('0');
-    await dialog.getByRole('spinbutton', { name: 'Vasos · 12 oz', exact: true }).fill('16');
-    for (const input of await dialog.locator('input[type="checkbox"][required]').all()) await input.check();
-    await dialog.getByRole('button', { name: 'Revisar cuadre', exact: true }).click();
-    await expect(dialog.locator('.closing-comparison')).toContainText('Faltan 4 vasos');
-    await expect(dialog.locator('.closing-comparison')).toContainText('1.000');
-    // Cambiar un dato invalida la comparación y exige revisarla de nuevo.
-    await dialog.getByRole('spinbutton', { name: 'Vasos · 12 oz', exact: true }).fill('15');
-    await expect(dialog.locator('.closing-comparison')).toHaveCount(0);
-    await dialog.getByRole('spinbutton', { name: 'Vasos · 12 oz', exact: true }).fill('16');
-    await dialog.getByRole('button', { name: 'Revisar cuadre', exact: true }).click();
-    await dialog
-      .getByLabel('Revisé el conteo y deseo enviarlo provisionalmente al administrador', { exact: true })
-      .check();
-    await cash.screenshot({ path: testInfo.outputPath('revision-previa.png'), fullPage: true });
-    await dialog.getByRole('button', { name: 'Enviar provisional a revisión', exact: true }).click();
-    await expect(dialog).toHaveCount(0);
-    await nav(cash, 'Compras y gastos');
-    await expect(cash.getByRole('button', { name: 'Registrar gasto', exact: true })).toHaveCount(0);
   } finally {
     await context.close();
   }
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
-  await nav(page, 'Turno y caja');
-  await expect(page.getByRole('row').filter({ hasText: 'Cuenta de prueba:' })).toContainText(/-\$\s*1\.000/);
-  await page.screenshot({ path: testInfo.outputPath('cuadre.png'), fullPage: true });
-  await page.getByRole('button', { name: 'Revisar y aprobar cierre', exact: true }).click();
+  await nav(page, 'Revisar turnos');
+  await page.getByRole('button', { name: 'Ver turno', exact: true }).click();
   const review = page.getByRole('dialog');
-  await expect(review.locator('.closing-comparison')).toContainText('Faltan 4 vasos');
-  const charge = review.getByLabel('Valor del faltante a reportar al empleado', { exact: false });
-  await expect(charge).toHaveValue('56.000');
-  await review.getByRole('spinbutton', { name: 'Vasos · 12 oz', exact: false }).fill('17');
-  await expect(charge).toHaveValue('42.000');
-  await review.getByRole('spinbutton', { name: 'Vasos · 12 oz', exact: false }).fill('16');
-  await charge.fill('10.000');
-  await review.getByLabel('Reconfirmado · Cuenta de prueba', { exact: false }).fill('14.000');
-  await review
-    .getByLabel('Resultado de la revisión y motivo de las correcciones', { exact: false })
-    .fill('Comprobantes verificados: total 14.000; cuatro vasos usados en exhibición.');
-  await review
-    .getByLabel('Verifiqué el efectivo entregado o reservado y los comprobantes de cada cuenta', {
-      exact: false,
-    })
-    .check();
-  await expect(
-    review.locator('.closing-comparison').getByRole('row').filter({ hasText: 'Cuenta de prueba' }),
-  ).toContainText('Coincide');
-  await page.screenshot({ path: testInfo.outputPath('aprobacion-cierre.png'), fullPage: true });
-  await review.getByRole('button', { name: 'Aprobar cierre y ajustar inventario', exact: true }).click();
-  await expect(review).toHaveCount(0);
+  await expect(review.getByText('Posible venta sin registrar · 16 oz.', { exact: true })).toBeVisible();
+  await expect(review.locator('summary').filter({ hasText: 'Cierre' })).toHaveCount(2);
+  await expect(review).toContainText('Cuenta de prueba');
+  await review.getByRole('button', { name: 'Marcar verificada', exact: true }).click();
+  await expect(review).toContainText('Verificada por');
+  await page.screenshot({ path: testInfo.outputPath('revision-cierre.png'), fullPage: true });
+  await review.getByRole('button', { name: 'Cerrar diferencia', exact: true }).click();
+  const resolution = page.getByRole('dialog', { name: 'Cerrar diferencia', exact: true });
+  await resolution.getByRole('combobox').selectOption('surplus');
+  await resolution.getByRole('textbox').fill('Revisamos los dos conteos y los comprobantes.');
+  await resolution.getByRole('button', { name: 'Guardar', exact: true }).click();
+  await expect(resolution).toHaveCount(0);
   const final = (await snapshot(request)).state;
-  expect(final.shifts[0].closingReview.status).toBe('approved');
-  expect(final.shifts[0].closingReview.employeeCharge).toBe(10000);
-  expect(final.counts[0].payments[`transfer:${ids.location}`]).toBe(13000);
-  expect(final.counts[1].payments[`transfer:${ids.location}`]).toBe(14000);
-  expect(
-    final.stock
-      .filter((m: any) => m.article === `cup:${s.state.sizes[0].id}`)
-      .reduce((n: number, m: any) => n + m.quantity, 0),
-  ).toBe(16);
-  await page.getByRole('button', { name: 'Registrar descuento', exact: true }).click();
-  const deduction = page.getByRole('dialog', { name: 'Confirmar descuento de quincena' });
-  await deduction.getByLabel('Valor descontado', { exact: false }).fill('4.000');
-  await deduction.getByLabel('Confirmo que apliqué este descuento', { exact: false }).check();
-  await deduction.getByRole('button', { name: 'Registrar descuento aplicado', exact: true }).click();
-  await expect(deduction).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: /Ventas por mermas de empleado/ })).toContainText('4.000');
-  await expect(page.getByRole('heading', { name: /Saldo pendiente actual/ })).toContainText('6.000');
-  const afterRecovery = (await snapshot(request)).state;
-  expect(afterRecovery.shifts[0].closingReview.recoveries[0].amount).toBe(4000);
-  expect(afterRecovery.payments).toEqual(final.payments);
+  expect(final.shifts[0].operationsReview.resolution.outcome).toBe('surplus');
+  expect(final.counts).toHaveLength(2);
+  expect(final.counts[1].difference).toBe(17000);
 });
 
 test('comparte un QR legible y canjea dos de tres cortesías sin consumir la sobrante', async ({
   page,
   request,
-  browser,
 }) => {
+  await request.post('http://127.0.0.1:5180/reset', { data: { emptyCash: true } });
+  await execute(request, 'request_shift', { base: 0 });
   const s = await snapshot(request);
-  const promotion = await execute(request, 'save_promotion', {
+  const proposed = await execute(request, 'save_promotion', {
     name: 'Granizado de cortesía',
     effect: 'free',
     delivery: 'coupon',
@@ -470,6 +445,12 @@ test('comparte un QR legible y canjea dos de tres cortesías sin consumir la sob
     startsAt: '2026-01-01T00:00:00Z',
     endsAt: '2027-12-01T00:00:00Z',
   });
+  const promotion = await execute(
+    request,
+    'resolve_change',
+    { requestId: proposed.referenceId, approve: true },
+    other,
+  );
   for (let i = 0; i < 3; i++)
     await execute(request, 'issue_coupon', {
       promotionId: promotion.referenceId,
@@ -504,36 +485,29 @@ test('comparte un QR legible y canjea dos de tres cortesías sin consumir la sob
   expect(decodeGeneratedQr(Uint8ClampedArray.from(pixels.values), pixels.width, pixels.height)).toBe(
     coupons[0].code,
   );
-  const context = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
-  try {
-    const cash = await context.newPage();
-    await login(cash, 'caja@test.invalid');
-    await nav(cash, 'Mostrador');
-    await cash.locator('.flavor-card').filter({ hasText: 'Sabor de prueba con licor' }).click();
-    await cash.getByRole('button', { name: 'Aumentar cantidad', exact: true }).click();
-    await cash
-      .getByRole('button', { name: 'Cupón, cortesía, vuelto o entregar después', exact: true })
-      .click();
-    for (const coupon of coupons) {
-      await cash.getByPlaceholder('Escribir código', { exact: true }).fill(coupon.code);
-      await cash.getByRole('button', { name: 'Validar', exact: true }).click();
-      await expect(cash.getByPlaceholder('Escribir código', { exact: true })).toHaveValue('');
-    }
-    await expect(cash.getByRole('dialog')).toContainText('Sin canjear:');
-    await expect(cash.locator('.checkout-amount')).toContainText(/\$\s*0/);
-    await expect(cash.getByLabel('Efectivo recibido', { exact: false })).toHaveCount(0);
-    await cash.getByRole('button', { name: 'Registrar cortesía y entregar', exact: true }).click();
-    await expect(cash.getByRole('dialog')).toHaveCount(0);
-    const final = (await snapshot(request)).state;
-    expect(final.coupons.filter((c: any) => c.status === 'redeemed')).toHaveLength(2);
-    expect(final.coupons.filter((c: any) => c.status === 'issued')).toHaveLength(1);
-    expect(final.payments).toHaveLength(0);
-    await nav(cash, 'Pedidos');
-    await cash.getByRole('button', { name: 'Cobrados', exact: true }).click();
-    await cash.locator('table .text-button.strong').first().click();
-    for (const coupon of final.coupons.filter((c: any) => c.status === 'redeemed'))
-      await expect(cash.getByRole('dialog')).toContainText(coupon.code);
-  } finally {
-    await context.close();
+  await page.getByRole('dialog').getByRole('button', { name: 'Cerrar', exact: true }).click();
+  const cash = page;
+  await nav(cash, 'Mostrador');
+  await cash.locator('.flavor-card').filter({ hasText: 'Sabor de prueba con licor' }).click();
+  await cash.getByRole('button', { name: 'Aumentar cantidad', exact: true }).click();
+  await cash.getByRole('button', { name: 'Cupón, cortesía, vuelto o entregar después', exact: true }).click();
+  for (const coupon of coupons) {
+    await cash.getByPlaceholder('Escribir código', { exact: true }).fill(coupon.code);
+    await cash.getByRole('button', { name: 'Validar', exact: true }).click();
+    await expect(cash.getByPlaceholder('Escribir código', { exact: true })).toHaveValue('');
   }
+  await expect(cash.getByRole('dialog')).toContainText('Sin canjear:');
+  await expect(cash.locator('.checkout-amount')).toContainText(/\$\s*0/);
+  await expect(cash.getByLabel('Efectivo recibido', { exact: false })).toHaveCount(0);
+  await cash.getByRole('button', { name: 'Registrar cortesía y entregar', exact: true }).click();
+  await expect(cash.getByRole('dialog')).toHaveCount(0);
+  const final = (await snapshot(request)).state;
+  expect(final.coupons.filter((c: any) => c.status === 'redeemed')).toHaveLength(2);
+  expect(final.coupons.filter((c: any) => c.status === 'issued')).toHaveLength(1);
+  expect(final.payments).toHaveLength(0);
+  await nav(cash, 'Pedidos');
+  await cash.getByRole('button', { name: 'Cobrados', exact: true }).click();
+  await cash.locator('table .text-button.strong').first().click();
+  for (const coupon of final.coupons.filter((c: any) => c.status === 'redeemed'))
+    await expect(cash.getByRole('dialog')).toContainText(coupon.code);
 });

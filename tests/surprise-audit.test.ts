@@ -1,11 +1,5 @@
 import { expect, it } from 'vitest';
-import {
-  countArticles,
-  countInventoryAdjustment,
-  countPaymentMethods,
-  redactState,
-  stockBalances,
-} from '../src/domain/engine.ts';
+import { countArticles, countInventoryAdjustment, redactState, stockBalances } from '../src/domain/engine.ts';
 import { fixture, ids, run, admin, cashier, support, other, order, NOW } from './support/fixture.ts';
 import type { Actor, State } from '../src/domain/types.ts';
 
@@ -42,7 +36,7 @@ it('exige turno abierto, selección válida y al menos un ítem', () => {
   expect(() => start(closed)).toThrow(/Turno abierto/);
   for (const selection of [
     { items: ['inventado'] },
-    { items: ['copita', 'copita'] },
+    { items: ['coronita', 'coronita'] },
     { payments: ['tarjeta'] },
     { cash: 'sí' },
   ])
@@ -125,44 +119,51 @@ it('programa, reemplaza y cancela el arqueo del próximo turno sin pausar el act
   });
   expect(scheduled.settings[0].auditId).toBeUndefined();
   expect(order(scheduled).order.status).toBe('open');
-  const changed = run(scheduled, 'start_audit', { when, mode: 'custom', items: ['copita'] }, admin).state;
+  const changed = run(scheduled, 'start_audit', { when, mode: 'custom', items: ['coronita'] }, admin).state;
   expect(changed.settings[0].nextOpeningAudit).toMatchObject({
     mode: 'custom',
     cash: false,
-    items: ['copita'],
+    items: ['coronita'],
   });
   const cleared = run(changed, 'start_audit', { when, cancel: true }, admin).state;
   expect(cleared.settings[0].nextOpeningAudit).toBeUndefined();
 });
 
-it('ajusta el inventario una vez tras verificación administrativa y conserva el conteo original', () => {
+it('ajusta el inventario tras aprobación de otro administrador y conserva el conteo original', () => {
   const initial = fixture();
-  const state = submit(start(initial, { items: ['copita'] }), { items: { copita: 3 } });
+  const state = submit(start(initial, { items: ['coronita'] }), { items: { coronita: 3 } });
   const original = structuredClone(state.counts[0]);
   const payload = {
     countId: original.id,
-    items: { copita: 3, [`liquid:${ids.flavor}`]: 15 },
-    expectedItems: { copita: 0 },
+    items: { coronita: 3, [`liquid:${ids.flavor}`]: 15 },
+    expectedItems: { coronita: 0 },
     notes: 'Inventario verificado por los socios.',
     confirmed: true,
   };
   expect(() => run(state, 'adjust_count_inventory', payload, cashier)).toThrow(/administrador/);
   expect(() =>
-    run(state, 'adjust_count_inventory', { ...payload, expectedItems: { copita: 1 } }, admin),
+    run(state, 'adjust_count_inventory', { ...payload, expectedItems: { coronita: 1 } }, admin),
   ).toThrow(/inventario cambió/);
-  const adjusted = run(state, 'adjust_count_inventory', payload, admin).state;
+  const proposal = run(state, 'adjust_count_inventory', payload, admin);
+  expect(proposal.result.approvalPending).toBe(true);
+  expect(proposal.state.stock).toEqual(state.stock);
+  const adjusted = run(
+    proposal.state,
+    'resolve_change',
+    { requestId: proposal.result.referenceId, approve: true },
+    other,
+  ).state;
   expect(adjusted.counts[0]).toEqual(original);
   expect(countInventoryAdjustment(adjusted, original.id)).toMatchObject({
-    inventoryAdjustment: { items: { copita: 3 } },
-    by: admin.id,
+    inventoryAdjustment: { items: { coronita: 3 } },
   });
-  expect(adjusted.stock).toMatchObject([{ article: 'copita', quantity: 3, referenceId: original.id }]);
-  expect(stockBalances(adjusted)).toEqual({ copita: 3 });
+  expect(adjusted.stock).toMatchObject([{ article: 'coronita', quantity: 3, referenceId: original.id }]);
+  expect(stockBalances(adjusted)).toEqual({ coronita: 3 });
   expect(adjusted.shifts).toEqual(state.shifts);
   expect(() => run(adjusted, 'adjust_count_inventory', payload, admin)).toThrow(/ya se usó/);
 });
 
-it('guarda el corte solicitado y oculta todos los esperados al cajero', () => {
+it('guarda el corte solicitado sin mostrar esperados ni exigir transferencias al cajero', () => {
   const initial = fixture();
   const created = order(initial);
   const paid = run(created.state, 'pay', {
@@ -171,41 +172,32 @@ it('guarda el corte solicitado y oculta todos los esperados al cajero', () => {
     accountId: ids.location,
   }).state;
   const key = `transfer:${ids.location}`;
-  const state = start(paid, { items: ['copita'], payments: [key] });
+  const state = start(paid, { items: ['coronita'] });
+  state.settings[0].auditRequest!.payments = [key];
   const view = redactState(state, cashier);
-  expect(view.settings[0].auditRequest).toMatchObject({ cash: true, items: ['copita'], payments: [key] });
+  expect(view.settings[0].auditRequest).toMatchObject({ cash: true, items: ['coronita'], payments: [] });
   for (const name of ['expectedCash', 'expectedItems', 'expectedPayments'])
     expect(view.settings[0].auditRequest).not.toHaveProperty(name);
   state.locations[0].active = false;
-  expect(countPaymentMethods(redactState(state, cashier), ids.shift, 'audit').map((x) => x.id)).toEqual([
-    key,
-  ]);
   state.stock.push({
     id: crypto.randomUUID(),
     eventId: crypto.randomUUID(),
-    article: 'copita',
+    article: 'coronita',
     quantity: 100,
     reason: 'receipt',
     referenceId: crypto.randomUUID(),
     by: admin.id,
     at: NOW,
   });
-  expect(() => submit(state, { items: { copita: 2 } })).toThrow(/Falta verificar/);
-  const finished = submit(state, { cash: 21000, items: { copita: 2 }, payments: { [key]: 13000 } });
+  const finished = submit(state, { cash: 21000, items: { coronita: 2 } });
   expect(finished.counts[0]).toMatchObject({
     expectedCash: 20000,
     difference: 1000,
-    expectedItems: { copita: 0 },
-    differences: { copita: 2 },
-    expectedPayments: { [key]: 14000 },
-    paymentDifferences: { [key]: -1000 },
+    expectedItems: { coronita: 0 },
+    differences: { coronita: 2 },
   });
-  const counted = redactState(finished, cashier).counts[0];
-  expect(counted.expectedCash).toBeUndefined();
-  expect(counted.expectedItems).toBeUndefined();
-  expect(counted.expectedPayments).toBeUndefined();
-  expect(counted.paymentDifferences).toBeUndefined();
-  expect(counted.by).toBe(cashier.id);
+  expect(finished.counts[0].payments).toBeUndefined();
+  expect(redactState(finished, cashier).counts).toEqual([]);
   const original = structuredClone(finished.counts);
   const explained = run(finished, 'explain_difference', {
     countId: original[0].id,

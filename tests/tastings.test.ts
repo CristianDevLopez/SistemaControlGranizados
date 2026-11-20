@@ -13,7 +13,7 @@ describe('correcciones de degustaciones', () => {
     const { state, orderId, tastingId } = tasting();
     const corrected = run(state, 'remove_tasting', { orderId, tastingId, expectedVersion: 2 }).state;
     expect(corrected.orders[0]).toMatchObject({ status: 'cancelled', tastings: [], total: 0 });
-    expect(stockBalances(corrected)).toMatchObject({ copita: 0, [`liquid:${ids.flavor}`]: 0 });
+    expect(stockBalances(corrected)).toEqual({ [`liquid:${ids.flavor}`]: 0 });
     expect(corrected.stock.slice(0, state.stock.length)).toEqual(state.stock);
     expect(corrected.audit.slice(0, state.audit.length)).toEqual(state.audit);
     expect(corrected.audit.at(-1)?.detail).toContain(tastingId);
@@ -21,7 +21,7 @@ describe('correcciones de degustaciones', () => {
     expect(liquidReconciliation(corrected)[0]).toMatchObject({ tastings: 0, remaining: 0 });
   });
 
-  it('cambia el sabor sin duplicar la copita y permite eliminar luego el consumo corregido', () => {
+  it('cambia el sabor y permite eliminar luego el consumo corregido', () => {
     const { state, orderId, tastingId } = tasting();
     const corrected = run(state, 'update_tasting', {
       orderId,
@@ -31,14 +31,12 @@ describe('correcciones de degustaciones', () => {
     }).state;
     expect(corrected.orders[0].tastings[0]).toEqual({ ...state.orders[0].tastings[0], flavorId: ids.plain });
     expect(stockBalances(corrected)).toMatchObject({
-      copita: -1,
       [`liquid:${ids.flavor}`]: 0,
       [`liquid:${ids.plain}`]: -1,
     });
     expect(liquidReconciliation(corrected).map((flavor) => flavor.tastings)).toEqual([0, 1]);
     const removed = run(corrected, 'remove_tasting', { orderId, tastingId, expectedVersion: 3 }).state;
     expect(stockBalances(removed)).toMatchObject({
-      copita: 0,
       [`liquid:${ids.flavor}`]: 0,
       [`liquid:${ids.plain}`]: 0,
     });
@@ -50,7 +48,7 @@ describe('correcciones de degustaciones', () => {
     const corrected = run(second, 'remove_tasting', { orderId, tastingId }).state;
     expect(corrected.orders[0].tastings).toEqual([second.orders[0].tastings[1]]);
     expect(corrected.orders[0].status).toBe('open');
-    expect(stockBalances(corrected)).toMatchObject({ copita: -1, [`liquid:${ids.flavor}`]: -1 });
+    expect(stockBalances(corrected)).toEqual({ [`liquid:${ids.flavor}`]: -1 });
   });
 
   it('conserva el pedido abierto y sus productos cuando se elimina su última degustación', () => {
@@ -66,7 +64,7 @@ describe('correcciones de degustaciones', () => {
       lines: created.order.lines,
       tastings: [],
     });
-    expect(stockBalances(corrected)).toMatchObject({ copita: 0, [`liquid:${ids.plain}`]: 0 });
+    expect(stockBalances(corrected)).toEqual({ [`liquid:${ids.plain}`]: 0 });
   });
 
   it('corrige degustaciones en un ticket pagado sin cambiar pagos, productos ni entregas', () => {
@@ -85,7 +83,6 @@ describe('correcciones de degustaciones', () => {
     expect(corrected.payments).toEqual(paid.payments);
     expect(corrected.deliveries).toEqual(paid.deliveries);
     expect(stockBalances(corrected)).toMatchObject({
-      copita: 0,
       [`liquid:${ids.plain}`]: 0,
       [`liquid:${ids.flavor}`]: -12,
     });
@@ -102,7 +99,6 @@ describe('correcciones de degustaciones', () => {
       const corrected = run(changed, 'remove_tasting', { orderId, tastingId }).state;
       expect(corrected.orders[0].status).toBe('cancelled');
       expect(stockBalances(corrected)).toMatchObject({
-        copita: 0,
         [`liquid:${ids.flavor}`]: 0,
         [`liquid:${ids.plain}`]: 0,
       });
@@ -115,7 +111,7 @@ describe('correcciones de degustaciones', () => {
     const corrected = applyCommand(state, command, cashier, NOW).state;
     expect(applyCommand(corrected, command, cashier, NOW).state).toEqual(corrected);
     expect(() => run(corrected, 'remove_tasting', { orderId, tastingId })).toThrow(/Degustación/);
-    expect(corrected.stock).toHaveLength(4);
+    expect(corrected.stock).toHaveLength(2);
   });
 
   it.each(['update_tasting', 'remove_tasting', 'close_tastings'] as const)(
@@ -126,7 +122,7 @@ describe('correcciones de degustaciones', () => {
         /cambió/,
       );
       expect(state.orders[0].tastings).toHaveLength(1);
-      expect(state.stock).toHaveLength(2);
+      expect(state.stock).toHaveLength(1);
     },
   );
 
@@ -157,7 +153,6 @@ describe('correcciones de degustaciones', () => {
     const server = applyCommand(applyCommand(state, change, cashier, NOW).state, remove, cashier, NOW).state;
     expect(local).toEqual(server);
     expect(stockBalances(server)).toMatchObject({
-      copita: 0,
       [`liquid:${ids.flavor}`]: 0,
       [`liquid:${ids.plain}`]: 0,
     });

@@ -44,3 +44,13 @@ Las cortesías entregadas ya descuentan vasos y líquido, incluidos todos los sa
 Aplicar las migraciones pendientes, incluida `supabase/migrations/20261114200017_closing_review.sql`, y actualizar juntos la función `dexter` y el frontend. La migración agrega la validación del rol de aprobación en los commits serializados; no modifica conteos ni ventas anteriores, no agrega tablas y mantiene las funciones limitadas a `service_role`.
 
 Los cierres históricos sin aprobación aparecen pendientes y pueden revisarse individualmente. Los clientes anteriores conservan la posibilidad de enviar su formato de cierre; la interfaz actual exige la comparación previa cuando hay conexión. El servidor siempre recalcula los importes y valida que una comparación enviada siga vigente.
+
+## Cierres archivados
+
+Los cierres archivados se ocultan de **Conteos registrados**, **Cierres pendientes de aprobación** y **Diferencias para revisar**. En Turno y caja, **Mostrar cierres archivados** permite consultar su conteo original y el motivo del archivo. El servidor rechaza su aprobación para evitar ajustes tardíos sobre el inventario ya conciliado.
+
+El archivo conserva conteos, ventas, pagos, movimientos, bases de apertura y exportaciones. No cambia el estado cerrado del turno ni representa una aprobación. La marca se conserva en `Shift.closingArchive`, con fecha, responsable, motivo y referencia al cierre posterior aprobado.
+
+El 14 de noviembre de 2026 se archivaron, por solicitud del titular, los cierres del 13 de noviembre a las 13:39 y del 14 de noviembre a las 14:25 (hora de Colombia). Sigue vigente el del 14 a las 17:47, revisado a las 17:51. La operación quedó auditada; se verificó que las huellas de pedidos, pagos, entregas, inventario, conteos, gastos y transferencias permanecieran iguales. El respaldo y la verificación están en `.local/archive-closings-20261114/`, fuera del repositorio público.
+
+Validación local: `npm run check`, `npm run build`, `npm run format:check`, `deno check --config supabase/functions/deno.json supabase/functions/dexter/index.ts` y las pruebas Playwright de operación, caja, transferencias y arqueo. Todos los datos de prueba se ejecutan en PGlite aislado.

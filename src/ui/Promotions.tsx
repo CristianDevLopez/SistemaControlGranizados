@@ -90,14 +90,13 @@ export function Promotions() {
                 onClick={async () => {
                   try {
                     await app.run('save_promotion', { ...p, active: !p.active });
-                    app.toast(p.active ? 'Promoción apagada.' : 'Promoción activada.');
                   } catch (e) {
                     app.toast((e as Error).message);
                   }
                 }}
               >
                 <Power size={15} />
-                {p.active ? 'Apagar' : 'Activar'}
+                {p.active ? 'Proponer desactivación' : 'Proponer activación'}
               </button>
             </div>
           </Panel>
@@ -534,7 +533,7 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
         fields={fields}
         initial={initial}
         onCancel={onClose}
-        submit="Publicar promoción"
+        submit="Proponer promoción"
         onSubmit={async (v) => {
           await app.run('save_promotion', {
             ...promotion,
@@ -549,7 +548,6 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
             maxRedemptions: v.maxRedemptions ?? null,
           });
           onClose();
-          app.toast('Promoción publicada y guardada en el histórico.');
         }}
       />
     </Modal>

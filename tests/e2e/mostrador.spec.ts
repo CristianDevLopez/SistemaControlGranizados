@@ -48,7 +48,7 @@ async function nav(page: Page, name: string) {
   }
   await page.getByRole('navigation').getByRole('button', { name, exact: true }).click();
 }
-async function seedTasting(request: APIRequestContext, withProduct = false) {
+async function cashierCommands(request: APIRequestContext) {
   const gateway = 'http://127.0.0.1:5180/dexter';
   const headers = {
     authorization: `Bearer ${cashier.id}`,
@@ -74,9 +74,13 @@ async function seedTasting(request: APIRequestContext, withProduct = false) {
     expect(result).toMatchObject({ status: 'accepted', referenceId: expect.any(String) });
     return result.referenceId;
   };
+  return { state: snapshot.state, send };
+}
+async function seedTasting(request: APIRequestContext, withProduct = false) {
+  const { state, send } = await cashierCommands(request);
   const orderId = withProduct
     ? await send('create_order', {
-        lines: [{ flavorId: ids.flavor, sizeId: snapshot.state.sizes[0].id, quantity: 1 }],
+        lines: [{ flavorId: ids.flavor, sizeId: state.sizes[0].id, quantity: 1 }],
       })
     : undefined;
   await send('taste', { orderId, flavorId: ids.flavor });
@@ -85,37 +89,50 @@ async function openSeededOrder(page: Page) {
   await page.getByRole('button', { name: 'Ver pedidos abiertos', exact: true }).click();
   await page.locator('.open-order-picker').getByRole('button', { name: /#/ }).click();
 }
-test('el administrador conserva el botón de inventario inicial y puede agregar cantidades de nuevo', async ({
+test('el administrador ve primero las diferencias de inventario y puede desplegar el historial', async ({
   page,
+  request,
 }) => {
+  const { state, send } = await cashierCommands(request);
+  await send('open_bag', { flavorId: ids.flavor, ounces: 6 });
+  const orderId = await send('create_order', {
+    lines: [{ flavorId: ids.flavor, sizeId: state.sizes[0].id, quantity: 1 }],
+  });
+  await send('pay', { orderId, deliver: true });
   await enter(page, true);
   await nav(page, 'Inventario');
-  const button = page.getByRole('button', { name: 'Registrar inventario inicial', exact: true });
-  const row = page.getByRole('row').filter({ hasText: 'Copitas de degustación' });
-  for (const [quantity, balance] of [
-    ['10', '10'],
-    ['5', '15'],
-  ]) {
-    await button.click();
-    const dialog = page.getByRole('dialog');
-    await dialog.getByRole('spinbutton', { name: 'Copitas de degustación', exact: true }).fill(quantity);
-    await dialog.getByRole('button', { name: 'Confirmar inventario inicial', exact: true }).click();
-    await expect(dialog).toHaveCount(0);
-    await expect(row.getByRole('cell').nth(2)).toHaveText(balance);
-    await expect(button).toBeVisible();
-  }
-  await page.reload();
-  await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
-  await nav(page, 'Inventario');
-  await expect(button).toBeVisible();
-  await expect(row.getByRole('cell').nth(2)).toHaveText('15');
+  await expect(page.getByRole('heading', { name: 'Lo que no cuadra', exact: true })).toBeVisible();
+  const discrepancy = page.getByRole('row').filter({ hasText: 'Sabor de prueba con licor' });
+  await expect(discrepancy).toContainText('-6 oz');
+  await expect(discrepancy).toContainText('Posible bolsa abierta sin registrar');
+  await expect(page.getByRole('button', { name: 'Registrar inventario inicial' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Marcar agotada' })).toHaveCount(0);
+  await page.locator('summary').filter({ hasText: 'Historial de aperturas' }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'Bolsa · Sabor de prueba con licor' })).toBeVisible();
+
+  await nav(page, 'Hoy');
+  await expect(page.getByRole('heading', { name: 'Turno de hoy' })).toBeVisible();
+  await expect(page.getByText('1 pedido pagado', { exact: true })).toBeVisible();
+  await expect(page.getByText('Bolsa · Sabor de prueba con licor')).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Ayer al cierre' })).toBeVisible();
+  await expect(page.getByRole('row').filter({ hasText: 'Sabor de prueba con licor' })).toContainText('-6 oz');
 });
 
-test('el encargado no ve el botón de inventario inicial', async ({ page }) => {
+test('el encargado registra aperturas y solo ve las del turno, sin saldos ni diferencias', async ({
+  page,
+}) => {
   await enter(page);
   await nav(page, 'Inventario');
-  await expect(page.getByRole('heading', { name: 'Insumos en movimiento' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Registrar inventario inicial' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Aperturas del turno' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Abrir paquete de vasos' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reportar daño' })).toBeVisible();
+  await page.getByRole('button', { name: 'Abrir bolsa de líquido' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Sabor').selectOption(ids.flavor);
+  await dialog.getByRole('button', { name: 'Registrar', exact: true }).click();
+  await expect(page.getByText('Bolsa · Sabor de prueba con licor')).toBeVisible();
+  await expect(page.getByText('Lo que no cuadra')).toHaveCount(0);
+  await expect(page.getByText('Saldo teórico')).toHaveCount(0);
 });
 
 test('venta sencilla en tres acciones, conserva entregas y evita cobros repetidos al recargar', async ({
@@ -161,14 +178,14 @@ test('un combinado conserva sus sabores al recargar y descuenta solo su porción
     fullPage: true,
   });
   await add.click();
-  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.locator('.cart-total')).toContainText('17.000');
   await page.reload();
-  await expect(page.locator('.cart-line')).toHaveCount(1);
-  await expect(page.locator('.cart-line')).toContainText(
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toContainText(
     'Sabor de prueba con licor + Sabor de prueba sin licor',
   );
-  await expect(page.locator('.cart-line .flavor-portions')).toContainText('1/2 · 8 oz');
+  await expect(page.locator('.cart-line-head .flavor-portions')).toContainText('1/2 · 8 oz');
   await page.screenshot({
     path: 'test-results/carrito-combinado-' + test.info().project.name + '.png',
     fullPage: true,
@@ -221,16 +238,16 @@ test('agrupa la misma mezcla elegida en distinto orden y conserva separado un va
   await alcohol.click();
   await plain.click();
   await page.getByRole('button', { name: 'Agregar combinado' }).click();
-  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await plain.click();
   await alcohol.click();
   await page.getByRole('button', { name: 'Agregar combinado' }).click();
-  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.getByRole('button', { name: '0/2 entregados', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Un sabor', exact: true }).click();
   await alcohol.click();
-  await expect(page.locator('.cart-line')).toHaveCount(2);
-  await expect(page.locator('.cart-line .flavor-portions')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(2);
+  await expect(page.locator('.cart-line-head .flavor-portions')).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
@@ -256,7 +273,7 @@ test('elimina una degustación existente y deja de mostrar el pedido como pendie
   await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
   await nav(page, 'Pedidos');
   await expect(page.locator('tbody tr')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Historial', exact: true }).click();
+  await page.getByRole('button', { name: 'Todos del turno', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(1);
   await expect(page.locator('tbody')).toContainText('Cancelado');
 });
@@ -278,11 +295,11 @@ test('cambia y elimina el sabor de una degustación conservando los productos de
   await page.reload();
   await expect(page.locator('.cart-heading h2')).toHaveText(order!);
   await expect(tasting).toHaveValue('30000000-0000-4000-8000-000000000002');
-  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.locator('.cart-total')).toContainText('14.000');
   await page.getByRole('button', { name: 'Eliminar degustación 1', exact: true }).click();
   await expect(page.locator('.tasting-list')).toHaveCount(0);
-  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.locator('.cart-total')).toContainText('14.000');
   await page.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
   await expect(page.getByText('Venta registrada ·')).toBeVisible();
@@ -307,16 +324,16 @@ test('un aviso nuevo conserva su duración aunque exista un aviso anterior', asy
   await page.clock.runFor(3000);
   await page.getByRole('button', { name: 'Eliminar degustación 1', exact: true }).click();
   const notice = page.getByRole('status');
-  await expect(notice).toHaveText('Degustación eliminada. Se restituyeron una copita y 1 oz.');
+  await expect(notice).toHaveText('Degustación eliminada. Se restituyó 1 oz.');
   await page.clock.runFor(1500);
-  await expect(notice).toHaveText('Degustación eliminada. Se restituyeron una copita y 1 oz.');
+  await expect(notice).toHaveText('Degustación eliminada. Se restituyó 1 oz.');
   await page.clock.runFor(2999);
   await expect(notice).toBeVisible();
   await page.clock.runFor(1);
   await expect(notice).toHaveCount(0);
 });
 
-test('corrige y elimina una degustación ya cerrada desde el detalle del historial', async ({
+test('corrige y elimina una degustación ya cerrada desde el detalle de pedidos del turno', async ({
   page,
   request,
 }) => {
@@ -326,7 +343,7 @@ test('corrige y elimina una degustación ya cerrada desde el detalle del histori
   await page.getByRole('button', { name: 'Cerrar solo degustaciones', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
   await nav(page, 'Pedidos');
-  await page.getByRole('button', { name: 'Historial', exact: true }).click();
+  await page.getByRole('button', { name: 'Todos del turno', exact: true }).click();
   await page.locator('tbody tr').getByRole('button').first().click();
   const dialog = page.getByRole('dialog');
   const tasting = dialog.getByRole('combobox', { name: 'Sabor de la degustación 1', exact: true });
@@ -359,7 +376,7 @@ test('cancela un pedido sin cobrar y conserva sus degustaciones fuera de los pen
   await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
   await nav(page, 'Pedidos');
   await expect(page.locator('tbody tr')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Historial', exact: true }).click();
+  await page.getByRole('button', { name: 'Todos del turno', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(1);
   await expect(page.locator('tbody')).toContainText('Solo degustaciones');
   await expect(page.locator('tbody')).toContainText('1 degustaciones');
@@ -375,7 +392,7 @@ test('quitar la última unidad cancela el pedido sin registrar una venta', async
   await expect(page.locator('tbody tr')).toHaveCount(0);
   await page.getByRole('button', { name: 'Cobrados', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Historial', exact: true }).click();
+  await page.getByRole('button', { name: 'Todos del turno', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(1);
   await expect(page.locator('tbody')).toContainText('Cancelado');
 });
@@ -468,7 +485,7 @@ test('menú adaptable y configuración administrable sin desbordamiento horizont
 });
 test('el encargado presenta un conteo sin conocer el valor esperado', async ({ page }) => {
   await enter(page);
-  await nav(page, 'Turno y caja');
+  await nav(page, 'Turno');
   await page.getByRole('button', { name: 'Contar apertura', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('Efectivo contado *', { exact: true })).toHaveValue('');

@@ -83,6 +83,7 @@ test('una venta por transferencia no se espera en la caja y se ve aparte en el t
 
   await nav(page, 'Turno y caja');
   await expect(page.locator('.stat').filter({ hasText: 'Efectivo esperado' })).toContainText(/12\.000/);
+  await nav(page, 'Dinero');
   const transfers = page.locator('.stat').filter({ hasText: 'Cobrado por transferencia' });
   await expect(transfers).toContainText(/14\.000/);
   await expect(transfers).toContainText('Cuenta de prueba');
@@ -157,15 +158,14 @@ test('configura Nequi y lo identifica al cobrar, en el ticket y separado del efe
   await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
   await nav(page, 'Turno y caja');
   await expect(page.locator('.stat').filter({ hasText: 'Efectivo esperado' })).toContainText('12.000');
+  await expect(page.getByText('Saldo en Nequi', { exact: true })).toHaveCount(0);
+  await nav(page, 'Dinero');
   const transfers = page.locator('.stat').filter({ hasText: 'Cobrado por transferencia' });
   await expect(transfers).toContainText('28.000');
   await expect(transfers).toContainText('Nequi');
   const balance = page.locator('.stat').filter({ hasText: 'Saldo en Nequi' });
   await expect(balance).toContainText('28.000');
-  const transferBox = (await transfers.boundingBox())!;
-  const balanceBox = (await balance.boundingBox())!;
-  expect(balanceBox.y).toBe(transferBox.y);
-  expect(balanceBox.x).toBeGreaterThan(transferBox.x);
+  await expect(page.getByRole('heading', { name: 'Saldos por ubicación' })).toBeVisible();
   await nav(page, 'Pedidos');
   await page.getByRole('button', { name: 'Cobrados', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(2);
@@ -195,6 +195,8 @@ test('configura Nequi y lo identifica al cobrar, en el ticket y separado del efe
   await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
   await nav(page, 'Turno y caja');
   await expect(page.getByRole('row').filter({ hasText: 'Cierre' })).toContainText('27.000');
-  await nav(page, 'Control y aprobaciones');
-  await expect(page.getByText('Nequi: -$ 1.000', { exact: false })).toBeVisible();
+  await nav(page, 'Revisar turnos');
+  await page.getByRole('button', { name: 'Ver turno' }).click();
+  await expect(page.getByRole('dialog').getByText('Transferencias del turno', { exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog').getByText('Sin verificar', { exact: true })).toHaveCount(2);
 });

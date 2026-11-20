@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { createGateway } from '../src/server/gateway.ts';
+import { blindCountArticles, locationBalance } from '../src/domain/engine.ts';
 import type { Actor, CommandType } from '../src/domain/types.ts';
 import { PgBackend } from './support/backend.ts';
 import {
@@ -127,7 +128,7 @@ it.each([admin, owner])(
   },
 );
 
-it('el encargado sigue solicitando autorización y apoyo no puede abrir caja', async () => {
+it('el encargado abre con un conteo ciego y apoyo no puede abrir caja', async () => {
   expect((await send('request_shift', {}, support)).result.status).toBe('conflict');
   const opening = await accepted(
     'request_shift',
@@ -135,14 +136,52 @@ it('el encargado sigue solicitando autorización y apoyo no puede abrir caja', a
     cashier,
   );
   const shiftId = opening.result.referenceId;
-  expect((await db.load()).state.shifts[0]).toMatchObject({ status: 'requested', cashierId: cashier.id });
+  expect((await db.load()).state.shifts[0]).toMatchObject({
+    status: 'open',
+    cashierId: cashier.id,
+    base: 0,
+    blindOpening: { status: 'pending' },
+  });
   expect((await send('authorize_shift', { shiftId }, cashier)).result.status).toBe('conflict');
   expect(
     (await send('count', { kind: 'opening', shiftId, cash: 500, items: countedItems(fixture()) }, cashier))
       .result.status,
   ).toBe('conflict');
-  await accepted('authorize_shift', { shiftId, base: 500 });
-  await accepted('count', { kind: 'opening', shiftId, cash: 500, items: countedItems(fixture()) }, cashier);
+  const items = Object.fromEntries(blindCountArticles(fixture()).map((a) => [a.id, 0]));
+  const counted = await accepted(
+    'submit_blind_count',
+    { kind: 'opening', shiftId, cash: 0, attempt: 1, items },
+    cashier,
+  );
+  expect(counted.result).toMatchObject({ code: 'COUNT_MATCHED', message: 'Todo coincide. ¡Buen turno!' });
+});
+
+it('un retiro de Nequi reduce la cuenta al ejecutar y aumenta el efectivo al confirmar', async () => {
+  const account = await accepted('save_location', {
+    name: 'Nequi',
+    type: 'bank',
+    bank: 'Nequi',
+    account: '3000000000',
+    custodianId: admin.id,
+    openingBalance: 85000,
+  });
+  const custody = await accepted('save_location', {
+    name: 'Caja principal',
+    type: 'treasury',
+    custodianId: other.id,
+  });
+  const from = account.result.referenceId!;
+  const to = custody.result.referenceId!;
+  const requested = await accepted('request_transfer', { from, to, amount: 20000, notes: 'Retiro' });
+  const transferId = requested.result.referenceId;
+  let { state } = await db.load();
+  expect([locationBalance(state, from), locationBalance(state, to)]).toEqual([85000, 0]);
+  await accepted('execute_transfer', { transferId });
+  ({ state } = await db.load());
+  expect([locationBalance(state, from), locationBalance(state, to)]).toEqual([65000, 0]);
+  await accepted('confirm_transfer', { transferId, receivedAmount: 20000 }, other);
+  ({ state } = await db.load());
+  expect([locationBalance(state, from), locationBalance(state, to)]).toEqual([65000, 20000]);
 });
 
 it('el titular retoma su caja desde su nueva sesión MFA y otro admin no puede cobrarla', async () => {

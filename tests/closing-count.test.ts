@@ -88,16 +88,11 @@ it('incluye cuentas nuevas y cuentas usadas que luego se desactivaron, sin revel
     receivesSales: true,
   });
   const view = redactState(state, cashier);
-  expect(closingPaymentMethods(view, ids.shift).map((x) => x.id)).toEqual([key, `transfer:${second}`]);
-  expect(closingPaymentMethods(redactState(view, cashier), ids.shift).map((x) => x.id)).toEqual([
-    key,
-    `transfer:${second}`,
-  ]);
+  expect(closingPaymentMethods(view, ids.shift).map((x) => x.id)).toEqual([`transfer:${second}`]);
+  expect(view.payments).toEqual([]);
+  expect(view.transferSummary).toEqual([{ name: state.locations[0].name, amount: 14000 }]);
   const closed = run(state, 'count', closing(state, { [key]: 14000, [`transfer:${second}`]: 0 })).state;
-  const redacted = redactState(closed, cashier).counts[0];
-  expect(redacted.payments).toEqual({ [key]: 14000, [`transfer:${second}`]: 0 });
-  expect(redacted.expectedPayments).toBeUndefined();
-  expect(redacted.paymentDifferences).toBeUndefined();
+  expect(redactState(closed, cashier).counts).toEqual([]);
   expect(redactState(closed, admin).counts[0].expectedPayments?.[key]).toBe(14000);
 });
 

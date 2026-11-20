@@ -143,6 +143,14 @@ export function run(
 ) {
   return applyCommand(s, cmd(type, payload, actor, { configVersion: s.settings[0].version }), actor, NOW);
 }
+export function approveChange(proposal: ReturnType<typeof run>, actor: Actor = other) {
+  return run(
+    proposal.state,
+    'resolve_change',
+    { requestId: proposal.result.referenceId, approve: true },
+    actor,
+  );
+}
 export function countedItems(s: State, n = 0) {
   return Object.fromEntries(
     articles(s)

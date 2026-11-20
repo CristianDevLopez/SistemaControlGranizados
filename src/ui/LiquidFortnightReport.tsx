@@ -3,7 +3,7 @@ import { addDays, businessDay } from '../domain/business-date.ts';
 import { liquidFortnight } from '../domain/liquid.ts';
 import { fortnight } from '../domain/reconciliation.ts';
 import type { State } from '../domain/types.ts';
-import { Badge, Empty, Panel } from './components.tsx';
+import { Badge, Empty } from './components.tsx';
 
 const format = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 });
 const ounces = (amount: number) => `${format.format(amount)} oz`;
@@ -28,7 +28,7 @@ export function LiquidFortnightReport({ state }: { state: State }) {
   );
   const configured = state.settings[0].liquidTolerance !== null;
   return (
-    <Panel title="Merma de líquido por quincena">
+    <div className="inventory-fortnight">
       <label className="field">
         <span>Fecha de la quincena</span>
         <input
@@ -104,6 +104,6 @@ export function LiquidFortnightReport({ state }: { state: State }) {
       ) : (
         <Empty title="Sin movimientos de líquido en la quincena" />
       )}
-    </Panel>
+    </div>
   );
 }

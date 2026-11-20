@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie';
 import type { Command, Result, Snapshot } from '../domain/types.ts';
+import { employeeView } from '../domain/employee-view.ts';
 export interface OutboxEntry {
   id: string;
   branchId?: string;
@@ -44,6 +45,21 @@ export interface Meta {
   key: string;
   value: unknown;
 }
+export function offlineSnapshot(value: Snapshot): Snapshot {
+  const state = employeeView(value.state, value.actor);
+  const sellers = new Set(state.orders.map((order) => order.sellerId));
+  return {
+    ...value,
+    actor: { ...value.actor, superAdmin: undefined },
+    access: undefined,
+    branch: value.branch && { ...value.branch, monthlyFee: null, billingStart: null },
+    profiles: value.profiles
+      .filter((profile) => profile.id === value.actor.id || sellers.has(profile.id))
+      .map(({ id, name, role, active }) => ({ id, name, role, active })),
+    devices: value.devices.filter((device) => device.userId === value.actor.id),
+    state,
+  };
+}
 export class DexterDB extends Dexie {
   meta!: EntityTable<Meta, 'key'>;
   outbox!: EntityTable<OutboxEntry, 'id'>;
@@ -60,6 +76,17 @@ export class DexterDB extends Dexie {
       outbox: 'id, actorId, branchId, sequence, status, [actorId+status], [branchId+actorId]',
       photos: 'id, actorId, branchId, status, [branchId+actorId]',
     });
+    this.on('ready', () =>
+      this.transaction('rw', this.meta, async () => {
+        if (await this.meta.get('employee-cache-scoped')) return;
+        await this.meta.toCollection().modify((row) => {
+          if (row.key !== 'snapshot' && !row.key.startsWith('snapshot:')) return;
+          const value = row.value as Snapshot | undefined;
+          if (value?.state && value.actor) row.value = offlineSnapshot(value);
+        });
+        await this.meta.put({ key: 'employee-cache-scoped', value: true });
+      }),
+    );
   }
 }
 export const db = new DexterDB();

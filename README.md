@@ -2,6 +2,12 @@
 
 PWA para uno o varios locales por propietario, con una caja operativa por local, pedidos con entregas parciales, continuidad offline del equipo principal y administración remota. React, TypeScript, Vite, Dexie y Supabase. Interfaz en español; dinero en pesos enteros, fechas UTC y visualización de Colombia.
 
+### Cambios solicitados por Dexter’s el 19 de noviembre de 2026
+
+- El empleado usa Mostrador, Pedidos del turno, Inventario y Turno. La apertura y el cierre se validan en el servidor con conexión y permiten un solo recuento. Los pedidos del equipo principal conservan la contingencia offline.
+- El administrador verifica transferencias, consulta ambos conteos y gestiona diferencias desde **Revisar turnos**. Los cambios de precios, promociones, inventario y permisos requieren la aprobación de otro administrador. El número de aprobaciones se configura en **Configuración** y el historial se consulta en **Registro de cambios**.
+- Desde **Revisar turnos → Elegir arqueo de referencia**, un administrador selecciona el arqueo real del 18 de noviembre. Los registros operativos anteriores quedan disponibles bajo **Período de ensayo**, las existencias parten del conteo elegido y las ventas históricas siguen en **Ventas**. La selección corresponde al local activo.
+
 ### Ajustes operativos preparados el 13 de noviembre de 2026
 
 Permisos individuales por local y guía de perfiles; pedidos de apoyo identificados en caja; bloqueo de movimientos de trabajadores tras cerrar; cuadre por efectivo y cada cuenta configurada; cortesías con condiciones conservadas, acumulación configurable, QR compartible y canje parcial de varios códigos; imágenes de sabores, orden alfabético y filtro con/sin licor. Incluye controles en interfaz, gateway y PostgreSQL. Estos cambios están preparados para revisión local, **sin desplegar ni cargar datos en producción**. Consultar [aplicación y compatibilidad](docs/AJUSTES-OPERATIVOS.md) y el [manual actualizado](docs/manuales/manual-administradores-empleados.md).
@@ -35,7 +41,7 @@ No hay sabores, usuarios ni ventas de demostración en la base real. Los precios
 
 Reservado para `cristiandevlopez@gmail.com`. Se activa mediante un enlace privado de un solo uso, eligiendo contraseña; después se ingresa por **Administrador**, sin registrar equipos, cajas ni PIN offline. El acceso general no muestra una opción de superadministrador.
 
-Solo esta identidad ve **Vista de la aplicación**: Superadministrador, Administrador, Encargado de caja y Apoyo de mostrador. **Administrador** permite agregar productos y guardar precios, promociones, parámetros y metas directamente, con la identidad real del titular y sin aprobación de otro admin. Los administradores del negocio también pueden guardar esos cambios por sí mismos. Las vistas de Encargado y Apoyo son de consulta y bloquean cambios en cliente y servidor; para caja se prioriza al encargado del turno cuando existe. **Volver a superadministrador** recupera la vista completa sin cambiar de cuenta.
+Solo esta identidad ve **Vista de la aplicación** con las opciones Superadministrador, Administrador, Encargado de caja y Apoyo de mostrador. La vista Administrador opera con la identidad real del titular y usa las mismas aprobaciones que el equipo. Las vistas de Encargado y Apoyo son de consulta. **Volver a superadministrador** recupera la vista completa sin cambiar de cuenta.
 
 Los administradores del negocio no ven este acceso en Equipo y accesos ni pueden asignarlo, desactivarlo o modificar sus dispositivos. La reserva privada admite una sola identidad. El privilegio exige conexión; no se guarda en el respaldo offline. Ver [activación y operación](docs/OPERACION.md).
 
@@ -55,16 +61,17 @@ El destino de recuperación debe figurar en **Supabase → Authentication → UR
 4. Registrar el navegador del admin. Crear los otros administradores y empleados en **Configuración → Equipo y accesos**.
 5. Generar el código de registro del equipo de caja. En ese navegador, el encargado entra con usuario, PIN y código. El código vence en 15 minutos y se usa una vez. El PIN queda vinculado a ese usuario para el respaldo offline.
 
-Un administrador conectado puede abrir su propia caja desde **Turno y caja → Iniciar caja**, indicar la base inicial y presentar el conteo, sin autorización de otro admin. El turno y su autorización quedan a su nombre; se conserva el saldo físico anterior cuando existe. Si entra el encargado, solicita el turno desde el equipo de caja y un admin lo autoriza. Los códigos de registro y las autorizaciones offline solo se generan con sesión administrativa y conexión.
+Un administrador conectado puede iniciar su propia caja desde **Turno y caja → Iniciar caja**. El encargado abre su turno desde **Turno** y presenta un conteo ciego. Si los dos intentos tienen diferencias, el administrador recibe un aviso en la app y decide si autoriza las ventas o solicita un arqueo.
 
 Para preparar otro entorno vacío: `npm run bootstrap -- --prepare` genera el código y un SQL con su hash en `.local/bootstrap.sql`. Ejecutar ese SQL únicamente en el proyecto nuevo. Si ya existe un admin, no habilita otro código. No ejecutar de nuevo en esta instalación sin necesitar una recuperación del arranque.
 
 ## Funciones incluidas
 
+- Dashboard del administrador con ventas netas, tickets, promedio, unidades, comparación temporal, evolución, productos, turnos, recaudo, gastos y metas; filtros por mes, fechas y turno, y exportación CSV. Ver [indicadores y criterios de cálculo](docs/DASHBOARD.md).
 - Pedidos simultáneos, entregas parciales, cobro exclusivo del responsable y **Cobrar y entregar**.
-- Degustaciones por sabor: una onza y una copita; conserva pedidos sin venta.
+- Degustaciones por sabor con una onza de merma esperada. Conserva los pedidos sin venta.
 - Turnos autorizados, conteos ciegos, cierres con base retenida, remanentes, arqueos sorpresa y planillas con folio y hora original.
-- Inventario por movimientos; bolsas, paquetes, vasos, copitas y coronitas. Saldos negativos visibles. Daños sujetos a revisión y tolerancia configurable de líquido, con medición de línea base.
+- Inventario por movimientos para bolsas, paquetes, vasos y coronitas. Los administradores ven los negativos y configuran la ventana y tolerancia de líquido por sabor.
 - Compras y envíos, recepción ciega con fotografías, recepciones parciales, cruce contra lo enviado y gastos vinculados.
 - Anulación completa, aprobación de otro admin y ticket sustituto vinculado; traslado del pago anterior, diferencia o reembolso y conservación de la entrega física.
 - Traslados del dinero del negocio a cajas o cuentas bajo custodia de admins. Solicitud, ejecución, tránsito y confirmación separados; discrepancias en disputa. Reembolsos y utilidades requieren tres votos de admins distintos.
@@ -78,13 +85,13 @@ Primero se intenta wifi y luego datos compartidos. En una desconexión total, el
 
 Cada operación y su pendiente se guardan juntos en una transacción IndexedDB. La sincronización usa el mismo UUID en todos los reintentos. Se ejecuta al recuperar conexión, al abrir la sesión, periódicamente mientras la app está visible y mediante el botón de sincronización. Cerrar o recargar la PWA conserva la cola local. Para reabrir offline, usar **Entrar sin conexión** con el PIN previamente registrado.
 
-Los cupones y beneficios con límites globales necesitan conexión. Offline se usan catálogo y promociones horarias descargados. El servidor valida usuario y dispositivo al sincronizar; un precio de una versión anterior queda identificado para revisión. El cierre offline queda provisional en el dispositivo y se valida al cargarlo al servidor.
+El administrador aplica cupones con conexión. El dispositivo principal usa el catálogo y las promociones horarias guardadas durante una desconexión. El servidor valida usuario y dispositivo al sincronizar. Un precio de una versión anterior queda identificado para revisión. Los conteos ciegos de apertura y cierre requieren conexión para verificar las diferencias en el servidor.
 
-Una operación rechazada queda conservada localmente y genera una solicitud remota. Se detiene la cola en ese punto. El admin registra la operación correcta, la vincula al conflicto o explica su descarte; después la caja puede continuar. En ningún caso se modifica el comando original o se considera cobrada una operación por el simple hecho de reintentarla. El panel permite exportar los pendientes como respaldo local.
+Un conflicto de caja queda conservado localmente y genera una solicitud de conciliación. La cola espera hasta que el admin vincule la operación correcta o explique su descarte. Si el servidor rechaza una cortesía por cuota agotada, no se emite ningún código: el intento queda en **Operaciones no aplicadas** y el siguiente pendiente puede sincronizarse. El panel permite exportar pendientes y rechazos con sus referencias. Un reintento conserva el identificador original y no equivale a un cobro confirmado.
 
 Durante un arqueo, el sistema bloquea pedidos, entregas y cobros. Se usa papel y se mantiene separado el efectivo posterior al corte. Al terminar, un admin ingresa cada pedido con folio único, turno, hora y foto. Se conservan los conteos originales y se genera una conciliación.
 
-La autorización offline de apertura se habilita presencialmente en caja con un PIN de contingencia de un admin. Es un permiso cifrado, de un solo uso, con vigencia de siete días y validación posterior. No implica revocación remota inmediata mientras el dispositivo sigue desconectado.
+El PIN local permite volver a entrar en un turno que ya se abrió. La revocación remota llega al dispositivo cuando recupera la conexión.
 
 ## Seguridad y datos
 

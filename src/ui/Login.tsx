@@ -98,8 +98,7 @@ export function Login({ onRecover }: { onRecover: () => void }) {
         await ready();
       } else if (mode === 'device') {
         const result = await api('devices/self', {
-          name: v('deviceName') || 'Equipo principal',
-          primary: f.get('primary') === 'on',
+          name: v('deviceName') || 'Equipo de administración',
         });
         await saveDeviceCredential({ id: result.deviceId, token: result.deviceToken });
         const s = await session();
@@ -307,9 +306,6 @@ export function Login({ onRecover }: { onRecover: () => void }) {
               <label>
                 Nombre del equipo
                 <input name="deviceName" required placeholder="Equipo de caja" />
-              </label>
-              <label className="check-inline">
-                <input name="primary" type="checkbox" /> Este será el equipo principal de caja
               </label>
               <label>
                 PIN local para respaldo offline
