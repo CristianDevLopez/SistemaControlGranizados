@@ -834,7 +834,11 @@ export function createGateway(options: GatewayOptions) {
             if (needsReview) await store.security('sync_conflict', { command, message: e.message });
             const rejectedRecovery =
               command.type === 'record_employee_recovery' &&
-              ['RECOVERY_CHANGED', 'FORBIDDEN', '42501'].includes(e.code ?? '');
+              (error instanceof DomainError || e.code === '42501');
+            const rejectedAudit =
+              ['start_audit', 'finish_audit', 'adjust_count_inventory'].includes(command.type) &&
+              error instanceof DomainError &&
+              ['VALIDATION', 'FORBIDDEN', 'SHIFT_CLOSED'].includes(error.code);
             results.push({
               id: command.id,
               status: 'conflict',
@@ -844,6 +848,7 @@ export function createGateway(options: GatewayOptions) {
                   : 'El servidor no pudo validar este registro.',
               code: e.code ?? 'VALIDATION',
               ...(rejectedRecovery ||
+              rejectedAudit ||
               (!needsReview &&
                 error instanceof DomainError &&
                 ['FORBIDDEN', 'VALIDATION', 'ONLINE_REQUIRED'].includes(error.code))
