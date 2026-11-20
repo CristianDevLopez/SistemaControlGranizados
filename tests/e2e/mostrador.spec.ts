@@ -178,14 +178,14 @@ test('un combinado conserva sus sabores al recargar y descuenta solo su porción
     fullPage: true,
   });
   await add.click();
-  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.locator('.cart-total')).toContainText('17.000');
   await page.reload();
-  await expect(page.locator('.cart-line')).toHaveCount(1);
-  await expect(page.locator('.cart-line')).toContainText(
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toContainText(
     'Sabor de prueba con licor + Sabor de prueba sin licor',
   );
-  await expect(page.locator('.cart-line .flavor-portions')).toContainText('1/2 · 8 oz');
+  await expect(page.locator('.cart-line-head .flavor-portions')).toContainText('1/2 · 8 oz');
   await page.screenshot({
     path: 'test-results/carrito-combinado-' + test.info().project.name + '.png',
     fullPage: true,
@@ -238,16 +238,16 @@ test('agrupa la misma mezcla elegida en distinto orden y conserva separado un va
   await alcohol.click();
   await plain.click();
   await page.getByRole('button', { name: 'Agregar combinado' }).click();
-  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await plain.click();
   await alcohol.click();
   await page.getByRole('button', { name: 'Agregar combinado' }).click();
-  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.getByRole('button', { name: '0/2 entregados', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Un sabor', exact: true }).click();
   await alcohol.click();
-  await expect(page.locator('.cart-line')).toHaveCount(2);
-  await expect(page.locator('.cart-line .flavor-portions')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(2);
+  await expect(page.locator('.cart-line-head .flavor-portions')).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
@@ -273,7 +273,7 @@ test('elimina una degustación existente y deja de mostrar el pedido como pendie
   await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
   await nav(page, 'Pedidos');
   await expect(page.locator('tbody tr')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Historial', exact: true }).click();
+  await page.getByRole('button', { name: 'Todos del turno', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(1);
   await expect(page.locator('tbody')).toContainText('Cancelado');
 });
@@ -295,11 +295,11 @@ test('cambia y elimina el sabor de una degustación conservando los productos de
   await page.reload();
   await expect(page.locator('.cart-heading h2')).toHaveText(order!);
   await expect(tasting).toHaveValue('30000000-0000-4000-8000-000000000002');
-  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.locator('.cart-total')).toContainText('14.000');
   await page.getByRole('button', { name: 'Eliminar degustación 1', exact: true }).click();
   await expect(page.locator('.tasting-list')).toHaveCount(0);
-  await expect(page.locator('.cart-line')).toHaveCount(1);
+  await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.locator('.cart-total')).toContainText('14.000');
   await page.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
   await expect(page.getByText('Venta registrada ·')).toBeVisible();
@@ -333,7 +333,7 @@ test('un aviso nuevo conserva su duración aunque exista un aviso anterior', asy
   await expect(notice).toHaveCount(0);
 });
 
-test('corrige y elimina una degustación ya cerrada desde el detalle del historial', async ({
+test('corrige y elimina una degustación ya cerrada desde el detalle de pedidos del turno', async ({
   page,
   request,
 }) => {
@@ -343,7 +343,7 @@ test('corrige y elimina una degustación ya cerrada desde el detalle del histori
   await page.getByRole('button', { name: 'Cerrar solo degustaciones', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
   await nav(page, 'Pedidos');
-  await page.getByRole('button', { name: 'Historial', exact: true }).click();
+  await page.getByRole('button', { name: 'Todos del turno', exact: true }).click();
   await page.locator('tbody tr').getByRole('button').first().click();
   const dialog = page.getByRole('dialog');
   const tasting = dialog.getByRole('combobox', { name: 'Sabor de la degustación 1', exact: true });
@@ -376,7 +376,7 @@ test('cancela un pedido sin cobrar y conserva sus degustaciones fuera de los pen
   await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
   await nav(page, 'Pedidos');
   await expect(page.locator('tbody tr')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Historial', exact: true }).click();
+  await page.getByRole('button', { name: 'Todos del turno', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(1);
   await expect(page.locator('tbody')).toContainText('Solo degustaciones');
   await expect(page.locator('tbody')).toContainText('1 degustaciones');
@@ -392,7 +392,7 @@ test('quitar la última unidad cancela el pedido sin registrar una venta', async
   await expect(page.locator('tbody tr')).toHaveCount(0);
   await page.getByRole('button', { name: 'Cobrados', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Historial', exact: true }).click();
+  await page.getByRole('button', { name: 'Todos del turno', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(1);
   await expect(page.locator('tbody')).toContainText('Cancelado');
 });

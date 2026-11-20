@@ -259,6 +259,7 @@ test('programa una apertura completa y permite proponer un ajuste de inventario 
   });
   expect((await response.json()).results[0].status).toBe('accepted');
   await page.reload();
+  await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
   await nav(page, 'Turno y caja');
   await page.getByRole('button', { name: 'Revisar conteo' }).click();
   await expect(dialog).toContainText('Inventario ajustado por');

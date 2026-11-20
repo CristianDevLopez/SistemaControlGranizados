@@ -32,7 +32,7 @@ test('actualiza con el turno abierto, espera los pendientes y conserva el pedido
 
     await request.post('http://127.0.0.1:5180/test/commands', { data: { paused: true } });
     await page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
-    await expect(page.locator('.cart-line')).toHaveCount(1);
+    await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
     const order = await page.locator('.cart-heading h2').textContent();
     await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('pendientes');
     await expect(update).toBeEnabled();
@@ -49,7 +49,7 @@ test('actualiza con el turno abierto, espera los pendientes y conserva el pedido
     await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
     await expect(page.locator('.shift-strip')).toContainText('Turno abierto');
     await expect(page.locator('.cart-heading h2')).toHaveText(order!);
-    await expect(page.locator('.cart-line')).toHaveCount(1);
+    await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText(
       'Sincronizado',
     );
