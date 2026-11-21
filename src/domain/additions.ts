@@ -8,14 +8,20 @@ export const candyAdditions = [
   { id: 'todos', name: 'Todos los dulces', unitPrice: 2000 },
 ] as const;
 
-export type CandyAddition = (typeof candyAdditions)[number] & { quantity: number };
+export type CandyId = (typeof candyAdditions)[number]['id'];
+export type CandyPrices = Partial<Record<CandyId, number>>;
+export type CandyAddition = { id: CandyId; name: string; unitPrice: number; quantity: number };
 
-export function priceAdditions(input: unknown): CandyAddition[] {
+export function configuredAdditions(prices?: CandyPrices) {
+  return candyAdditions.map((item) => ({ ...item, unitPrice: prices?.[item.id] ?? item.unitPrice }));
+}
+
+export function priceAdditions(input: unknown, prices?: CandyPrices): CandyAddition[] {
   if (!Array.isArray(input) || input.length > candyAdditions.length)
     throw new DomainError('Adiciones inválidas.');
   const seen = new Set<string>();
   return input.map((item) => {
-    const addition = candyAdditions.find(({ id }) => id === item?.id);
+    const addition = configuredAdditions(prices).find(({ id }) => id === item?.id);
     const quantity = item?.quantity;
     if (!addition || seen.has(addition.id) || !Number.isInteger(quantity) || quantity < 1 || quantity > 500)
       throw new DomainError('Adición o cantidad inválida.');

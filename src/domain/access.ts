@@ -60,6 +60,7 @@ export function shiftBlocksSales(shift: Shift | undefined): boolean {
     opening === 'recount' ||
     opening === 'review' ||
     opening === 'audit' ||
+    shift?.blindClosing?.status === 'ready' ||
     shift?.blindClosing?.status === 'recount'
   );
 }

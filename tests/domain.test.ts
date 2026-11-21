@@ -494,13 +494,51 @@ describe('Promociones y cupones', () => {
   });
   it('agrupa N×M de mayor a menor precio y hace gratis lo más barato de cada grupo', () => {
     const s = fixture();
-    s.promotions = [promo()];
-    const lines = [0, 1, 2, 3, 0, 1].map((sizeIndex, i) => ({
+    s.promotions = [promo({ pay: 1 })];
+    const lines = [0, 1, 2, 3, 0, 1].map((sizeIndex) => ({
       ...order(s, 1, ids.flavor, sizeIndex).order.lines[0],
       id: crypto.randomUUID(),
     }));
     const q = quoteOrder(s, lines, NOW, true);
-    expect(q.total).toBe(104500 - 17000 - 14000);
+    expect(q.total).toBe(23000 + 17000);
+  });
+  it('cobra el 3x2 por horario solo al confirmarlo y regala un granizado sin incluir neveras', () => {
+    const s = fixture();
+    const promotion = promo();
+    s.promotions = [promotion];
+    const cooler = s.sizes.find((size) => size.ounces === 0)!;
+    Object.assign(cooler, { active: true, ounces: 96, alcoholPrice: 50000 });
+    const created = run(s, 'create_order', {
+      lines: [
+        { flavorId: ids.flavor, sizeId: s.sizes[3].id, quantity: 1 },
+        { flavorId: ids.flavor, sizeId: s.sizes[2].id, quantity: 1 },
+        { flavorId: ids.flavor, sizeId: s.sizes[1].id, quantity: 1 },
+        { flavorId: ids.flavor, sizeId: s.sizes[0].id, quantity: 3 },
+        { flavorId: ids.flavor, sizeId: cooler.id, quantity: 1 },
+      ],
+    });
+    const pending = created.state.orders[0];
+    expect(pending.total).toBe(151500);
+    expect(run(created.state, 'pay', { orderId: pending.id }).state.orders[0].total).toBe(151500);
+    const payload = { orderId: pending.id, counterPromotionId: promotion.id, expectedTotal: 134500 };
+    const paid = run(created.state, 'pay', payload).state;
+    expect(paid.payments[0].amount).toBe(134500);
+    expect(paid.orders[0].lines.map((line) => line.discount)).toEqual([0, 0, 17000, 0, 0]);
+    expect(paid.promotions[0].redemptions).toBe(1);
+    expect(() =>
+      quoteOrder(
+        s,
+        [pending.lines[0], pending.lines[1], pending.lines[4]],
+        NOW,
+        true,
+        [],
+        undefined,
+        promotion.id,
+      ),
+    ).toThrow(/tres granizados/);
+    expect(() => quoteOrder(s, pending.lines, promotion.endsAt, true, [], undefined, promotion.id)).toThrow(
+      /ya no está disponible/,
+    );
   });
   it('elige el mejor beneficio sin acumular promociones en la misma unidad', () => {
     const s = fixture();
@@ -572,4 +610,17 @@ it('exige el checklist configurado y conserva las tareas que se presentaron', ()
   expect(() => run(state, 'count', payload)).toThrow(/checklist/);
   const result = run(state, 'count', { ...payload, checklist: { 0: true } }).state;
   expect(result.counts[0].checklist).toEqual([{ task: 'Verifiqué el procedimiento del punto', done: true }]);
+});
+
+it('la nevera con licor consume dos coronitas y la de base sin licor no consume', () => {
+  const state = fixture();
+  const cooler = state.sizes.find((size) => size.name === 'Nevera 3 litros')!;
+  Object.assign(cooler, { active: true, ounces: 100, alcoholPrice: 70000, plainPrice: 50000 });
+  const drafted = run(state, 'create_order', {
+    lines: [ids.flavor, ids.plain].map((flavorId) => ({ flavorId, sizeId: cooler.id, quantity: 1 })),
+  });
+  const sold = run(drafted.state, 'pay', { orderId: drafted.result.referenceId, deliver: true }).state;
+  expect(
+    sold.stock.filter((movement) => movement.article === 'coronita').map((movement) => movement.quantity),
+  ).toEqual([-2]);
 });

@@ -10,6 +10,16 @@ export const businessDay = (at: string | Date = new Date()) => dayFormatter.form
 export const addDays = (day: string, count: number) =>
   new Date(Date.parse(`${day}T12:00:00Z`) + count * DAY).toISOString().slice(0, 10);
 
+export function periodStart(day: string, period: string) {
+  if (period === 'week') {
+    const weekday = new Date(`${day}T12:00:00Z`).getUTCDay();
+    return addDays(day, -((weekday + 6) % 7));
+  }
+  if (period === 'fortnight') return `${day.slice(0, 7)}-${day.slice(8) <= '15' ? '01' : '16'}`;
+  if (period === 'month') return `${day.slice(0, 7)}-01`;
+  return day;
+}
+
 export function rangeError({ from, to }: { from: string; to: string }) {
   const valid = (day: string) =>
     /^\d{4}-\d{2}-\d{2}$/.test(day) &&

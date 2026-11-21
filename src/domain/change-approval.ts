@@ -299,7 +299,9 @@ export function applyChangeApproval(
   }
 
   const closingStockAdjustment =
-    command.type === 'approve_closing' && state.stock.length !== candidate.state.stock.length;
+    command.type === 'approve_closing' &&
+    !state.shifts.some((shift) => shift.id === command.payload.shiftId && shift.closingFlow) &&
+    state.stock.length !== candidate.state.stock.length;
   if (!governed && !closingStockAdjustment) return candidate;
   check(
     actor.role === 'admin' && actor.online && command.payload.offline !== true,
@@ -342,7 +344,7 @@ export function applyChangeApproval(
       inventoryDelta,
     },
   });
-  const message = 'Propuesta enviada. Consulta su estado en Registro de cambios.';
+  const message = 'Propuesta enviada. Consulta su estado en Solicitudes.';
   proposal.audit.push({
     ...audit,
     action: 'propose_change',

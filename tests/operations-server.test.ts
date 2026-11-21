@@ -1,3 +1,4 @@
+import { shiftCountArticles } from '../src/domain/engine.ts';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { PgBackend } from './support/backend.ts';
 import { createGateway } from '../src/server/gateway.ts';
@@ -35,7 +36,9 @@ async function execute(type: CommandType, payload: Record<string, unknown>, acto
   const c = cmd(type, payload, actor, {
     branchId,
     configVersion: s.settings[0].version,
-    shiftId: s.shifts.find((shift) => shift.status === 'open')?.id ?? ids.shift,
+    shiftId:
+      s.shifts.find((shift) => shift.status === 'open')?.id ??
+      (type === 'request_shift' ? undefined : ids.shift),
   });
   return (await request('commands', { commands: [c] }, actor)).body.results[0];
 }
@@ -160,8 +163,23 @@ it('verifica transferencias por separado y aplica cambios de medio sin editar el
 });
 
 it('confirma un canje parcial de tres códigos con la venta y preserva el no utilizado en PostgreSQL', async () => {
-  expect((await execute('request_shift', { base: 0 })).status).toBe('accepted');
+  const opening = await execute('request_shift', {}, cashier);
+  expect(opening.status, opening.message).toBe('accepted');
   const state = (await db.load()).state;
+  const shift = state.shifts.find((shift) => shift.id === opening.referenceId)!;
+  const items = Object.fromEntries(shiftCountArticles(state, shift, 'opening').map(({ id }) => [id, 0]));
+  const counted = await execute(
+    'submit_blind_count',
+    {
+      kind: 'opening',
+      shiftId: shift.id,
+      cash: shift.base,
+      items,
+      attempt: 1,
+    },
+    cashier,
+  );
+  expect(counted.status, counted.message).toBe('accepted');
   const proposed = await execute('save_promotion', {
     name: 'Cortesía exacta',
     effect: 'free',
@@ -186,18 +204,30 @@ it('confirma un canje parcial de tres códigos con la venta y preserva el no uti
     ).toBe('accepted');
   const coupons = (await db.load()).state.coupons;
   expect(coupons.every((c) => c.benefit?.sizeIds[0] === state.sizes[0].id)).toBe(true);
-  const created = await execute('create_order', {
-    lines: [{ flavorId: ids.flavor, sizeId: state.sizes[0].id, quantity: 2 }],
-  });
-  const quote = await request('quote', { orderId: created.referenceId, codes: coupons.map((c) => c.code) });
+  const created = await execute(
+    'create_order',
+    {
+      lines: [{ flavorId: ids.flavor, sizeId: state.sizes[0].id, quantity: 2 }],
+    },
+    cashier,
+  );
+  const data = { orderId: created.referenceId, codes: coupons.map((c) => c.code) };
+  expect((await request('quote', data, support)).status).toBe(403);
+  expect((await request('quote', data, admin)).status).toBe(403);
+  expect((await execute('redeem_coupon', { ...data, offline: true }, cashier)).status).toBe('conflict');
+  const quote = await request('quote', data, cashier);
   expect(quote.body).toMatchObject({ total: 0 });
   expect(quote.body.applications).toHaveLength(2);
   expect(quote.body.unusedCodes).toHaveLength(1);
-  const result = await execute('redeem_coupon', {
-    orderId: created.referenceId,
-    codes: coupons.map((c) => c.code),
-    expectedTotal: 0,
-  });
+  const result = await execute(
+    'redeem_coupon',
+    {
+      orderId: created.referenceId,
+      codes: coupons.map((c) => c.code),
+      expectedTotal: 0,
+    },
+    cashier,
+  );
   expect(result.status, JSON.stringify(result)).toBe('accepted');
   const paid = (await db.load()).state;
   expect(paid.coupons.filter((c) => c.status === 'redeemed')).toHaveLength(2);

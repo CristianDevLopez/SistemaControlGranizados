@@ -18,9 +18,10 @@ import {
 import { isNequiAccount, transferAccountName } from './payment-labels.ts';
 import { EvidenceButton } from './Purchasing.tsx';
 
-export function Money() {
+export function Money({ transferId }: { transferId?: string } = {}) {
   const app = useApp();
   const { actor, profiles, state } = app.data!;
+  const transfers = state.transfers.filter((item) => !transferId || item.id === transferId);
   const active = state.shifts.find((shift) => shift.status === 'open');
   const sales = active ? salesByMethod(state, active.id) : undefined;
   const drawer = active ? cashExpected(state, active.id) : openingExpectedCash(state);
@@ -129,62 +130,68 @@ export function Money() {
 
   return (
     <div className="page-stack">
-      <div className="page-toolbar">
-        <h2>Dinero</h2>
-      </div>
-      <Panel title="Saldos por ubicación">
-        {drawer === null && !state.locations.length ? (
-          <Empty title="Sin saldos registrados" />
-        ) : (
-          <div className="stats-grid">
-            {drawer !== null && (
-              <Stat
-                label="Efectivo del turno"
-                value={money(drawer)}
-                note={active ? 'Caja del turno · Según registros' : 'Último saldo físico registrado'}
-              />
-            )}
-            {state.locations.map((location) => (
-              <Stat
-                key={location.id}
-                label={`Saldo en ${location.type === 'bank' ? transferAccountName(location) : location.name}`}
-                value={money(locationBalance(state, location.id))}
-                note={`Custodia de ${byName(location.custodianId)}${location.active ? '' : ' · Inactiva'}`}
-              />
-            ))}
-            {sales && (
-              <Stat
-                label="Cobrado por transferencia en el turno"
-                value={money(sales.transfer)}
-                note={Object.entries(sales.byAccount)
-                  .map(([id, amount]) => `${locationName(id)}: ${money(amount)}`)
-                  .join(' · ')}
-              />
-            )}
+      {!transferId && (
+        <>
+          <div className="page-toolbar">
+            <h2>Dinero</h2>
           </div>
-        )}
-      </Panel>
+          <Panel title="Saldos por ubicación">
+            {drawer === null && !state.locations.length ? (
+              <Empty title="Sin saldos registrados" />
+            ) : (
+              <div className="stats-grid">
+                {drawer !== null && (
+                  <Stat
+                    label="Efectivo del turno"
+                    value={money(drawer)}
+                    note={active ? 'Caja del turno · Según registros' : 'Último saldo físico registrado'}
+                  />
+                )}
+                {state.locations.map((location) => (
+                  <Stat
+                    key={location.id}
+                    label={`Saldo en ${location.type === 'bank' ? transferAccountName(location) : location.name}`}
+                    value={money(locationBalance(state, location.id))}
+                    note={`Custodia de ${byName(location.custodianId)}${location.active ? '' : ' · Inactiva'}`}
+                  />
+                ))}
+                {sales && (
+                  <Stat
+                    label="Cobrado por transferencia en el turno"
+                    value={money(sales.transfer)}
+                    note={Object.entries(sales.byAccount)
+                      .map(([id, amount]) => `${locationName(id)}: ${money(amount)}`)
+                      .join(' · ')}
+                  />
+                )}
+              </div>
+            )}
+          </Panel>
+        </>
+      )}
       <Panel
         title="Entregas, retiros y consignaciones"
         action={
-          <div className="button-row">
-            {!!nequi.length && !!physical.length && (
-              <button className="button secondary" disabled={!app.online} onClick={() => newMovement(true)}>
-                Retiro de Nequi a efectivo
+          !transferId && (
+            <div className="button-row">
+              {!!nequi.length && !!physical.length && (
+                <button className="button secondary" disabled={!app.online} onClick={() => newMovement(true)}>
+                  Retiro de Nequi a efectivo
+                </button>
+              )}
+              <button
+                className="button secondary"
+                disabled={!app.online || !locations.length}
+                onClick={() => newMovement(false)}
+              >
+                <Plus size={16} />
+                Nuevo movimiento
               </button>
-            )}
-            <button
-              className="button secondary"
-              disabled={!app.online || !locations.length}
-              onClick={() => newMovement(false)}
-            >
-              <Plus size={16} />
-              Nuevo movimiento
-            </button>
-          </div>
+            </div>
+          )
         }
       >
-        {state.transfers.length ? (
+        {transfers.length ? (
           <div className="table-wrap">
             <table>
               <thead>
@@ -198,7 +205,7 @@ export function Money() {
                 </tr>
               </thead>
               <tbody>
-                {[...state.transfers]
+                {transfers
                   .sort((a, b) => b.at.localeCompare(a.at))
                   .map((transfer) => (
                     <tr key={transfer.id}>
@@ -218,13 +225,18 @@ export function Money() {
                       <td>
                         {locationName(transfer.from)} → {locationName(transfer.to)}
                       </td>
-                      <td>{money(transfer.amount)}</td>
+                      <td>{transfer.blindReceipt ? 'Conteo a ciegas' : money(transfer.amount)}</td>
                       <td>
                         <small>Solicitó: {byName(transfer.by)}</small>
                         {transfer.executedBy && (
                           <small>Registró la entrega: {byName(transfer.executedBy)}</small>
                         )}
-                        <small>Recibe: {byName(transfer.recipientId)}</small>
+                        {transfer.status === 'in_transit' && (
+                          <small>A cargo de {byName(transfer.executedBy ?? transfer.by)}</small>
+                        )}
+                        <small>
+                          {transfer.confirmedBy ? 'Recibió' : 'Recibe'} {byName(transfer.recipientId)}
+                        </small>
                         {transfer.cancellation && (
                           <small>Motivo de anulación: {transfer.cancellation.notes}</small>
                         )}
@@ -247,7 +259,9 @@ export function Money() {
                       </td>
                       <td>
                         <div className="table-actions">
-                          {transfer.evidenceId && <EvidenceButton id={transfer.evidenceId} />}
+                          {transfer.evidenceId && !transfer.blindReceipt && (
+                            <EvidenceButton id={transfer.evidenceId} />
+                          )}
                           {transfer.status === 'requested' &&
                             transfer.type !== 'transfer' &&
                             !transfer.votes.includes(actor.id) && (
@@ -391,74 +405,78 @@ export function Money() {
           <Empty title="Sin movimientos registrados" />
         )}
       </Panel>
-      <Panel title="Origen de compras y gastos">
-        {outlays.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Concepto</th>
-                  <th>Pagado con</th>
-                  <th>Valor</th>
-                  <th>Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {outlays.map((outlay) => (
-                  <tr key={outlay.id}>
-                    <td>
-                      <strong>
-                        {outlay.title} · {outlay.supplier}
-                      </strong>
-                      <small>{date(outlay.at)}</small>
-                    </td>
-                    <td>{outlay.payer}</td>
-                    <td>{money(outlay.amount)}</td>
-                    <td>
-                      {outlay.status && stateNames[outlay.status]}
-                      {outlay.evidenceId && <EvidenceButton id={outlay.evidenceId} />}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty title="Sin compras ni gastos registrados" />
-        )}
-      </Panel>
-      <Panel title="Utilidades retiradas por socio">
-        {profits.size ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Socio</th>
-                  <th>Total recibido</th>
-                  <th>Destino de los retiros confirmados</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...profits].map(([beneficiary, destinations]) => (
-                  <tr key={beneficiary}>
-                    <td>{byName(beneficiary)}</td>
-                    <td>{money([...destinations.values()].reduce((sum, amount) => sum + amount, 0))}</td>
-                    <td>
-                      {[...destinations].map(([destination, amount]) => (
-                        <small key={destination}>
-                          {locationName(destination)} · {money(amount)}
-                        </small>
-                      ))}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty title="Sin retiros de utilidad confirmados" />
-        )}
-      </Panel>
+      {!transferId && (
+        <>
+          <Panel title="Origen de compras y gastos">
+            {outlays.length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Concepto</th>
+                      <th>Pagado con</th>
+                      <th>Valor</th>
+                      <th>Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {outlays.map((outlay) => (
+                      <tr key={outlay.id}>
+                        <td>
+                          <strong>
+                            {outlay.title} · {outlay.supplier}
+                          </strong>
+                          <small>{date(outlay.at)}</small>
+                        </td>
+                        <td>{outlay.payer}</td>
+                        <td>{money(outlay.amount)}</td>
+                        <td>
+                          {outlay.status && stateNames[outlay.status]}
+                          {outlay.evidenceId && <EvidenceButton id={outlay.evidenceId} />}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty title="Sin compras ni gastos registrados" />
+            )}
+          </Panel>
+          <Panel title="Utilidades retiradas por socio">
+            {profits.size ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Socio</th>
+                      <th>Total recibido</th>
+                      <th>Destino de los retiros confirmados</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...profits].map(([beneficiary, destinations]) => (
+                      <tr key={beneficiary}>
+                        <td>{byName(beneficiary)}</td>
+                        <td>{money([...destinations.values()].reduce((sum, amount) => sum + amount, 0))}</td>
+                        <td>
+                          {[...destinations].map(([destination, amount]) => (
+                            <small key={destination}>
+                              {locationName(destination)} · {money(amount)}
+                            </small>
+                          ))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty title="Sin retiros de utilidad confirmados" />
+            )}
+          </Panel>
+        </>
+      )}
       {form && (
         <Modal title={form.title} onClose={() => setForm(null)}>
           <FieldsForm

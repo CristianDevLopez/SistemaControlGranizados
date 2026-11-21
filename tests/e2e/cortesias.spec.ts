@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { admin, cmd } from '../support/fixture.ts';
+import { admin, cmd, countedItems, fixture } from '../support/fixture.ts';
 
 async function nav(page: Page, name: string) {
   const menu = page.getByRole('button', { name: 'Abrir menú', exact: true });
@@ -29,7 +29,28 @@ test('el administrador emite y canjea la cortesía de un vaso combinado completo
       ],
     },
   });
-  expect((await opened.json()).results[0].status).toBe('accepted');
+  const opening = (await opened.json()).results[0];
+  expect(opening.status).toBe('accepted');
+  const counted = await request.post('http://127.0.0.1:5180/dexter/commands', {
+    headers,
+    data: {
+      commands: [
+        cmd(
+          'submit_blind_count',
+          {
+            kind: 'opening',
+            shiftId: opening.referenceId,
+            attempt: 1,
+            cash: 0,
+            items: countedItems(fixture()),
+          },
+          admin,
+          { at: new Date().toISOString(), shiftId: opening.referenceId },
+        ),
+      ],
+    },
+  });
+  expect((await counted.json()).results[0].status).toBe('accepted');
   await page.goto('/');
   await page.getByRole('button', { name: 'Administrador', exact: true }).click();
   await page.getByLabel('Correo electrónico').fill('admin@test.invalid');
@@ -68,9 +89,7 @@ test('el administrador emite y canjea la cortesía de un vaso combinado completo
   await register.getByRole('button').filter({ hasText: 'Sabor de prueba sin licor' }).click();
   await register.getByRole('button', { name: 'Agregar combinado' }).click();
   await expect(register.locator('.cart-total')).toContainText('17.000');
-  await register
-    .getByRole('button', { name: 'Cupón, cortesía, vuelto o entregar después', exact: true })
-    .click();
+  await register.getByRole('button', { name: 'Redimir cupón, cortesía o promoción', exact: true }).click();
   const checkout = register.getByRole('dialog');
   await checkout.getByRole('textbox', { name: 'Código de cupón o cortesía', exact: true }).fill(code);
   await checkout.getByRole('button', { name: 'Validar', exact: true }).click();
@@ -113,9 +132,7 @@ test('el administrador emite y canjea la cortesía de un vaso combinado completo
   await nav(register, 'Mostrador');
   await register.getByRole('button', { name: '16 ONZAS', exact: true }).click();
   await register.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
-  await register
-    .getByRole('button', { name: 'Cupón, cortesía, vuelto o entregar después', exact: true })
-    .click();
+  await register.getByRole('button', { name: 'Redimir cupón, cortesía o promoción', exact: true }).click();
   const reused = register.getByRole('dialog');
   await reused.getByRole('textbox', { name: 'Código de cupón o cortesía', exact: true }).fill(code);
   await reused.getByRole('button', { name: 'Validar', exact: true }).click();

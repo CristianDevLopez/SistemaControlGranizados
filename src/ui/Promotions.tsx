@@ -4,6 +4,7 @@ import { Plus, Ticket, Gift, Download, Share2, CalendarClock, Power, Copy } from
 import { useApp } from '../lib/store.tsx';
 import type { Coupon, Promotion, PromoEffect, State } from '../domain/types.ts';
 import { colombiaMonth } from '../domain/engine.ts';
+import { isCounterThreeForTwo } from '../domain/pricing.ts';
 import { downloadFile } from '../lib/export.ts';
 import {
   Badge,
@@ -29,8 +30,8 @@ const effect = (p: Promotion) =>
 
 export function Promotions() {
   const app = useApp(),
-    { state, actor } = app.data!,
-    [edit, setEdit] = useState<Promotion | null | undefined>(undefined),
+    { state, actor, profiles } = app.data!,
+    [edit, setEdit] = useState<Promotion | 'three-for-two' | null | undefined>(undefined),
     [issue, setIssue] = useState(false),
     [courtesy, setCourtesy] = useState(false),
     [showId, setShowId] = useState<string | null>(null),
@@ -57,6 +58,10 @@ export function Promotions() {
             <Plus size={17} />
             Crear promoción
           </button>
+          <button className="button secondary" onClick={() => setEdit('three-for-two')}>
+            <Plus size={17} />
+            Crear 3x2
+          </button>
         </div>
       </div>
       <div className="promo-grid">
@@ -78,6 +83,9 @@ export function Promotions() {
             <small>
               {date(p.startsAt)} — {date(p.endsAt)}
             </small>
+            {isCounterThreeForTwo(p) && (
+              <small>Validación en caja · Excluye neveras · Una vez por persona</small>
+            )}
             <small>
               {p.redemptions} beneficios aplicados{p.maxRedemptions !== null ? ` de ${p.maxRedemptions}` : ''}
             </small>
@@ -131,6 +139,7 @@ export function Promotions() {
                   <th>Código</th>
                   <th>Beneficio</th>
                   <th>Vence</th>
+                  <th>Generado por</th>
                   <th>Estado</th>
                   <th />
                 </tr>
@@ -152,6 +161,9 @@ export function Promotions() {
                       </small>
                     </td>
                     <td>{date(c.expiresAt)}</td>
+                    <td>
+                      {profiles.find((person) => person.id === c.issuedBy)?.name ?? 'Usuario archivado'}
+                    </td>
                     <td>
                       <Badge
                         tone={
@@ -184,7 +196,13 @@ export function Promotions() {
           />
         )}
       </Panel>
-      {edit !== undefined && <PromotionDialog promotion={edit} onClose={() => setEdit(undefined)} />}
+      {edit !== undefined && (
+        <PromotionDialog
+          promotion={edit === 'three-for-two' ? null : edit}
+          threeForTwo={edit === 'three-for-two'}
+          onClose={() => setEdit(undefined)}
+        />
+      )}
       {courtesy && (
         <CourtesyDialog
           onClose={() => setCourtesy(false)}
@@ -249,7 +267,7 @@ export function Promotions() {
             onSubmit={async (v) => {
               await app.run('request_courtesy_excess', v);
               setExcess(false);
-              app.toast('Otro admin debe revisar la solicitud.');
+              app.toast('Otro administrador puede revisar la propuesta en Solicitudes.');
             }}
           />
         </Modal>
@@ -368,26 +386,41 @@ function CourtesyDialog({ onClose, onIssued }: { onClose: () => void; onIssued: 
     </Modal>
   );
 }
-function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; onClose: () => void }) {
+function PromotionDialog({
+  promotion,
+  threeForTwo,
+  onClose,
+}: {
+  promotion: Promotion | null;
+  threeForTwo: boolean;
+  onClose: () => void;
+}) {
   const app = useApp(),
     { state } = app.data!,
-    [effect, setEffect] = useState<PromoEffect>(promotion?.effect ?? 'fixed'),
+    [effect, setEffect] = useState<PromoEffect>(promotion?.effect ?? (threeForTwo ? 'nxm' : 'fixed')),
     [delivery, setDelivery] = useState(promotion?.delivery ?? 'schedule');
+  const tomorrow = localDateTime(new Date(Date.now() + 86400000)).slice(0, 10);
+  const nextMidnight = localDateTime(new Date(Date.now() + 2 * 86400000)).slice(0, 10);
   const fields: Field[] = [
-    { name: 'name', label: 'Nombre de la promoción', required: true },
+    {
+      name: 'name',
+      label: 'Nombre de la promoción',
+      required: true,
+      value: threeForTwo ? 'Promoción 3x2' : '',
+    },
     {
       name: 'startsAt',
       label: 'Desde (Colombia)',
       type: 'datetime-local',
       required: true,
-      value: localDateTime(),
+      value: threeForTwo ? `${tomorrow}T00:01` : localDateTime(),
     },
     {
       name: 'endsAt',
       label: 'Hasta (Colombia)',
       type: 'datetime-local',
       required: true,
-      value: localDateTime(new Date(Date.now() + 30 * 86400000)),
+      value: threeForTwo ? `${nextMidnight}T00:00` : localDateTime(new Date(Date.now() + 30 * 86400000)),
     },
     { name: 'startTime', label: 'Hora de inicio diaria', type: 'time', required: true, value: '00:00' },
     { name: 'endTime', label: 'Hora de fin diaria', type: 'time', required: true, value: '23:59' },
@@ -499,7 +532,10 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
       }
     : {};
   return (
-    <Modal title={promotion ? 'Editar promoción' : 'Crear promoción'} onClose={onClose}>
+    <Modal
+      title={promotion ? 'Editar promoción' : threeForTwo ? 'Crear promoción 3x2' : 'Crear promoción'}
+      onClose={onClose}
+    >
       <div className="promotion-builder">
         <label className="field">
           <span>Qué cambia</span>
@@ -523,11 +559,14 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
             disabled={effect === 'free'}
             onChange={(e) => setDelivery(e.target.value as 'schedule' | 'coupon')}
           >
-            <option value="schedule">Automática por horario</option>
+            <option value="schedule">Por horario</option>
             <option value="coupon">Con cupón de un solo uso</option>
           </select>
         </label>
       </div>
+      {effect === 'nxm' && delivery === 'schedule' && (
+        <p>El 3x2 por horario requiere validación en caja y excluye las neveras.</p>
+      )}
       <FieldsForm
         key={`${effect}-${delivery}`}
         fields={fields}

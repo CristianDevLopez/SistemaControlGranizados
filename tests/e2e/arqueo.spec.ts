@@ -67,7 +67,7 @@ test('el cierre de empleado conserva el recuento y el servidor responde sin cifr
   expect(cashierSnapshot.state.counts).toEqual([]);
   expect(cashierSnapshot.state.payments).toEqual([]);
   expect(cashierSnapshot.state.shifts[0]).not.toHaveProperty('base');
-  await nav(page, 'Turno');
+  await nav(page, 'Mi turno');
   await page.getByRole('button', { name: 'Cerrar turno', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toContainText('Vasos sueltos del paquete abierto');
@@ -150,7 +150,7 @@ test('el admin selecciona ítems, el cajero cuenta a ciegas y el admin revisa el
   try {
     const cash = await cashierContext.newPage();
     await enterCashier(cash);
-    await nav(cash, 'Turno');
+    await nav(cash, 'Mi turno');
     await expect(cash.getByRole('button', { name: 'Iniciar arqueo sorpresa', exact: true })).toHaveCount(0);
     await cash.getByRole('button', { name: 'Presentar arqueo', exact: true }).click();
     const form = cash.getByRole('dialog');
@@ -171,13 +171,10 @@ test('el admin selecciona ítems, el cajero cuenta a ciegas y el admin revisa el
 
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
-    await nav(page, 'Turno y caja');
-    await page
-      .getByRole('row')
-      .filter({ hasText: 'Arqueo' })
-      .getByRole('button', { name: 'Revisar conteo', exact: true })
-      .click();
-    const review = page.getByRole('dialog');
+    await nav(page, 'Revisar turnos');
+    await page.getByRole('button', { name: /^Ver turno/ }).click();
+    await page.getByRole('button', { name: /^Revisar conteo/ }).click();
+    const review = page.getByRole('dialog', { name: 'Revisión del arqueo sorpresa' });
     await expect(review).toContainText('Contado por Caja de prueba');
     await expect(review).toContainText('Solicitado por Administrador de prueba');
     const cashRow = review
@@ -205,42 +202,48 @@ test('programa una apertura completa y permite proponer un ajuste de inventario 
   await nav(page, 'Turno y caja');
   await page.getByRole('button', { name: 'Programar arqueo de apertura' }).click();
   const dialog = page.getByRole('dialog');
-  const mode = dialog.getByLabel('Tipo de arqueo');
-  await mode.selectOption('custom');
-  await expect(dialog.getByRole('checkbox', { name: /Bolsas ·/ }).first()).toBeVisible();
-  await expect(dialog.getByRole('checkbox', { name: /Líquido ·/ })).toHaveCount(0);
-  await mode.selectOption('full');
   await dialog.getByRole('button', { name: 'Guardar programación' }).click();
-  await expect(page.getByText('Próxima apertura · Arqueo completo')).toBeVisible();
+  await expect(page.getByText('Próxima apertura · Conteo profundo')).toBeVisible();
 
   await page.getByRole('button', { name: 'Iniciar caja', exact: true }).click();
   await dialog.getByLabel('Base inicial', { exact: false }).fill('12.000');
   await dialog.getByRole('button', { name: 'Guardar', exact: true }).click();
-  await expect(dialog.getByRole('heading', { name: 'Arqueo de apertura' })).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Conteo de apertura' })).toBeVisible();
   await expect(dialog.getByRole('spinbutton', { name: /Líquido ·/ })).toHaveCount(0);
   await dialog.getByLabel('Efectivo contado *', { exact: true }).fill('12.000');
   await expect(dialog.getByLabel('Saldo de apertura · Cuenta de prueba *', { exact: true })).toHaveCount(0);
   for (const field of await dialog.getByRole('spinbutton').all()) await field.fill('0');
   await dialog.getByRole('spinbutton', { name: 'Coronitas' }).fill('3');
-  await dialog.getByRole('button', { name: 'Registrar conteo' }).click();
+  await dialog.getByRole('button', { name: 'Enviar conteo' }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.getByRole('button', { name: 'Volver a contar la apertura' }).click();
+  await dialog.getByLabel('Efectivo contado *', { exact: true }).fill('12.000');
+  for (const field of await dialog.getByRole('spinbutton').all()) await field.fill('0');
+  await dialog.getByRole('spinbutton', { name: 'Coronitas' }).fill('3');
+  await dialog.getByRole('button', { name: 'Enviar conteo' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Programar arqueo de apertura' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Cerrar y contar caja' })).toBeVisible();
-
-  await page.getByRole('button', { name: 'Revisar conteo' }).click();
-  await dialog.getByRole('button', { name: 'Ajustar inventario al conteo' }).click();
-  await expect(dialog.getByRole('spinbutton', { name: /Coronitas/ })).toHaveValue('3');
-  await dialog.getByLabel('Motivo del ajuste').fill('Inventario de entrega verificado por los socios.');
-  await dialog.getByLabel('Verifiqué las cantidades físicas actuales').check();
+  await expect(page.getByRole('button', { name: 'Cerrar y contar caja' })).toHaveCount(0);
+  await nav(page, 'Revisar turnos');
+  await page.getByRole('button', { name: /^Ver turno/ }).click();
+  await page
+    .getByRole('button', { name: /^Revisar conteo/ })
+    .last()
+    .click();
+  const adjustment = page.getByRole('dialog').last();
+  await adjustment.getByRole('button', { name: 'Ajustar inventario al conteo' }).click();
+  await expect(adjustment.getByRole('spinbutton', { name: /Coronitas/ })).toHaveValue('3');
+  await adjustment.getByLabel('Motivo del ajuste').fill('Inventario de entrega verificado por los socios.');
+  await adjustment.getByLabel('Verifiqué las cantidades físicas actuales').check();
   const proposalResponse = page.waitForResponse(
     (entry) =>
       entry.url().endsWith('/dexter/commands') &&
       entry.request().postData()?.includes('adjust_count_inventory') === true,
   );
-  await dialog.getByRole('button', { name: 'Proponer ajuste de inventario' }).click();
+  await adjustment.getByRole('button', { name: 'Proponer ajuste de inventario' }).click();
   const proposal = (await (await proposalResponse).json()).results[0];
   expect(proposal.approvalPending).toBe(true);
-  await expect(dialog).not.toContainText('Inventario ajustado por');
+  await expect(adjustment).not.toContainText('Inventario ajustado por');
   const approver = { ...other, deviceId: admin.deviceId };
   const response = await request.post('http://127.0.0.1:5180/dexter/commands', {
     headers: {
@@ -260,9 +263,13 @@ test('programa una apertura completa y permite proponer un ajuste de inventario 
   expect((await response.json()).results[0].status).toBe('accepted');
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
-  await nav(page, 'Turno y caja');
-  await page.getByRole('button', { name: 'Revisar conteo' }).click();
-  await expect(dialog).toContainText('Inventario ajustado por');
-  await expect(dialog.getByRole('row').filter({ hasText: 'Coronitas' })).toContainText('0 unidades');
-  await expect(dialog.getByRole('button', { name: 'Ajustar inventario al conteo' })).toHaveCount(0);
+  await nav(page, 'Revisar turnos');
+  await page.getByRole('button', { name: /^Ver turno/ }).click();
+  await page
+    .getByRole('button', { name: /^Revisar conteo/ })
+    .last()
+    .click();
+  await expect(adjustment).toContainText('Inventario ajustado por');
+  await expect(adjustment.getByRole('row').filter({ hasText: 'Coronitas' })).toContainText('0 unidades');
+  await expect(adjustment.getByRole('button', { name: 'Ajustar inventario al conteo' })).toHaveCount(0);
 });

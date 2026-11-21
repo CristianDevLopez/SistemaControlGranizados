@@ -4,7 +4,7 @@ import { canWork } from '../domain/access.ts';
 import { articles, stockBalances } from '../domain/engine.ts';
 import { operatingShift } from '../domain/employee-view.ts';
 import { DEFAULT_LIQUID_BAG_WINDOW } from '../domain/initial.ts';
-import { inventoryDiscrepancies, inventoryOpenings, liquidBagInventory } from '../domain/inventory.ts';
+import { inventoryOpenings, liquidBagInventory } from '../domain/inventory.ts';
 import type { CommandType, Snapshot } from '../domain/types.ts';
 import { useApp } from '../lib/store.tsx';
 import { Empty, FieldsForm, Modal, Panel, date, type Field } from './components.tsx';
@@ -39,7 +39,6 @@ function AdminInventory({ snapshot, onCorrect }: { snapshot: Snapshot; onCorrect
   const { state, profiles } = snapshot;
   const settings = state.settings[0];
   const liquid = liquidBagInventory(state);
-  const discrepancies = inventoryDiscrepancies(state, liquid);
   const balances = stockBalances(state);
   for (const row of liquid) balances[`liquid:${row.flavorId}`] = row.remaining;
   const openings = inventoryOpenings(state);
@@ -51,37 +50,6 @@ function AdminInventory({ snapshot, onCorrect }: { snapshot: Snapshot; onCorrect
 
   return (
     <>
-      <Panel title="Lo que no cuadra" className="inventory-discrepancies">
-        <p>Consulta diferencias de líquido y vasos sueltos para orientar el próximo conteo.</p>
-        {discrepancies.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Artículo</th>
-                  <th>Diferencia</th>
-                  <th>Qué revisar</th>
-                </tr>
-              </thead>
-              <tbody>
-                {discrepancies.map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      <strong>{row.article}</strong>
-                    </td>
-                    <td className={row.amount < 0 ? 'negative' : ''}>
-                      {signed.format(row.amount)} {row.unit}
-                    </td>
-                    <td>{row.explanation}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty title="Sin diferencias detectadas" />
-        )}
-      </Panel>
       <InventoryTable
         title="Saldos de inventario"
         description="Consulta las existencias teóricas por artículo."
@@ -259,15 +227,6 @@ export function Inventory() {
             .map((size) => ({ value: size.id, label: size.name })),
         },
         {
-          name: 'units',
-          label: 'Unidades del paquete',
-          type: 'number',
-          value: state.settings[0].cupPackageUnits,
-          min: 1,
-          max: 1000,
-          required: true,
-        },
-        {
           name: 'confirmEmpty',
           label: 'Confirmo que cualquier paquete anterior de este tamaño está vacío',
           type: 'checkbox',
@@ -286,16 +245,6 @@ export function Inventory() {
           type: 'select',
           required: true,
           options: state.flavors.map((flavor) => ({ value: flavor.id, label: flavor.name })),
-        },
-        {
-          name: 'ounces',
-          label: 'Onzas de la bolsa',
-          type: 'number',
-          value: state.settings[0].bagOunces,
-          step: '0.000001',
-          min: 0.000001,
-          max: 10000,
-          required: true,
         },
       ],
     });

@@ -10,7 +10,9 @@ import {
 import { admin, cashier, cmd, fixture, ids, other, run, order, NOW } from './support/fixture.ts';
 
 it('completa la bolsa anterior al abrir otra del mismo sabor y separa las degustaciones', () => {
-  let state = run(fixture(), 'open_bag', { flavorId: ids.flavor, ounces: 100 }).state;
+  const initial = fixture();
+  initial.settings[0].bagOunces = 100;
+  let state = run(initial, 'open_bag', { flavorId: ids.flavor, ounces: 200 }).state;
   state = run(state, 'open_bag', { flavorId: ids.plain, ounces: 100 }).state;
   state = run(state, 'taste', { flavorId: ids.flavor }).state;
   const created = order(state);
@@ -37,7 +39,9 @@ it('completa la bolsa anterior al abrir otra del mismo sabor y separa las degust
 });
 
 it('señala el saldo negativo del sabor al servir más de su bolsa en uso', () => {
-  const opened = run(fixture(), 'open_bag', { flavorId: ids.flavor, ounces: 6 }).state;
+  const initial = fixture();
+  initial.settings[0].bagOunces = 6;
+  const opened = run(initial, 'open_bag', { flavorId: ids.flavor }).state;
   const created = order(opened);
   const state = run(created.state, 'pay', { orderId: created.order.id, deliver: true }).state;
   expect(inventoryDiscrepancies(state)).toContainEqual(
@@ -76,7 +80,9 @@ it('acumula solo la ventana configurada y avisa por dos bolsas con poco consumo'
 });
 
 it('conserva el saldo de la última bolsa abierta al ordenar el archivo del ensayo', () => {
-  const state = run(fixture(), 'open_bag', { flavorId: ids.flavor, ounces: 100 }).state;
+  const initial = fixture();
+  initial.settings[0].bagOunces = 100;
+  const state = run(initial, 'open_bag', { flavorId: ids.flavor }).state;
   state.settings[0].rehearsalBaseline = {
     countId: crypto.randomUUID(),
     at: '2026-10-24T05:00:00Z',
@@ -88,7 +94,9 @@ it('conserva el saldo de la última bolsa abierta al ordenar el archivo del ensa
 });
 
 it('calcula las diferencias de ayer con las bolsas y el consumo de ese corte', () => {
-  const state = run(fixture(), 'open_bag', { flavorId: ids.flavor, ounces: 100 }).state;
+  const initial = fixture();
+  initial.settings[0].bagOunces = 100;
+  const state = run(initial, 'open_bag', { flavorId: ids.flavor }).state;
   served(state, NOW, 106);
   const today = '2026-10-24T07:00:00.000Z';
   const yesterdayEnd = '2026-10-24T04:59:59.999Z';
