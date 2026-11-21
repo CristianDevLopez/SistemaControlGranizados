@@ -12,7 +12,7 @@ import type { Count, Shift, Size, State } from './types.ts';
 
 export function shiftTransfers(state: State, shift: Shift) {
   return currentPayments(state.payments).filter(
-    (payment) => payment.shiftId === shift.id && paymentMethod(payment) === 'transfer',
+    (payment) => payment.shiftId === shift.id && paymentMethod(payment) === 'transfer' && payment.amount > 0,
   );
 }
 
@@ -21,7 +21,8 @@ export function reviewCounts(state: State, shift: Shift, archived = false) {
     .filter(
       (count) =>
         count.shiftId === shift.id &&
-        (count.kind === 'opening' ||
+        (count.kind === 'audit' ||
+          count.kind === 'opening' ||
           count.kind === 'closing' ||
           shift.blindOpening?.auditCountIds?.includes(count.id)) &&
         (archived || !inRehearsalPeriod(state, count.at)),
@@ -31,8 +32,34 @@ export function reviewCounts(state: State, shift: Shift, archived = false) {
 
 export function reviewIsPending(state: State, shift: Shift) {
   if (shift.closingArchive || rehearsalShift(state, shift)) return false;
+  if (
+    shift.closingFlow &&
+    (shift.closingReview?.status !== 'approved' ||
+      (shift.closingFlow.responseDueAt && !shift.closingFlow.response))
+  )
+    return true;
   if (['review', 'audit', 'authorized'].includes(shift.blindOpening?.status ?? '')) return true;
   if (legacyOpeningNeedsReview(state, shift) || closingNeedsReview(state, shift)) return true;
+  const counts = reviewCounts(state, shift);
+  if (
+    counts.some(
+      (count) =>
+        count.kind === 'audit' &&
+        countHasDifferences(count) &&
+        !shift.operationsReview?.countResolutions?.[count.id],
+    )
+  )
+    return true;
+  if (
+    state.requests.some(
+      (request) =>
+        request.type === 'difference' &&
+        request.status === 'pending' &&
+        !inRehearsalPeriod(state, request.at) &&
+        counts.some((count) => count.id === request.referenceId),
+    )
+  )
+    return true;
   return (
     shiftTransfers(state, shift).some(
       (payment) => !shift.operationsReview?.verifiedTransfers?.[payment.id],
@@ -63,7 +90,8 @@ export function closingNeedsReview(state: State, shift: Shift) {
 }
 
 export function reconciledCount(state: State, shift: Shift, count: Count) {
-  if (count.kind !== 'closing' || inRehearsalPeriod(state, count.at)) return count;
+  if (shift.blindOpening?.depth || count.kind !== 'closing' || inRehearsalPeriod(state, count.at))
+    return count;
   const at = count.cutoffAt ?? count.at;
   const balances = stockBalances(state, at);
   const expected = count.blindAttempt
@@ -118,16 +146,18 @@ export function shiftSales(state: State, shift: Shift) {
   );
   const ouncesByFlavor = new Map<string, number>();
   const cupsBySize = new Map<string, number>();
+  const unitsBySize = new Map<string, number>();
   for (const line of orders.flatMap((order) => order.lines)) {
     const size = state.sizes.find((item) => item.id === line.sizeId);
     const ounces = (line.recipe?.ounces ?? size?.ounces ?? 0) * line.quantity;
     for (const part of liquidPortions(line, ounces)) {
       ouncesByFlavor.set(part.flavorId, (ouncesByFlavor.get(part.flavorId) ?? 0) + part.ounces);
     }
+    unitsBySize.set(line.sizeId, (unitsBySize.get(line.sizeId) ?? 0) + line.quantity);
     cupsBySize.set(
       line.sizeId,
       (cupsBySize.get(line.sizeId) ?? 0) + (line.recipe?.cups ?? size?.cups ?? 0) * line.quantity,
     );
   }
-  return { orders, ouncesByFlavor, cupsBySize };
+  return { orders, ouncesByFlavor, cupsBySize, unitsBySize };
 }

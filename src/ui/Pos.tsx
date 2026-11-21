@@ -15,15 +15,21 @@ import {
 import { useApp } from '../lib/store.tsx';
 import { api } from '../lib/api.ts';
 import { getMeta, setMeta } from '../lib/db.ts';
-import { lineTotal } from '../domain/pricing.ts';
-import { additionsTotal, candyAdditions, type CandyAddition } from '../domain/additions.ts';
+import {
+  counterThreeForTwoPromotions,
+  counterThreeForTwoQuantity,
+  isCounterThreeForTwo,
+  lineTotal,
+  quoteOrder,
+} from '../domain/pricing.ts';
+import { additionsTotal, configuredAdditions, type CandyAddition } from '../domain/additions.ts';
 import { hasAlcohol, sameFlavors } from '../domain/flavors.ts';
 import { FlavorPortions, flavorName, portionLabel } from './FlavorDetails.tsx';
 import { canWork, hasPermission, isShiftCashier, shiftBlocksSales } from '../domain/access.ts';
 import { operatingShift } from '../domain/employee-view.ts';
 import { FlavorImage } from './FlavorImage.tsx';
 import type { MoneyLocation, Order, OrderLine, State } from '../domain/types.ts';
-import { paymentMethod, cupBalances } from '../domain/engine.ts';
+import { paymentMethod, cupBalances, quotePayment } from '../domain/engine.ts';
 import { Badge, Empty, FieldsForm, Modal, MoneyInput, money, date, stateNames } from './components.tsx';
 import { parseMoney } from '../lib/money.ts';
 import { isNequiAccount, paymentNote, paymentOptionLabel, transferAccountName } from './payment-labels.ts';
@@ -156,16 +162,20 @@ export function Scanner({ onCode, onClose }: { onCode: (code: string) => void; o
 function Checkout({
   order,
   initialPayment,
+  focusCoupon,
+  threeForTwoId,
   onClose,
   onDone,
 }: {
   order: Order;
   initialPayment: PaymentChoice;
+  focusCoupon: boolean;
+  threeForTwoId?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
   const app = useApp(),
-    { state, actor } = app.data!,
+    { state } = app.data!,
     refund = (order.paymentCredit ?? 0) > order.total,
     // Si hay que devolver dinero, se propone el mismo medio con el que se pagó la venta anulada.
     original = refund
@@ -182,6 +192,7 @@ function Checkout({
     ),
     [code, setCode] = useState(''),
     [codes, setCodes] = useState<string[]>([]),
+    [counterPromotionId, setCounterPromotionId] = useState<string>(),
     [unusedCodes, setUnusedCodes] = useState<string[]>([]),
     [applications, setApplications] = useState<
       { code: string; lineId: string; quantity: number; unitAmount: number }[]
@@ -194,24 +205,41 @@ function Checkout({
     [deliver, setDeliver] = useState(true),
     [tendered, setTendered] = useState(''),
     [refundPhoto, setRefundPhoto] = useState<File | null>(null);
-  const validate = async (value = code) => {
+  const refreshQuote = async (all: string[], promotionId?: string) => {
     setBusy(true);
     setError('');
     try {
-      const all = [...new Set([...codes, value.trim().toUpperCase()].filter(Boolean))];
-      await app.sync();
-      const quote = await api('quote', { orderId: order.id, codes: all });
+      let quote;
+      if (app.online) {
+        await app.sync();
+        quote = await api('quote', { orderId: order.id, codes: all, counterPromotionId: promotionId });
+      } else {
+        quote = quotePayment(state, order, new Date().toISOString(), false, all, promotionId);
+      }
       setTotal(quote.total);
       setQuotedLines(quote.lines);
       setCodes(all);
       setUnusedCodes(quote.unusedCodes ?? []);
       setApplications(quote.applications ?? []);
-      setCode('');
-      app.toast('Beneficios verificados. Solo se consumen los aplicados al confirmar el cobro.');
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     } finally {
       setBusy(false);
+    }
+  };
+  const toggleThreeForTwo = async (checked: boolean) => {
+    const previous = counterPromotionId;
+    const next = checked ? threeForTwoId : undefined;
+    setCounterPromotionId(next);
+    if (!(await refreshQuote(codes, next))) setCounterPromotionId(previous);
+  };
+  const validate = async (value = code) => {
+    const all = [...new Set([...codes, value.trim().toUpperCase()].filter(Boolean))];
+    if (await refreshQuote(all, counterPromotionId)) {
+      setCode('');
+      app.toast('Beneficios verificados. Solo se consumen los aplicados al confirmar el cobro.');
     }
   };
   const due = total - (order.paymentCredit ?? 0);
@@ -236,16 +264,36 @@ function Checkout({
             </span>
           )}
         </div>
-        {actor.role === 'admin' && (
+        {(threeForTwoId || counterPromotionId) && (
+          <div className="notice info">
+            <div>
+              <label className="check-inline">
+                <input
+                  type="checkbox"
+                  checked={!!counterPromotionId}
+                  disabled={busy}
+                  aria-describedby="three-for-two-confirmation"
+                  onChange={(e) => void toggleThreeForTwo(e.target.checked)}
+                />
+                Aplicar descuento 3x2
+              </label>
+              <small id="three-for-two-confirmation">
+                Confirma que la persona nos sigue, compartió la publicación y aún no ha usado la promoción.
+              </small>
+            </div>
+          </div>
+        )}
+        {order.paymentCredit === undefined && !order.carriedCouponFromId && (
           <div className="coupon-entry">
             <label>
-              Cupón o cortesía <small>Requiere conexión</small>
+              Código de beneficio <small>Requiere conexión</small>
               <div className="input-action">
                 <input
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
                   placeholder="Escribir código"
                   aria-label="Código de cupón o cortesía"
+                  autoFocus={focusCoupon}
                   disabled={!app.online}
                 />
                 <button
@@ -301,6 +349,7 @@ function Checkout({
                   setUnusedCodes([]);
                   setApplications([]);
                   setTotal(order.total);
+                  setQuotedLines(order.lines);
                 }}
               >
                 Quitar cupones y revisar de nuevo
@@ -362,21 +411,26 @@ function Checkout({
         )}
         <button
           className="button primary full large"
-          disabled={busy || (due < 0 && !refundPhoto) || !!code}
+          disabled={busy || (due < 0 && !refundPhoto) || !!code || (codes.length > 0 && !app.online)}
           onClick={async () => {
             setBusy(true);
             setError('');
             try {
               const refundEvidenceId = refundPhoto ? await app.photo(refundPhoto) : undefined;
-              await app.run(codes.length ? 'redeem_coupon' : 'pay', {
-                orderId: order.id,
-                expectedVersion: order.version,
-                expectedTotal: total,
-                codes,
-                deliver,
-                refundEvidenceId,
-                ...paymentPayload(payment),
-              });
+              await app.run(
+                codes.length ? 'redeem_coupon' : 'pay',
+                {
+                  orderId: order.id,
+                  expectedVersion: order.version,
+                  expectedTotal: total,
+                  codes,
+                  counterPromotionId,
+                  deliver,
+                  refundEvidenceId,
+                  ...paymentPayload(payment),
+                },
+                { onlineOnly: !!counterPromotionId && app.online },
+              );
               app.toast(
                 isFreeCourtesy
                   ? 'Cortesía registrada · $0'
@@ -414,17 +468,27 @@ export function Pos() {
     [orderId, setOrderId] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
-    [checkout, setCheckout] = useState(false),
+    [checkout, setCheckout] = useState<'payment' | 'benefit' | null>(null),
     [packageSize, setPackageSize] = useState<string | null>(null),
     [showOrders, setShowOrders] = useState(false),
     [mixing, setMixing] = useState(false),
     [mixFlavors, setMixFlavors] = useState<string[]>([]),
     [flavorGroup, setFlavorGroup] = useState('all'),
+    [promotionTime, setPromotionTime] = useState(() => new Date().toISOString()),
     [payment, setPayment] = useState<PaymentChoice>(CASH);
   const active = operatingShift(state),
-    order = state.orders.find((x) => x.id === orderId && x.status === 'open'),
+    storedOrder = state.orders.find((x) => x.id === orderId && x.status === 'open'),
     size = state.sizes.find((x) => x.id === sizeId),
     open = state.orders.filter((x) => x.status === 'open');
+  const legacyQuote = storedOrder?.lines.some((line) =>
+    line.appliedRules?.some((rule) => isCounterThreeForTwo(rule.promotion)),
+  )
+    ? quoteOrder(state, storedOrder.lines, promotionTime, app.online, [], storedOrder.additions)
+    : undefined;
+  const order =
+    storedOrder && legacyQuote
+      ? { ...storedOrder, lines: legacyQuote.lines, total: legacyQuote.total }
+      : storedOrder;
   const canCash =
     hasPermission(actor, 'payments') &&
     !!active &&
@@ -433,9 +497,22 @@ export function Pos() {
   const canOrders = canWork(actor, state, 'orders', order?.shiftId);
   const canDeliver = canWork(actor, state, 'deliveries', order?.shiftId);
   const canCancel = !!order && !order.replacesId && !order.lines.some((line) => line.delivered > 0);
+  const threeForTwoPromotions = counterThreeForTwoPromotions(state, promotionTime);
+  const threeForTwoId =
+    order && order.paymentCredit === undefined && !order.replacesId && !order.carriedCouponFromId
+      ? threeForTwoPromotions.find(
+          (p) =>
+            (app.online || p.maxRedemptions === null) &&
+            counterThreeForTwoQuantity(p, order.lines, state) >= 3,
+        )?.id
+      : undefined;
   const mixPrice = hasAlcohol({ flavorId: mixFlavors[0], flavorIds: mixFlavors }, state.flavors)
     ? size?.alcoholPrice
     : size?.plainPrice;
+  useEffect(() => {
+    const timer = setInterval(() => setPromotionTime(new Date().toISOString()), 1000);
+    return () => clearInterval(timer);
+  }, []);
   useEffect(() => {
     void getMeta<string>(`active-order:${actor.branchId ?? 'legacy'}`).then((key) => {
       if (key) setOrderId(key);
@@ -544,6 +621,14 @@ export function Pos() {
           {active ? date(active.openedAt) : 'Caja única'}
         </div>
       </div>
+      {threeForTwoPromotions.length > 0 && (
+        <div className="notice info" role="status">
+          <span>
+            <strong>Hay promoción de 3x2.</strong> Paga los dos granizados más caros. No aplica para neveras.
+            Una vez por persona.
+          </span>
+        </div>
+      )}
       {state.settings[0].auditId && (
         <div className="notice warning">
           {state.settings[0].auditRequest?.opening
@@ -860,7 +945,7 @@ export function Pos() {
                     <summary>
                       Adiciones{order.additions?.length ? ` · ${money(additionsTotal(order.additions))}` : ''}
                     </summary>
-                    {candyAdditions.map((addition) => {
+                    {configuredAdditions(state.settings[0].candyPrices).map((addition) => {
                       const quantity =
                         order.additions?.find((item) => item.id === addition.id)?.quantity ?? 0;
                       return (
@@ -911,7 +996,11 @@ export function Pos() {
                     <button
                       className="button primary full large"
                       disabled={busy || !!state.settings[0].auditId}
-                      onClick={() =>
+                      onClick={() => {
+                        if (threeForTwoId) {
+                          setCheckout('payment');
+                          return;
+                        }
                         void action(async () => {
                           await app.run('pay', {
                             orderId: order.id,
@@ -924,18 +1013,29 @@ export function Pos() {
                             `Venta registrada · ${money(order.total)}${paymentNote(payment, state.locations)}`,
                           );
                           select(null);
-                        })
-                      }
+                        });
+                      }}
                     >
                       <Check size={20} />
-                      Cobrar y entregar
+                      {threeForTwoId ? 'Revisar cobro' : 'Cobrar y entregar'}
                       <ArrowRight size={18} />
                     </button>
-                    <button className="text-button full" disabled={busy} onClick={() => setCheckout(true)}>
-                      <Ticket size={15} />
-                      {actor.role === 'admin'
-                        ? 'Cupón, cortesía, vuelto o entregar después'
-                        : 'Vuelto o entregar después'}
+                    {order.paymentCredit === undefined && !order.carriedCouponFromId && (
+                      <button
+                        className="button secondary full redeem-benefit"
+                        disabled={busy || !app.online || !!state.settings[0].auditId}
+                        onClick={() => setCheckout('benefit')}
+                      >
+                        <Ticket size={15} />
+                        Redimir cupón, cortesía o promoción
+                      </button>
+                    )}
+                    <button
+                      className="text-button full"
+                      disabled={busy || !!state.settings[0].auditId}
+                      onClick={() => setCheckout('payment')}
+                    >
+                      Vuelto o entregar después
                     </button>
                   </>
                 ) : order.lines.length > 0 ? (
@@ -1009,11 +1109,14 @@ export function Pos() {
       </div>
       {checkout && order && (
         <Checkout
+          key={`${order.id}:${order.version}`}
           order={order}
           initialPayment={payment}
-          onClose={() => setCheckout(false)}
+          focusCoupon={checkout === 'benefit'}
+          threeForTwoId={threeForTwoId}
+          onClose={() => setCheckout(null)}
           onDone={() => {
-            setCheckout(false);
+            setCheckout(null);
             select(null);
           }}
         />
@@ -1022,19 +1125,10 @@ export function Pos() {
         <Modal title="Abrir paquete de vasos" onClose={() => setPackageSize(null)}>
           <p>
             Registra el paquete de {state.sizes.find((s) => s.id === packageSize)?.name} que estás usando.
+            Contiene {state.settings[0].cupPackageUnits} vasos.
           </p>
           <FieldsForm
             fields={[
-              {
-                name: 'units',
-                label: 'Unidades del paquete',
-                type: 'number',
-                value: state.settings[0].cupPackageUnits,
-                min: 1,
-                max: 1000,
-                step: '1',
-                required: true,
-              },
               ...(state.packages.some((p) => p.sizeId === packageSize && !p.closedAt)
                 ? [
                     {

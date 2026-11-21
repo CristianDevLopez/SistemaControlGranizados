@@ -23,7 +23,7 @@ export function AuditSetupDialog({ shift, onClose }: { shift?: Shift; onClose: (
     { state, profiles, actor } = app.data!;
   const schedule = shift ? undefined : state.settings[0].nextOpeningAudit;
   const methods = shift?.cashierId === actor.id ? closingPaymentMethods(state, shift.id) : [];
-  const [mode, setMode] = useState<AuditMode>(schedule?.mode ?? (shift ? 'custom' : 'full'));
+  const [mode, setMode] = useState<AuditMode>(shift ? 'custom' : 'full');
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   return (
@@ -31,7 +31,7 @@ export function AuditSetupDialog({ shift, onClose }: { shift?: Shift; onClose: (
       <p className="modal-intro">
         {shift
           ? `Se pausará la operación hasta que ${profiles.find((x) => x.id === shift.cashierId)?.name ?? 'el responsable del turno'} presente el conteo.`
-          : 'Se aplicará una sola vez en la próxima apertura de este local. Para comenzar a operar, el responsable debe presentar el conteo con conexión.'}
+          : 'La próxima apertura de este local contará efectivo, paquetes de vasos, vasos sueltos, bolsas selladas, neveras y coronitas.'}
       </p>
       <form
         className="fields-form"
@@ -64,23 +64,25 @@ export function AuditSetupDialog({ shift, onClose }: { shift?: Shift; onClose: (
           }
         }}
       >
-        <label className="field">
-          <span>Tipo de arqueo</span>
-          <select value={mode} onChange={(event) => setMode(event.target.value as AuditMode)}>
-            {Object.entries(auditModeLabels).map(([value, label]) => (
-              <option value={value} key={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-          {mode === 'full' && (
-            <small>
-              Incluye efectivo, bolsas selladas, paquetes de vasos, vasos sueltos y coronas.
-              {!!methods.length && ' Incluye las transferencias del turno.'}
-            </small>
-          )}
-        </label>
-        {mode === 'custom' && (
+        {shift && (
+          <label className="field">
+            <span>Tipo de arqueo</span>
+            <select value={mode} onChange={(event) => setMode(event.target.value as AuditMode)}>
+              {Object.entries(auditModeLabels).map(([value, label]) => (
+                <option value={value} key={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            {mode === 'full' && (
+              <small>
+                Incluye efectivo, bolsas selladas, paquetes de vasos, vasos sueltos y coronas.
+                {!!methods.length && ' Incluye las transferencias del turno.'}
+              </small>
+            )}
+          </label>
+        )}
+        {shift && mode === 'custom' && (
           <>
             <fieldset>
               <legend>Dinero</legend>

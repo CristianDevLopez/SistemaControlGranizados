@@ -59,7 +59,8 @@ export function ClosingComparison({
         <tbody>
           {rows.map((row) => {
             const difference = row.counted - row.expected;
-            const format = (value: number) => (row.monetary ? money(value) : `${value} vasos`);
+            const format = (value: number) =>
+              row.monetary ? money(value) : row.key.startsWith('cup:') ? `${value} vasos` : String(value);
             return (
               <tr key={row.key}>
                 <td>{row.name}</td>
@@ -150,8 +151,8 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
     <Modal title="Revisar y aprobar cierre" onClose={onClose}>
       <p className="modal-intro">
         Presentado por {profiles.find((p) => p.id === count.by)?.name} · {date(count.at)}. Reconfirma el
-        conteo al momento del cierre. El original se conserva. Al aprobar, las diferencias de vasos ajustan el
-        inventario.
+        conteo al momento del cierre. El original se conserva. Al aprobar, las diferencias de los artículos
+        contados ajustan el inventario.
       </p>
       {alreadyAdjusted.length > 0 && (
         <p>Un conteo posterior ya ajustó estos artículos: {alreadyAdjusted.join(', ')}.</p>

@@ -4,6 +4,7 @@ import {
   countArticles,
   countHasDifferences,
   redactState,
+  shiftCountArticles,
   stockBalances,
 } from '../src/domain/engine.ts';
 import { fixture, ids, run, order, cashier, admin, NOW } from './support/fixture.ts';
@@ -30,18 +31,40 @@ function transferSale() {
   }).state;
 }
 
+it('valida en servidor el tipo de cuadre vigente y conserva el conteo original después del envío', () => {
+  let state = fixture();
+  state.shifts[0].blindOpening = { status: 'matched', depth: 'simple' };
+  const choose = { shiftId: ids.shift, action: 'set_closing_count_mode', mode: 'full' };
+  expect(() => run(state, 'review_shift', choose, cashier)).toThrow();
+  state = run(state, 'review_shift', choose, admin).state;
+  const shift = redactState(state, cashier).shifts[0];
+  expect(shift.closingCountMode).toBe('full');
+  expect(shiftCountArticles(state, shift, 'closing').some((item) => item.id.startsWith('sealed_bag:'))).toBe(
+    true,
+  );
+  const payload = { kind: 'closing', shiftId: ids.shift, attempt: 1, cash: 20000, items: {} };
+  expect(() => run(state, 'submit_blind_count', { ...payload, closingCountMode: 'full' })).toThrow();
+  state = run(state, 'review_shift', { ...choose, mode: 'cash' }, admin).state;
+  expect(() => run(state, 'submit_blind_count', { ...payload, closingCountMode: 'full' })).toThrow(
+    /tipo de cuadre cambió/,
+  );
+  const counted = run(state, 'submit_blind_count', { ...payload, closingCountMode: 'cash' }).state;
+  expect(counted.counts.at(-1)).toMatchObject({ items: {}, cash: 20000 });
+  expect(() => run(counted, 'review_shift', choose, admin)).toThrow(/conteo de cierre ya comenzó/);
+});
+
 it('cierra contando vasos del paquete abierto sin contar bolsas, líquidos, paquetes ni otros insumos', () => {
   let state = fixture();
   const size = state.sizes[0].id;
   state = run(state, 'open_package', { sizeId: size, units: 50 }).state;
   const initialStock = stockBalances(state);
   const payload = closing(state);
-  payload.items[`cup:${size}`] = 47;
+  payload.items[`cup:${size}`] = 17;
   const closed = run(state, 'count', payload).state;
   const count = closed.counts[0];
   expect(count.items).toEqual(payload.items);
   expect(Object.keys(count.items).every((a) => a.startsWith('cup:'))).toBe(true);
-  expect(count.expectedItems?.[`cup:${size}`]).toBe(50);
+  expect(count.expectedItems?.[`cup:${size}`]).toBe(state.settings[0].cupPackageUnits);
   expect(count.differences?.[`cup:${size}`]).toBe(-3);
   expect(stockBalances(closed)).toEqual(initialStock);
   expect(closed.shifts[0].status).toBe('closed');

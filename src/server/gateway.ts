@@ -7,8 +7,7 @@ import {
   type Profile,
   type State,
 } from '../domain/types.ts';
-import { quoteOrder } from '../domain/pricing.ts';
-import { hasPermission, isShiftCashier } from '../domain/access.ts';
+import { hasPermission, isShiftCashier, shiftBlocksSales } from '../domain/access.ts';
 import type { ApprovalAccess } from '../domain/change-approval.ts';
 import type { Access } from '../domain/platform.ts';
 import type { Backend, DeviceSecret } from './backend.ts';
@@ -17,6 +16,8 @@ import { constantEqual, couponCode, encryptPermit, pinHash, randomToken, sha256 
 const staffCommands = new Set([
   'request_shift',
   'submit_blind_count',
+  'submit_closing',
+  'respond_closing',
   'submit_blind_opening_audit',
   'finish_audit',
   'create_order',
@@ -28,6 +29,7 @@ const staffCommands = new Set([
   'close_tastings',
   'deliver',
   'pay',
+  'redeem_coupon',
   'request_void',
   'unpaid',
   'request_payment_change',
@@ -438,10 +440,13 @@ export function createGateway(options: GatewayOptions) {
         for (let attempt = 0; attempt < 5; attempt++) {
           const loaded = await store.load();
           if (
-            command.type === 'request_transfer' &&
-            (context.role !== 'admin' || String(command.payload.from ?? '').startsWith('cash:'))
+            (command.type === 'submit_closing' && Number(command.payload.sent) > 0) ||
+            (command.type === 'request_transfer' &&
+              (context.role !== 'admin' || String(command.payload.from ?? '').startsWith('cash:')))
           ) {
-            const destination = loaded.state.locations.find((item) => item.id === command.payload.to);
+            const destinationId =
+              command.type === 'submit_closing' ? command.payload.locationId : command.payload.to;
+            const destination = loaded.state.locations.find((item) => item.id === destinationId);
             const receiver = destination ? await store.profile(destination.custodianId) : undefined;
             assert(
               receiver?.active && receiver.role === 'admin',
@@ -503,9 +508,12 @@ export function createGateway(options: GatewayOptions) {
         const profiles = await store.profiles();
         if (
           actor.role === 'encargado' &&
-          hasPermission(actor, 'transfers') &&
           actor.primary &&
-          state.shifts.some((shift) => shift.status === 'open' && shift.deviceId === actor.deviceId)
+          state.shifts.some(
+            (shift) =>
+              (shift.deviceId === actor.deviceId && shift.status === 'open') ||
+              (shift.cashierId === actor.id && shift.closingReview?.status === 'returned'),
+          )
         ) {
           const admins = new Set(
             profiles
@@ -514,7 +522,20 @@ export function createGateway(options: GatewayOptions) {
           );
           state.transferDestinations = loaded.state.locations
             .filter((item) => item.active && admins.has(item.custodianId))
-            .map(({ id, name, type }) => ({ id, name, needsEvidence: type === 'bank' }));
+            .map(({ id, name, type, custodianId }) => ({
+              id,
+              name,
+              custodian: profiles.find((person) => person.id === custodianId)?.name,
+              needsEvidence: type === 'bank',
+            }));
+        }
+        for (const summary of state.ownTurnSummary ?? []) {
+          for (const handoff of summary.handoffs) {
+            const recipient = loaded.state.transfers.find(
+              (transfer) => transfer.id === handoff.id,
+            )?.recipientId;
+            handoff.custodian = profiles.find((person) => person.id === recipient)?.name;
+          }
         }
         const sellers = new Set(state.orders.map((order) => order.sellerId));
         return json({
@@ -544,6 +565,15 @@ export function createGateway(options: GatewayOptions) {
         admin();
         const loaded = await store.load();
         const shift = loaded.state.shifts.find((s) => s.id === body.shiftId);
+        assert(
+          !loaded.state.transfers.some(
+            (transfer) =>
+              transfer.shiftId === shift?.id &&
+              transfer.recipientId === actor.id &&
+              transfer.status === 'in_transit',
+          ),
+          'Confirma primero la recepción del efectivo.',
+        );
         assert(shift && !loaded.state.settings[0].auditId, 'Turno no disponible o arqueo en curso.');
         assert(
           shift.status === 'open' && hasPermission(actor, 'shifts') && isShiftCashier(actor, shift),
@@ -553,7 +583,6 @@ export function createGateway(options: GatewayOptions) {
         return json(closingPreview(loaded.state, shift.id));
       }
       if (route === 'quote') {
-        admin();
         await rate(`coupon-quote:${profile.id}`, 20, 60);
         const loaded = await store.load();
         const order = loaded.state.orders.find((o) => o.id === body.orderId && o.status === 'open');
@@ -565,6 +594,11 @@ export function createGateway(options: GatewayOptions) {
           'FORBIDDEN',
         );
         assert(
+          !shiftBlocksSales(shift) && !loaded.state.settings[0].auditId,
+          'Completa el conteo pendiente antes de validar el cobro.',
+          'SHIFT_COUNT',
+        );
+        assert(
           Array.isArray(body.codes) &&
             body.codes.length <= 10 &&
             body.codes.every(
@@ -572,7 +606,16 @@ export function createGateway(options: GatewayOptions) {
             ),
           'Cupones inválidos.',
         );
-        const quote = quotePayment(loaded.state, order, now().toISOString(), true, body.codes);
+        const counterPromotionId =
+          body.counterPromotionId === undefined ? undefined : id(body.counterPromotionId);
+        const quote = quotePayment(
+          loaded.state,
+          order,
+          now().toISOString(),
+          true,
+          body.codes,
+          counterPromotionId,
+        );
         return json({
           total: quote.total,
           lines: quote.lines,
@@ -765,13 +808,6 @@ export function createGateway(options: GatewayOptions) {
               );
               if (command.type === 'request_shift')
                 assert(command.payload.offline !== true, 'La apertura requiere conexión.', 'ONLINE_REQUIRED');
-              assert(
-                command.type !== 'pay' ||
-                  command.payload.codes === undefined ||
-                  (Array.isArray(command.payload.codes) && command.payload.codes.length === 0),
-                'Los cupones los aplica un administrador.',
-                'FORBIDDEN',
-              );
             }
             if (['submit_blind_count', 'submit_blind_opening_audit'].includes(command.type))
               assert(command.payload.offline !== true, 'El conteo requiere conexión.', 'ONLINE_REQUIRED');
@@ -933,9 +969,16 @@ export function createGateway(options: GatewayOptions) {
       }
       if (route === 'export') {
         admin();
+        const { state } = await store.load();
+        assert(
+          !state.transfers.some(
+            (transfer) => transfer.status === 'in_transit' && transfer.recipientId === actor.id,
+          ),
+          'Confirma tus recepciones pendientes antes de exportar los importes.',
+        );
         return json({
           branch,
-          state: (await store.load()).state,
+          state,
           profiles: (await store.profiles()).filter((p) => isSuperAdmin || p.id !== ownerId),
           devices: publicDevices(await store.devices()),
           exportedAt: now().toISOString(),

@@ -1,3 +1,4 @@
+import { shiftCountArticles, stockBalances } from '../src/domain/engine.ts';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { createGateway } from '../src/server/gateway.ts';
 import { blindCountArticles, locationBalance } from '../src/domain/engine.ts';
@@ -85,7 +86,11 @@ it.each([admin, owner])(
     await request('commands', { commands: [opening.command] }, actor);
     expect((await db.load()).state.shifts).toHaveLength(1);
     expect((await request('snapshot', {}, actor)).body.actor.primary).toBe(false);
-    await accepted('count', { kind: 'opening', shiftId, cash: 12000, items: countedItems(state) }, actor);
+    await accepted(
+      'submit_blind_count',
+      { kind: 'opening', shiftId, cash: 12000, items: countedItems(state), attempt: 1 },
+      actor,
+    );
     const order = await accepted(
       'create_order',
       {
@@ -101,25 +106,44 @@ it.each([admin, owner])(
     await accepted('pay', { orderId: order.result.referenceId, deliver: true }, actor);
     state = (await db.load()).state;
     expect(state.payments[0]).toMatchObject({ cashierId: actor.id, amount: 14000 });
-    await accepted(
-      'count',
+    const items = Object.fromEntries(
+      shiftCountArticles(state, state.shifts[0], 'closing').map(({ id }) => [
+        id,
+        stockBalances(state)[id] ?? 0,
+      ]),
+    );
+    // La venta de prueba no parte de inventario inicial. Se registra el conteo físico en cero.
+    const locked = await accepted(
+      'submit_blind_count',
       {
         kind: 'closing',
-        payments: { [`transfer:${ids.location}`]: 0 },
         shiftId,
         cash: 26000,
-        retained: 10000,
-        locationId: ids.location,
-        items: countedItems(state),
+        items: Object.fromEntries(Object.keys(items).map((id) => [id, Math.max(0, items[id])])),
+        attempt: 1,
+      },
+      actor,
+    );
+    await accepted(
+      'submit_closing',
+      {
+        shiftId,
+        countId: locked.result.referenceId,
+        retained: 26000,
+        sent: 0,
+        verified: true,
+        cashTotal: 14000,
+        transferTotal: 0,
       },
       actor,
     );
     state = (await db.load()).state;
     expect(state.shifts[0].status).toBe('closed');
-    await accepted('execute_transfer', { transferId: state.transfers[0].id, evidenceId: ids.photo }, actor);
+    await accepted('approve_closing', { shiftId }, actor);
+    await accepted('respond_closing', { shiftId, outcome: 'accepted', notes: 'Confirmo el cierre.' }, actor);
     await accepted('request_shift', { base: 99999 }, actor);
     state = (await db.load()).state;
-    expect(state.shifts.find((s) => s.status === 'open')?.base).toBe(10000);
+    expect(state.shifts.find((s) => s.status === 'open')?.base).toBe(26000);
     expect(state.audit.find((a) => a.eventId === opening.command.id)).toMatchObject({
       by: actor.id,
       deviceId: actor.deviceId,
@@ -185,7 +209,18 @@ it('un retiro de Nequi reduce la cuenta al ejecutar y aumenta el efectivo al con
 });
 
 it('el titular retoma su caja desde su nueva sesión MFA y otro admin no puede cobrarla', async () => {
-  await accepted('request_shift', { base: 0 }, owner);
+  const opening = await accepted('request_shift', { base: 0 }, owner);
+  await accepted(
+    'submit_blind_count',
+    {
+      kind: 'opening',
+      shiftId: opening.result.referenceId,
+      cash: 0,
+      items: countedItems(fixture()),
+      attempt: 1,
+    },
+    owner,
+  );
   const state = (await db.load()).state;
   const order = await accepted(
     'create_order',

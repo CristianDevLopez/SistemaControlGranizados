@@ -47,9 +47,28 @@ export function isScheduled(p: Promotion, at: string): boolean {
   );
 }
 
+export function isCounterThreeForTwo(p: Promotion): boolean {
+  return p.delivery === 'schedule' && p.effect === 'nxm' && (p.take ?? 3) === 3 && (p.pay ?? 2) === 2;
+}
+
+export function counterThreeForTwoPromotions(state: State, at: string): Promotion[] {
+  return state.promotions.filter(
+    (p) =>
+      isCounterThreeForTwo(p) &&
+      isScheduled(p, at) &&
+      (p.maxRedemptions === null || p.redemptions < p.maxRedemptions),
+  );
+}
+
+export function counterThreeForTwoQuantity(p: Promotion, lines: OrderLine[], state: State): number {
+  return lines.reduce((total, line) => total + (eligible(p, line, state) ? line.quantity : 0), 0);
+}
+
 export function eligible(p: Promotion, u: OrderLine, state: State): boolean {
   const flavors = lineFlavorIds(u);
   return (
+    (!isCounterThreeForTwo(p) ||
+      state.sizes.some((size) => size.id === u.sizeId && size.cups > 0 && size.ounces > 0)) &&
     flavors.every((id) => state.flavors.some((flavor) => flavor.id === id)) &&
     (!p.sizeIds.length || p.sizeIds.includes(u.sizeId)) &&
     (p.allowMixed !== false || flavors.length === 1) &&
@@ -79,6 +98,7 @@ export function quoteOrder(
   online: boolean,
   codes: string[] = [],
   additions?: CandyAddition[],
+  counterPromotionId?: string,
 ): Quote {
   const normalized = [...new Set(codes.map((x) => x.trim().toUpperCase()).filter(Boolean))];
   if (normalized.length > 10) throw new DomainError('Máximo diez cupones por pedido.');
@@ -86,6 +106,8 @@ export function quoteOrder(
     const c = state.coupons.find((c) => c.code === code);
     return (c?.benefit ?? state.promotions.find((p) => p.id === c?.promotionId))?.stackable === false;
   });
+  if (counterPromotionId && exclusive.length)
+    throw new DomainError('El 3x2 no se puede combinar con un cupón no acumulable.');
   const candidates = [
     calculateQuote(
       state,
@@ -93,6 +115,7 @@ export function quoteOrder(
       at,
       online,
       normalized.filter((c) => !exclusive.includes(c)),
+      counterPromotionId,
     ),
     ...exclusive.map((code) =>
       calculateQuote(
@@ -124,6 +147,7 @@ function calculateQuote(
   at: string,
   online: boolean,
   codes: string[] = [],
+  counterPromotionId?: string,
 ): Quote {
   const lines = structuredClone(original);
   const units: Unit[] = lines.flatMap((line) =>
@@ -134,9 +158,12 @@ function calculateQuote(
   const schedules = state.promotions.filter(
     (p) =>
       p.delivery === 'schedule' &&
+      (!isCounterThreeForTwo(p) || p.id === counterPromotionId) &&
       isScheduled(p, at) &&
       (p.maxRedemptions === null || (online && p.redemptions < p.maxRedemptions)),
   );
+  if (counterPromotionId && !schedules.some((p) => p.id === counterPromotionId && isCounterThreeForTwo(p)))
+    throw new DomainError('El 3x2 ya no está disponible para este cobro.');
   for (const p of schedules.filter(
     (x) => x.effect !== 'nxm' && x.effect !== 'free' && x.maxRedemptions === null,
   )) {
@@ -166,7 +193,7 @@ function calculateQuote(
     if (p.effect === 'nxm') {
       const take = p.take ?? 3,
         pay = p.pay ?? 2;
-      let groups = 0;
+      const confirmed = p.id === counterPromotionId;
       for (let start = 0; start + take <= indexes.length; start += take) {
         const ids = indexes.slice(start, start + take);
         const prices = units.map((u) => u.price);
@@ -174,7 +201,7 @@ function calculateQuote(
           prices[id] = j < pay ? units[id].price : 0;
         });
         const gain = ids.reduce((sum, id) => sum + base[id] - prices[id], 0);
-        if (gain > 0)
+        if (gain > 0 || confirmed)
           offers.push({
             mask: ids.reduce((m, id) => m | (1n << BigInt(id)), 0n),
             prices,
@@ -182,7 +209,7 @@ function calculateQuote(
             coupon,
             gain,
           });
-        groups++;
+        if (confirmed) break;
       }
     } else {
       indexes.forEach((i) => {
@@ -227,15 +254,19 @@ function calculateQuote(
     addOffers(promotion, coupon);
   }
   offers.sort((a, b) => b.gain - a.gain || a.promotion.id.localeCompare(b.promotion.id));
+  const counterOffer = offers.find((offer) => offer.promotion.id === counterPromotionId);
+  if (counterPromotionId && !counterOffer)
+    throw new DomainError('El 3x2 requiere tres granizados elegibles. Las neveras quedan excluidas.');
   // Independent offers are collapsed by mask/coupon before searching; cart quantities are not capped.
   const seen = new Set<string>();
   const unique = offers.filter((o) => {
+    if (o === counterOffer) return false;
     const key = `${o.mask.toString(36)}|${o.coupon?.id ?? ''}|${o.promotion.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  let bestGain = 0,
+  let bestGain = counterOffer ? -Infinity : 0,
     best: Offer[] = [];
   const suffix = Array(unique.length + 1).fill(0) as number[];
   for (let i = unique.length - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + unique[i].gain;
@@ -295,7 +326,13 @@ function calculateQuote(
     }
     search(i + 1, mask, coupons, picked, gain, uses);
   };
-  search(0, 0n, new Set(), [], 0, {});
+  if (counterOffer) {
+    search(0, counterOffer.mask, new Set(), [counterOffer], counterOffer.gain, {
+      [counterOffer.promotion.id]: 1,
+    });
+  } else {
+    search(0, 0n, new Set(), [], 0, {});
+  }
   if (courtesyCodes.some((code) => !best.some((offer) => offer.coupon?.code === code)))
     throw new DomainError(
       'Cada código de cortesía necesita un vaso elegible distinto. Revisa los productos y códigos del pedido.',
@@ -355,6 +392,7 @@ function calculateQuote(
       line.paidSizeId = state.sizes.find(
         (x) => x.rank === state.sizes.find((y) => y.id === line.sizeId)!.rank - (p.steps ?? 1),
       )?.id;
+    else delete line.paidSizeId;
   });
   return {
     lines,

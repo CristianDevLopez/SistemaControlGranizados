@@ -1,3 +1,4 @@
+import { businessDay, periodStart } from '../domain/business-date.ts';
 import { Fragment, useState } from 'react';
 import { Check, Search, FilePlus2, Plus, Trash2, ArrowRightLeft } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
@@ -187,6 +188,10 @@ export function Orders() {
   const app = useApp(),
     { state, actor, profiles } = app.data!,
     [filter, setFilter] = useState('pending'),
+    [period, setPeriod] = useState('all'),
+    [day, setDay] = useState(businessDay()),
+    [method, setMethod] = useState('all'),
+    [shiftId, setShiftId] = useState(''),
     [query, setQuery] = useState(''),
     [detailsId, setDetailsId] = useState<string | null>(null),
     [replace, setReplace] = useState<Order | null>(null),
@@ -202,7 +207,7 @@ export function Orders() {
   const active = operatingShift(state);
   const payments = currentPayments(state.payments);
   const showPaymentMethod = filter !== 'pending';
-  const paymentMethods = showPaymentMethod ? orderPaymentLabels(state) : undefined;
+  const paymentMethods = orderPaymentLabels(state);
   const paymentLabel = (x: Payment) =>
     paymentMethod(x) === 'cash'
       ? 'Efectivo'
@@ -246,7 +251,15 @@ export function Orders() {
     .filter(
       (o) =>
         (actor.role === 'admin' || o.shiftId === active?.id) &&
+        (!shiftId || o.shiftId === shiftId) &&
+        (period === 'all' ||
+          periodStart(businessDay(o.originalAt ?? o.createdAt), period) === periodStart(day, period)) &&
+        (method === 'all' ||
+          (paymentMethods[o.id] ?? []).some((key) =>
+            method === 'cash' ? key === 'Efectivo' : key.startsWith('Transferencia'),
+          )) &&
         (filter === 'all' ||
+          (filter === 'cancelled' && o.status === 'cancelled') ||
           (filter === 'pending' &&
             (['open', 'void_requested', 'unpaid_incident'].includes(o.status) ||
               (!['cancelled', 'tasting_only'].includes(o.status) &&
@@ -288,6 +301,50 @@ export function Orders() {
               {actor.role === 'admin' ? 'Historial' : 'Todos del turno'}
             </button>
           </div>
+          <button
+            className={`button small ${filter === 'cancelled' ? 'primary' : 'secondary'}`}
+            onClick={() => setFilter('cancelled')}
+          >
+            Anulados
+          </button>
+          <label>
+            Período{' '}
+            <select value={period} onChange={(e) => setPeriod(e.target.value)}>
+              <option value="all">Todo</option>
+              <option value="day">Día</option>
+              <option value="week">Semana</option>
+            </select>
+          </label>
+          {period !== 'all' && (
+            <input
+              aria-label="Fecha de pedidos"
+              type="date"
+              value={day}
+              onChange={(e) => e.target.value && setDay(e.target.value)}
+            />
+          )}
+          <label>
+            Medio de pago{' '}
+            <select value={method} onChange={(e) => setMethod(e.target.value)}>
+              <option value="all">Todos</option>
+              <option value="cash">Efectivo</option>
+              <option value="transfer">Transferencia</option>
+            </select>
+          </label>
+          {actor.role === 'admin' && (
+            <label>
+              Turno{' '}
+              <select value={shiftId} onChange={(e) => setShiftId(e.target.value)}>
+                <option value="">Todos</option>
+                {[...state.shifts].reverse().map((shift) => (
+                  <option key={shift.id} value={shift.id}>
+                    {date(shift.openedAt ?? shift.requestedAt)} ·{' '}
+                    {profiles.find((item) => item.id === shift.cashierId)?.name ?? 'Usuario archivado'}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <input
             className="search"
             placeholder="Buscar pedido o responsable…"
@@ -561,13 +618,13 @@ export function Orders() {
               const { refundTo, ...values } = v;
               // «cash» o «transfer:<cuenta>»: cómo sale el dinero del reembolso.
               const [method, accountId] = String(refundTo ?? '').split(':');
-              await app.run(form.type, {
+              const result = await app.run(form.type, {
                 ...form.extra,
                 ...values,
                 ...(refundTo ? { method, accountId } : {}),
               });
               setForm(null);
-              app.toast('Registro guardado.');
+              app.toast(form.type === 'request_payment_change' ? result.message : 'Registro guardado.');
             }}
           />
         </Modal>

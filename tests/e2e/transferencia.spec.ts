@@ -13,30 +13,11 @@ async function nav(page: Page, name: string) {
 }
 
 const pesos = (value: number) => value.toLocaleString('es-CO');
-async function count(page: Page, cash: number, retained?: number) {
+async function count(page: Page, cash: number) {
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Efectivo contado *', { exact: true }).fill(pesos(cash));
-  if (retained !== undefined)
-    await dialog
-      .getByLabel('Efectivo reservado para la siguiente apertura', { exact: false })
-      .fill(pesos(retained));
   for (const input of await dialog.locator('.count-list input').all()) await input.fill('0');
-  for (const input of await dialog.locator('.payment-counts input').all()) await input.fill('0');
-  for (const input of await dialog.locator('input[type="checkbox"][required]').all()) await input.check();
-  if (retained === undefined)
-    await dialog.getByRole('button', { name: 'Registrar conteo', exact: true }).click();
-  else {
-    await dialog.getByRole('button', { name: 'Revisar cuadre', exact: true }).click();
-    await expect(
-      dialog.getByRole('heading', { name: 'Revisión previa del cuadre', exact: true }),
-    ).toBeVisible();
-    const confirmation = dialog.getByLabel(
-      'Revisé el conteo y deseo enviarlo provisionalmente al administrador',
-      { exact: true },
-    );
-    if (await confirmation.isVisible()) await confirmation.check();
-    await dialog.getByRole('button', { name: /Enviar (provisional|cuadre)/ }).click();
-  }
+  await dialog.getByRole('button', { name: 'Enviar conteo', exact: true }).click();
   await expect(dialog).toHaveCount(0);
 }
 
@@ -133,7 +114,7 @@ test('configura Nequi y lo identifica al cobrar, en el ticket y separado del efe
   await methods.getByRole('button', { name: 'Nequi', exact: true }).click();
   await expect(page.locator('.payment-hint')).toContainText('3000000000');
   await page.getByRole('textbox', { name: 'Comprobante de Nequi', exact: true }).fill('NEQ-4821');
-  await page.getByRole('button', { name: 'Cupón, cortesía, vuelto o entregar después', exact: true }).click();
+  await page.getByRole('button', { name: 'Vuelto o entregar después', exact: true }).click();
   const checkout = page.getByRole('dialog');
   await expect(checkout.getByRole('button', { name: 'Nequi', exact: true })).toHaveAttribute(
     'aria-pressed',
@@ -182,19 +163,18 @@ test('configura Nequi y lo identifica al cobrar, en el ticket y separado del efe
   await page.getByRole('button', { name: 'Cerrar y contar caja', exact: true }).click();
   const closing = page.getByRole('dialog');
   await expect(closing.locator('.count-list')).not.toContainText(/Bolsas|Paquetes|Líquido|Coronitas|Copitas/);
-  await closing.getByLabel('Transferencias verificadas · Nequi *', { exact: true }).fill('27.000');
-  await expect(closing.locator('.money-preview').filter({ hasText: '27.000' })).toBeVisible();
+  await count(page, 12000);
+  await page.getByRole('button', { name: 'Confirmar pagos y repartir efectivo' }).click();
+  await expect(closing).toContainText(/Transferencias registradas · .*28.000/);
+  await closing.getByLabel('Confirmo ambos medios', { exact: false }).check();
+  await closing.getByLabel('Efectivo que dejas', { exact: false }).fill('12.000');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: test.info().outputPath('cierre-nequi.png'), fullPage: true });
-  await count(page, 12000, 12000);
-  const row = page.getByRole('row').filter({ hasText: 'Cierre' });
-  await expect(row).toContainText('27.000');
-  await expect(row).toContainText('28.000');
-  await expect(row).toContainText('-$');
+  await closing.getByRole('button', { name: 'Enviar cierre' }).click();
+  await expect(closing).toHaveCount(0);
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
   await nav(page, 'Turno y caja');
-  await expect(page.getByRole('row').filter({ hasText: 'Cierre' })).toContainText('27.000');
   await nav(page, 'Revisar turnos');
   await page.getByRole('button', { name: 'Ver turno' }).click();
   await expect(page.getByRole('dialog').getByText('Transferencias del turno', { exact: true })).toBeVisible();

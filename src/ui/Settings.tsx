@@ -1,3 +1,4 @@
+import { configuredAdditions } from '../domain/additions.ts';
 import { useState } from 'react';
 import {
   Plus,
@@ -125,7 +126,7 @@ export function Settings() {
       <div className="page-toolbar">
         <div>
           <h2>El negocio, a tu medida</h2>
-          <p>Los cambios de precios y permisos se revisan en Registro de cambios.</p>
+          <p>Las propuestas de precios y permisos se revisan en Solicitudes.</p>
         </div>
       </div>
       <div className="tabs">
@@ -398,10 +399,27 @@ export function Settings() {
                 required: true,
               },
               {
-                name: 'skipOpeningCount',
-                label: 'Permitir omitir conteo de apertura y marcarlo pendiente',
-                type: 'checkbox',
+                name: 'maxClosingBase',
+                label: 'Base máxima que se puede dejar al cerrar',
+                type: 'money',
+                min: 0,
+                required: true,
               },
+              {
+                name: 'closingResponseDays',
+                label: 'Días para responder al cierre',
+                type: 'number',
+                min: 1,
+                max: 90,
+                required: true,
+              },
+              ...configuredAdditions(settings.candyPrices).map((item) => ({
+                name: `candy:${item.id}`,
+                label: `Adición · ${item.name}`,
+                type: 'money' as const,
+                min: 0,
+                required: true,
+              })),
               { name: 'baseline', label: 'Período de medición de línea base', type: 'checkbox' },
               {
                 name: 'openingChecklist',
@@ -418,6 +436,11 @@ export function Settings() {
             ]}
             initial={{
               ...settings,
+              maxClosingBase: settings.maxClosingBase ?? settings.cashLimit,
+              closingResponseDays: settings.closingResponseDays ?? 3,
+              ...Object.fromEntries(
+                configuredAdditions(settings.candyPrices).map((item) => [`candy:${item.id}`, item.unitPrice]),
+              ),
               expenseCategories: settings.expenseCategories.join(', '),
               openingChecklist: (settings.openingChecklist ?? []).join('\n'),
               closingChecklist: (settings.closingChecklist ?? []).join('\n'),

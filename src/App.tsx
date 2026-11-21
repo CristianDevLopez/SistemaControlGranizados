@@ -36,12 +36,13 @@ import { Settings } from './ui/Settings.tsx';
 import { Control } from './ui/Control.tsx';
 import { Dashboard } from './ui/Dashboard.tsx';
 import { TurnReview } from './ui/TurnReview.tsx';
+import { EmployeeRequests, employeeRequestCount } from './ui/EmployeeRequests.tsx';
 import { ChangeLog } from './ui/ChangeLog.tsx';
 import { Today } from './ui/Today.tsx';
 import { Money } from './ui/Money.tsx';
 import { Platform } from './ui/Platform.tsx';
 import { branchStatusLabels } from './domain/platform.ts';
-import { rehearsalShift } from './domain/closing-archive.ts';
+import { adminRequests } from './domain/requests.ts';
 import { Badge, Modal, date } from './ui/components.tsx';
 import { downloadFile } from './lib/export.ts';
 import type { OutboxEntry } from './lib/db.ts';
@@ -52,12 +53,12 @@ const pages = [
   { id: 'orders', label: 'Pedidos', icon: ClipboardList },
   { id: 'inventory', label: 'Inventario', icon: Package },
   { id: 'cash', label: 'Turno y caja', icon: Wallet },
+  { id: 'control', label: 'Solicitudes', icon: ClipboardList },
   { id: 'purchases', label: 'Compras y gastos', icon: Truck, admin: true },
   { id: 'today', label: 'Hoy', icon: LayoutDashboard, admin: true, group: 'ADMINISTRACIÓN' },
   { id: 'money', label: 'Dinero', icon: Wallet, admin: true },
   { id: 'dashboard', label: 'Ventas', icon: LayoutDashboard, admin: true },
   { id: 'promotions', label: 'Promociones', icon: Ticket, admin: true },
-  { id: 'control', label: 'Control y aprobaciones', icon: ShieldCheck, admin: true },
   { id: 'review', label: 'Revisar turnos', icon: ClipboardList, admin: true },
   { id: 'changes', label: 'Registro de cambios', icon: ShieldCheck, admin: true },
   { id: 'settings', label: 'Configuración', icon: SettingsIcon, admin: true },
@@ -114,18 +115,16 @@ export function App() {
           (!p.admin || actor.role === 'admin') &&
           (p.id !== 'locals' || app.data?.branch?.isOwner || (app.sessionActor?.superAdmin && !app.viewRole)),
       )
-      .map((item) => (item.id === 'cash' && actor.role !== 'admin' ? { ...item, label: 'Turno' } : item)),
+      .map((item) => (item.id === 'cash' && actor.role !== 'admin' ? { ...item, label: 'Mi turno' } : item)),
     active = nav.find((p) => p.id === page) ?? pages[0],
     pending = app.pending.filter((p) => p.status === 'pending').length + app.photosPending,
     conflicts = app.pending.filter((p) => p.status === 'conflict').length,
     firstConflict = app.pending.find((p) => p.status === 'conflict');
   const canUpdate = app.online && !app.syncing && !updating;
-  const openingAlert =
-    actor.role === 'admin' &&
-    state.shifts.some(
-      (shift) =>
-        shift.blindOpening?.status === 'review' && !shift.closingArchive && !rehearsalShift(state, shift),
-    );
+  const requestCount =
+    actor.role === 'admin'
+      ? adminRequests(state).filter((item) => item.pending).length
+      : employeeRequestCount(state);
   const sessionActor = app.sessionActor ?? actor;
   const changeView = (role: Role | null) => {
     if (app.changeView(role)) {
@@ -212,6 +211,7 @@ export function App() {
                 {p.id === 'orders' && state.orders.filter((o) => o.status === 'open').length > 0 && (
                   <span className="nav-number">{state.orders.filter((o) => o.status === 'open').length}</span>
                 )}
+                {p.id === 'control' && requestCount > 0 && <span className="nav-number">{requestCount}</span>}
                 {p.id === active.id && <ChevronRight size={15} />}
               </button>
             </div>
@@ -382,13 +382,10 @@ export function App() {
               {app.error}
             </div>
           )}
-          {openingAlert && active.id !== 'review' && (
-            <div className="notice warning" role="status">
-              <span>Una apertura sigue en revisión. Las ventas de ese turno están en pausa.</span>
-              <button className="button small secondary" onClick={() => navigate('review')}>
-                Revisar apertura
-              </button>
-            </div>
+          {requestCount > 0 && active.id !== 'control' && (
+            <button className="button secondary small" onClick={() => navigate('control')}>
+              Solicitudes pendientes · {requestCount}
+            </button>
           )}
           {!app.online && actor.role === 'apoyo' && (
             <div className="notice warning">
@@ -438,19 +435,23 @@ export function App() {
             ) : active.id === 'inventory' ? (
               <Inventory />
             ) : active.id === 'cash' ? (
-              <Cash />
+              <Cash onRequests={() => navigate('control')} />
             ) : active.id === 'purchases' ? (
               <Purchasing />
             ) : active.id === 'dashboard' ? (
               <Dashboard />
             ) : active.id === 'today' ? (
-              <Today />
+              <Today pendingRequests={requestCount} onRequests={() => navigate('control')} />
             ) : active.id === 'money' ? (
               <Money />
             ) : active.id === 'promotions' ? (
               <Promotions />
             ) : active.id === 'control' ? (
-              <Control />
+              actor.role === 'admin' ? (
+                <Control />
+              ) : (
+                <EmployeeRequests onShift={() => navigate('cash')} />
+              )
             ) : active.id === 'review' ? (
               <TurnReview />
             ) : active.id === 'changes' ? (

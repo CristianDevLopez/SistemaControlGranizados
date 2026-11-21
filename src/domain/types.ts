@@ -46,6 +46,9 @@ export interface Settings {
   courtesyQuota: number;
   requiredChangeApprovals?: 1 | 2;
   cupPackageUnits: number;
+  candyPrices?: import('./additions.ts').CandyPrices;
+  maxClosingBase?: number;
+  closingResponseDays?: number;
   bagOunces: number;
   liquidTolerance: number | null;
   liquidBagWindow?: number;
@@ -180,6 +183,7 @@ export interface StockMovement {
   eventId: ID;
 }
 export interface BlindOpening {
+  depth?: 'simple' | 'deep';
   status: 'pending' | 'recount' | 'review' | 'audit' | 'matched' | 'authorized' | 'reviewed';
   countIds?: ID[];
   audit?: { id: ID; cash: boolean; items: string[]; by?: ID; at?: string };
@@ -187,10 +191,13 @@ export interface BlindOpening {
   review?: { by: ID; at: string; notes?: string };
 }
 export interface BlindClosing {
-  status: 'recount' | 'review' | 'matched';
+  status: 'recount' | 'review' | 'matched' | 'ready';
   countIds?: ID[];
 }
+export type ClosingCountMode = 'cash' | 'simple' | 'full';
+
 export interface Shift {
+  closingCountMode?: ClosingCountMode;
   id: ID;
   cashierId: ID;
   deviceId: ID;
@@ -204,6 +211,21 @@ export interface Shift {
   closingCountId?: ID;
   blindOpening?: BlindOpening;
   blindClosing?: BlindClosing;
+  closingFlow?: {
+    versions: {
+      at: string;
+      countId: ID;
+      retained: number;
+      sent: number;
+      transferId?: ID;
+      notes?: string;
+      payments?: { cash: number; transfer: number; byAccount: Record<ID, number> };
+    }[];
+    returned?: { at: string; by: ID; notes: string };
+    returns?: { at: string; by: ID; notes: string }[];
+    response?: { at: string; by: ID; outcome: 'accepted' | 'disagreed' | 'unanswered'; notes: string };
+    responseDueAt?: string;
+  };
   retained?: number;
   remittance?: number;
   closedAt?: string;
@@ -218,7 +240,7 @@ export interface Shift {
     replacementCountId: ID;
   };
   closingReview?: {
-    status: 'pending' | 'approved';
+    status: 'pending' | 'returned' | 'approved';
     countId?: ID;
     by?: ID;
     at?: string;
@@ -227,7 +249,8 @@ export interface Shift {
     recoveries?: { id: ID; amount: number; paidOn: string; at: string; by: ID }[];
   };
   operationsReview?: {
-    verifiedTransfers?: Record<ID, { by: ID; at: string }>;
+    verifiedTransfers?: Record<ID, { by: ID; at: string; missing?: boolean }>;
+    countResolutions?: Record<ID, { notes: string; at: string; by: ID }>;
     camera?: { at: string; notes: string; by: ID };
     openingResolution?: { notes: string; at: string; by: ID };
     resolution?: { outcome: 'shortage' | 'surplus' | 'matched'; notes: string; at: string; by: ID };
@@ -251,6 +274,15 @@ export interface Count {
   paymentLabels?: Record<string, string>;
   expectedPayments?: Record<string, number>;
   paymentDifferences?: Record<string, number>;
+  inventoryDifferences?: Record<
+    string,
+    {
+      quantity: number;
+      unitCost: number;
+      saleValue: number;
+      compensation?: { countId: ID; quantity: number }[];
+    }
+  >;
   retained?: number;
   notes: string;
   checklist?: { task: string; done: boolean }[];
@@ -341,6 +373,7 @@ export interface Transfer {
   confirmedAt?: string;
   confirmedBy?: ID;
   receivedAmount?: number;
+  blindReceipt?: boolean;
   evidenceId?: ID;
   notes: string;
   shiftId?: ID;
@@ -529,7 +562,28 @@ export interface Outage {
   until?: string;
 }
 export interface State {
-  transferDestinations?: { id: ID; name: string; needsEvidence: boolean }[];
+  transferDestinations?: { id: ID; name: string; custodian?: string; needsEvidence: boolean }[];
+  ownTurnSummary?: {
+    shiftId: ID;
+    sizes: { name: string; quantity: number }[];
+    payments: { name: string; amount: number }[];
+    transferAccounts?: { name: string; amount: number }[];
+    expectedCash?: number;
+    expenses: number;
+    handoffs: {
+      id: ID;
+      locationId: ID;
+      destination: string;
+      custodian?: string;
+      amount: number;
+      status: Transfer['status'];
+    }[];
+  }[];
+  ownPaymentChanges?: (Pick<Request, 'id' | 'status' | 'notes' | 'resolutionNotes'> & {
+    at?: string;
+    orderNumber?: string;
+  })[];
+  ownRequests?: Pick<Request, 'id' | 'type' | 'at' | 'status' | 'notes' | 'resolutionNotes'>[];
   cashHandoffs?: Pick<Transfer, 'id' | 'to' | 'amount' | 'status' | 'notes'>[];
   sharedShift?: { id: ID; blocked: boolean };
   paymentChangeOrderIds?: ID[];
@@ -619,6 +673,9 @@ export type CommandType =
   | 'submit_blind_count'
   | 'review_blind_opening'
   | 'submit_blind_opening_audit'
+  | 'submit_closing'
+  | 'return_closing'
+  | 'respond_closing'
   | 'approve_closing'
   | 'record_employee_recovery'
   | 'start_audit'

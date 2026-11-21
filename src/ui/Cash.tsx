@@ -5,16 +5,18 @@ import { parseMoney } from '../lib/money.ts';
 import { api } from '../lib/api.ts';
 import {
   blindCountArticles,
+  shiftCountArticles,
   countArticles,
   countPaymentMethods,
   cashExpected,
   salesByMethod,
 } from '../domain/engine.ts';
 import { hasPermission, isShiftCashier, shiftBlocksSales } from '../domain/access.ts';
-import { closingArchive, inRehearsalPeriod, visibleCounts } from '../domain/closing-archive.ts';
+import { inRehearsalPeriod } from '../domain/closing-archive.ts';
 import { transferAccountName } from './payment-labels.ts';
-import type { ClosingPreview, CommandType, Count, Shift } from '../domain/types.ts';
-import { AuditSetupDialog, CountReviewDialog, auditModeLabels } from './CashAudit.tsx';
+import type { ClosingCountMode, ClosingPreview, CommandType, Shift } from '../domain/types.ts';
+import { AuditSetupDialog } from './CashAudit.tsx';
+import { OwnClosing } from './OwnClosing.tsx';
 import { ClosingComparison, closingHasDifferences, type ClosingValues } from './ClosingReview.tsx';
 import {
   Badge,
@@ -29,6 +31,19 @@ import {
   stateNames,
   type Field,
 } from './components.tsx';
+
+const closingModes: Record<ClosingCountMode, string> = {
+  cash: 'Rápido · Efectivo',
+  simple: 'Sencillo · Efectivo y vasos sueltos',
+  full: 'Completo · Efectivo e inventario físico',
+};
+
+function closingModeLabel(shift: Shift) {
+  return closingModes[
+    shift.closingCountMode ?? (shift.blindOpening && !shift.blindOpening.depth ? 'full' : 'simple')
+  ];
+}
+
 export function CountDialog({
   kind,
   shift,
@@ -47,16 +62,20 @@ export function CountDialog({
     [preview, setPreview] = useState<ClosingPreview | null>(null);
   const changes = useRef(0);
   const differences = !!draft && !!preview && closingHasDifferences(draft, preview);
-  const list = countArticles(state, kind);
+  const list = countArticles(state, kind, shift);
   const paymentMethods = countPaymentMethods(state, shift.id, kind);
   const request = kind === 'audit' ? state.settings[0].auditRequest : undefined;
   const openingAudit = request?.opening === true;
   const countsCash = request?.cash ?? true;
   const checklist =
-    kind === 'audit' && !openingAudit
-      ? []
-      : ((kind === 'closing' ? state.settings[0].closingChecklist : state.settings[0].openingChecklist) ??
-        []);
+    kind === 'opening' && shift.blindOpening?.depth
+      ? (state.settings[0].openingChecklist ?? [])
+      : kind === 'closing' && shift.blindOpening?.depth
+        ? (state.settings[0].closingChecklist ?? [])
+        : kind === 'audit' && !openingAudit
+          ? []
+          : ((kind === 'closing' ? state.settings[0].closingChecklist : state.settings[0].openingChecklist) ??
+            []);
   return (
     <Modal
       title={
@@ -74,8 +93,7 @@ export function CountDialog({
         {kind === 'closing'
           ? 'Ingresa el conteo y revisa la comparación antes de enviarlo al administrador.'
           : 'Cuenta antes de ver lo esperado. Se conservará este registro original y cualquier revisión posterior.'}
-        {kind === 'closing' &&
-          ' Verifica los cobros del turno por cada cuenta, no el saldo total de la cuenta. Cuenta solo los vasos restantes del paquete abierto de cada tamaño; si no hay vasos sueltos, registra 0.'}
+        {kind === 'closing' && ` ${closingModeLabel(shift)}. Verifica los cobros del turno por cada cuenta.`}
       </p>
       <form
         className="fields-form"
@@ -113,6 +131,7 @@ export function CountDialog({
             await app.run(kind === 'audit' ? 'finish_audit' : 'count', {
               kind,
               shiftId: shift.id,
+              ...(kind === 'closing' ? { closingCountMode: shift.closingCountMode } : {}),
               ...(kind === 'audit' ? { auditId: state.settings[0].auditId } : {}),
               cash: skip || !countsCash ? undefined : parseMoney(form.get('cash')),
               items,
@@ -186,7 +205,11 @@ export function CountDialog({
                 <label key={x.id}>
                   <span>
                     {x.name}
-                    <small>{kind === 'closing' ? 'unidades restantes del paquete abierto' : x.unit}</small>
+                    <small>
+                      {kind === 'closing' && x.id.startsWith('cup:')
+                        ? 'Vasos sueltos del paquete abierto'
+                        : x.unit}
+                    </small>
                   </span>
                   <input
                     aria-label={x.name}
@@ -307,11 +330,17 @@ function BlindCountDialog({
       : kind === 'audit'
         ? state.settings[0].auditRequest
         : null;
-  const list = blindCountArticles(state).filter((a) => !request || request.items.includes(a.id));
+  const list = (
+    kind === 'opening' || kind === 'closing'
+      ? shiftCountArticles(state, shift, kind)
+      : blindCountArticles(state)
+  ).filter((a) => !request || request.items.includes(a.id));
   const cash = request?.cash !== false || (kind === 'audit' && !list.length);
   const attempt =
     (kind === 'opening' && shift.blindOpening?.status === 'recount') ||
-    (kind === 'closing' && shift.blindClosing?.status === 'recount')
+    (kind === 'closing' &&
+      (shift.blindClosing?.status === 'recount' ||
+        (shift.blindClosing?.status === 'ready' && shift.blindClosing.countIds?.length === 1)))
       ? 2
       : 1;
   const title =
@@ -328,6 +357,10 @@ function BlindCountDialog({
       : [];
   return (
     <Modal title={attempt === 2 ? `${title} · Recuento` : title} onClose={onClose}>
+      {kind === 'opening' && shift.blindOpening?.depth && (
+        <p>{shift.blindOpening.depth === 'deep' ? 'Conteo profundo' : 'Conteo sencillo'}</p>
+      )}
+      {kind === 'closing' && <p>{closingModeLabel(shift)}</p>}
       <form
         className="fields-form"
         onSubmit={async (event) => {
@@ -358,7 +391,14 @@ function BlindCountDialog({
                           checklist.map((_, index) => [index, data.get(`check:${index}`) === 'on']),
                         ),
                       }
-                    : { kind, attempt }),
+                    : {
+                        kind,
+                        attempt,
+                        ...(kind === 'closing' ? { closingCountMode: shift.closingCountMode } : {}),
+                        checklist: Object.fromEntries(
+                          checklist.map((_, index) => [index, data.get(`check:${index}`) === 'on']),
+                        ),
+                      }),
               },
               { onlineOnly: true },
             );
@@ -450,12 +490,13 @@ function EmployeeCash() {
   const shifts = state.shifts.filter((s) => s.cashierId === actor.id);
   const active = shifts.find((s) => ['open', 'requested', 'provisional'].includes(s.status));
   const opening = active?.blindOpening?.status;
-  const recount = active?.blindClosing?.status === 'recount';
+  const recount =
+    active?.blindClosing?.status === 'recount' ||
+    (active?.blindClosing?.status === 'ready' && active.blindClosing.countIds?.length === 1);
   const auditId = state.settings[0].auditId;
   const owns = hasPermission(actor, 'shifts') && isShiftCashier(actor, active);
   const canStart = actor.primary && actor.role !== 'apoyo' && hasPermission(actor, 'shifts');
   const [count, setCount] = useState<EmployeeCountKind | null>(null);
-  const [prompt, setPrompt] = useState<NonNullable<typeof state.shiftReviewPrompt>[number] | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
   const [handoff, setHandoff] = useState<'request' | string | null>(null);
@@ -470,7 +511,7 @@ function EmployeeCash() {
   return (
     <div className="page-stack">
       <div className="page-toolbar">
-        <h2>Turno</h2>
+        <h2>Mi turno</h2>
         {!active && canStart && (
           <button
             className="button primary"
@@ -526,6 +567,7 @@ function EmployeeCash() {
               Las ventas están en pausa mientras un administrador revisa la apertura.
             </p>
           )}
+          {active.status === 'open' && owns && <p>Cuadre de cierre · {closingModeLabel(active)}</p>}
           {active.status === 'open' && owns && (
             <div className="button-row">
               {opening === 'audit' ? (
@@ -570,6 +612,29 @@ function EmployeeCash() {
       )}
       {active?.status === 'open' && (
         <Panel title="Transferencias registradas">
+          {state.ownTurnSummary
+            ?.filter((summary) => summary.shiftId === active.id)
+            .map((summary) => (
+              <div key={summary.shiftId}>
+                <p>
+                  Ventas por tamaño ·{' '}
+                  {summary.sizes.map((item) => `${item.name}: ${item.quantity}`).join(' · ') || 'Sin ventas'}
+                </p>
+                <p>{summary.payments.map((item) => `${item.name}: ${money(item.amount)}`).join(' · ')}</p>
+                <p>
+                  {summary.expectedCash !== undefined &&
+                    `Efectivo esperado · ${money(summary.expectedCash)} · `}
+                  Gastos · {money(summary.expenses)}
+                </p>
+                {summary.handoffs.map((item) => (
+                  <p key={item.id}>
+                    {item.destination}
+                    {item.custodian && ` · ${item.custodian}`} · {money(item.amount)} ·{' '}
+                    {stateNames[item.status]}
+                  </p>
+                ))}
+              </div>
+            ))}
           {state.transferSummary?.length ? (
             <div className="stats-grid">
               {state.transferSummary.map(({ name, amount }, index) => (
@@ -663,20 +728,7 @@ function EmployeeCash() {
           />
         </Modal>
       )}
-      {!!state.shiftReviewPrompt?.length && (
-        <Panel title="Solicitudes de explicación">
-          {state.shiftReviewPrompt.map((request) => (
-            <div className="notice info" key={request.id}>
-              <span>
-                {request.notes} · {date(request.at)}
-              </span>
-              <button className="button secondary" disabled={!app.online} onClick={() => setPrompt(request)}>
-                Responder
-              </button>
-            </div>
-          ))}
-        </Panel>
-      )}
+      <OwnClosing />
       <Panel title="Mis turnos">
         {shifts.some(employeeShiftStatus) ? (
           <div className="table-wrap">
@@ -710,33 +762,42 @@ function EmployeeCash() {
       </Panel>
       {count && active?.status === 'open' && owns && (
         <BlindCountDialog
-          key={`${count}:${opening}:${active.blindClosing?.status}`}
+          key={`${count}:${opening}:${active.blindClosing?.status}:${active.closingCountMode}`}
           kind={count}
           shift={active}
           onClose={() => setCount(null)}
         />
       )}
-      {prompt && (
-        <Modal title="Responder solicitud" onClose={() => setPrompt(null)}>
-          <p>{prompt.notes}</p>
-          <FieldsForm
-            fields={[{ name: 'notes', label: 'Explicación', type: 'textarea', required: true }]}
-            onCancel={() => setPrompt(null)}
-            onSubmit={async ({ notes }) => {
-              await app.run('answer_shift_review', { requestId: prompt.id, notes }, { onlineOnly: true });
-              app.toast('Explicación enviada.');
-              setPrompt(null);
-            }}
-          />
-        </Modal>
-      )}
     </div>
   );
 }
 
-export function Cash() {
-  const { actor } = useApp().data!;
-  return actor.role === 'admin' ? <AdminCash /> : <EmployeeCash />;
+export function Cash({ onRequests }: { onRequests: () => void }) {
+  const { actor, state } = useApp().data!;
+  const active = state.shifts.find((shift) => shift.status === 'open');
+  const pendingPaymentChange =
+    !!active &&
+    (actor.role === 'admin'
+      ? state.requests.some(
+          (request) =>
+            request.type === 'payment_change' &&
+            request.status === 'pending' &&
+            state.orders.some((order) => order.shiftId === active.id && order.id === request.referenceId),
+        )
+      : !!state.paymentChangeOrderIds?.length);
+  return (
+    <div className="page-stack">
+      {pendingPaymentChange && (
+        <div className="notice warning">
+          <span>Hay cambios de medio de pago pendientes en este turno. Revísalos antes de cuadrar.</span>
+          <button className="button secondary small" onClick={onRequests}>
+            Ver solicitudes
+          </button>
+        </div>
+      )}
+      {actor.role === 'admin' ? <AdminCash /> : <EmployeeCash />}
+    </div>
+  );
 }
 
 function AdminCash() {
@@ -748,11 +809,17 @@ function AdminCash() {
     directOpening = admin && app.online;
   const { auditId, auditRequest, nextOpeningAudit } = state.settings[0];
   const openingAudit = auditRequest?.opening === true;
-  const sales = admin && active?.status === 'open' ? salesByMethod(state, active.id) : undefined;
-  const [count, setCount] = useState<'opening' | 'closing' | 'audit' | null>(null),
+  const recount =
+    active?.blindClosing?.status === 'recount' ||
+    (active?.blindClosing?.status === 'ready' && active.blindClosing.countIds?.length === 1);
+  const sales =
+    admin &&
+    active?.status === 'open' &&
+    (!active.blindOpening || ['matched', 'authorized', 'reviewed'].includes(active.blindOpening.status))
+      ? salesByMethod(state, active.id)
+      : undefined;
+  const [count, setCount] = useState<EmployeeCountKind | null>(null),
     [auditSetup, setAuditSetup] = useState<'current' | 'next_opening' | null>(null),
-    [reviewCount, setReviewCount] = useState<Count | null>(null),
-    [showArchived, setShowArchived] = useState(false),
     [form, setForm] = useState<{
       title: string;
       fields: Field[];
@@ -769,7 +836,7 @@ function AdminCash() {
       setError((e as Error).message);
     }
   };
-  const counts = visibleCounts(state, showArchived);
+
   return (
     <div className="page-stack">
       <div className="page-toolbar">
@@ -824,11 +891,7 @@ function AdminCash() {
           )
         }
       >
-        {admin && nextOpeningAudit && (
-          <p className="notice info">
-            Próxima apertura · Arqueo {auditModeLabels[nextOpeningAudit.mode].toLowerCase()}
-          </p>
-        )}
+        {admin && nextOpeningAudit && <p className="notice info">Próxima apertura · Conteo profundo</p>}
         {active ? (
           <>
             <div className="shift-summary">
@@ -867,18 +930,30 @@ function AdminCash() {
                   Autorizar apertura
                 </button>
               )}
-              {active.status === 'requested' && !app.online && owns && <OfflineOpening shiftId={active.id} />}
+              {active.status === 'requested' && !active.blindOpening?.depth && !app.online && owns && (
+                <OfflineOpening shiftId={active.id} />
+              )}
+              {active.status === 'open' && owns && !auditId && active.blindOpening?.status === 'audit' && (
+                <button className="button primary" onClick={() => setCount('opening_audit')}>
+                  Presentar arqueo de apertura
+                </button>
+              )}
               {active.status === 'open' && owns && !auditId && (
                 <>
-                  {!active.openingCountId && (
-                    <button className="button secondary" onClick={() => setCount('opening')}>
-                      <ClipboardCheck size={17} />
-                      Contar apertura
+                  {!active.openingCountId &&
+                    !['review', 'audit'].includes(active.blindOpening?.status ?? '') && (
+                      <button className="button secondary" onClick={() => setCount('opening')}>
+                        <ClipboardCheck size={17} />
+                        {active.blindOpening?.status === 'recount'
+                          ? 'Volver a contar la apertura'
+                          : 'Contar apertura'}
+                      </button>
+                    )}
+                  {(!shiftBlocksSales(active) || recount) && (
+                    <button className="button primary" onClick={() => setCount('closing')}>
+                      {recount ? 'Volver a contar el cierre' : 'Cerrar y contar caja'}
                     </button>
                   )}
-                  <button className="button primary" onClick={() => setCount('closing')}>
-                    Cerrar y contar caja
-                  </button>
                 </>
               )}
               {active.status === 'open' && admin && !auditId && !shiftBlocksSales(active) && (
@@ -891,12 +966,38 @@ function AdminCash() {
                   Iniciar arqueo sorpresa
                 </button>
               )}
+              {active.status === 'open' && !active.blindClosing && !active.closingCountId && (
+                <button
+                  className="button secondary"
+                  disabled={!app.online}
+                  onClick={() =>
+                    setForm({
+                      title: 'Tipo de cuadre de este turno',
+                      type: 'review_shift',
+                      extra: { shiftId: active.id, action: 'set_closing_count_mode' },
+                      fields: [
+                        {
+                          name: 'mode',
+                          label: 'Conteo físico al cerrar',
+                          type: 'select',
+                          required: true,
+                          value: active.closingCountMode ?? '',
+                          options: Object.entries(closingModes).map(([value, label]) => ({ value, label })),
+                        },
+                      ],
+                    })
+                  }
+                >
+                  Elegir tipo de cuadre
+                </button>
+              )}
               {auditId && owns && (
                 <button className="button primary" disabled={!app.online} onClick={() => setCount('audit')}>
                   {openingAudit ? 'Presentar arqueo de apertura' : 'Presentar arqueo y reanudar'}
                 </button>
               )}
             </div>
+            {active.status === 'open' && <p>Cuadre de cierre · {closingModeLabel(active)}</p>}
             {auditId && (
               <div className="notice warning">
                 {openingAudit ? 'Arqueo de apertura pendiente.' : 'Arqueo sorpresa en curso.'}{' '}
@@ -939,135 +1040,25 @@ function AdminCash() {
           />
         )}
       </Panel>
-      <Panel title="Conteos registrados">
-        {visibleCounts(state).length < state.counts.length && (
-          <label>
-            <input
-              type="checkbox"
-              checked={showArchived}
-              onChange={(event) => setShowArchived(event.target.checked)}
-            />{' '}
-            Mostrar conteos archivados y del período de ensayo
-          </label>
-        )}
-        {counts.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Conteo</th>
-                  <th>Contado / verificado</th>
-                  {admin && (
-                    <>
-                      <th>Esperado original</th>
-                      <th>Diferencia original</th>
-                    </>
-                  )}
-                  <th>Responsable</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {[...counts].reverse().map((c) => (
-                  <tr key={c.id}>
-                    <td>
-                      {c.kind === 'opening' ? 'Apertura' : c.kind === 'closing' ? 'Cierre' : 'Arqueo'}
-                      {c.blindAttempt && <small>{c.blindAttempt === 1 ? 'Primer conteo' : 'Recuento'}</small>}
-                      {inRehearsalPeriod(state, c.at) && <small>Período de ensayo</small>}
-                      <small>{date(c.at)}</small>
-                      {c.kind === 'closing' && (
-                        <small>
-                          {closingArchive(state, c)
-                            ? 'Archivado'
-                            : c.revisesId
-                              ? 'Revisión administrativa'
-                              : state.shifts.find((s) => s.closingCountId === c.id)?.closingReview?.status ===
-                                  'approved'
-                                ? 'Aprobado'
-                                : 'Pendiente de aprobación'}
-                        </small>
-                      )}
-                      {closingArchive(state, c) && (
-                        <small>
-                          {closingArchive(state, c)!.notes} · Archivado el{' '}
-                          {date(closingArchive(state, c)!.at)}
-                        </small>
-                      )}
-                    </td>
-                    <td>
-                      {c.cash === undefined
-                        ? c.kind === 'audit' || c.auditId
-                          ? 'Efectivo no solicitado'
-                          : 'Omitido'
-                        : money(c.cash)}
-                      {Object.entries(c.payments ?? {}).map(([key, amount]) => (
-                        <small key={key}>
-                          {c.paymentLabels?.[key] ?? key}: {money(amount)}
-                        </small>
-                      ))}
-                    </td>
-                    {admin && (
-                      <>
-                        <td>
-                          {c.expectedCash === undefined ? '—' : money(c.expectedCash)}
-                          {Object.entries(c.expectedPayments ?? {}).map(([key, amount]) => (
-                            <small key={key}>
-                              {c.paymentLabels?.[key] ?? key}: {money(amount)}
-                            </small>
-                          ))}
-                        </td>
-                        <td className={c.difference ? 'negative' : ''}>
-                          {c.difference === undefined ? '—' : money(c.difference)}
-                          {Object.entries(c.paymentDifferences ?? {}).map(([key, amount]) => (
-                            <small key={key} className={amount ? 'negative' : ''}>
-                              {c.paymentLabels?.[key] ?? key}: {money(amount)}
-                            </small>
-                          ))}
-                        </td>
-                      </>
-                    )}
-                    <td>{profiles.find((x) => x.id === c.by)?.name}</td>
-                    <td>
-                      {admin && (
-                        <button className="text-button" onClick={() => setReviewCount(c)}>
-                          Revisar conteo
-                        </button>
-                      )}
-                      <button
-                        className="text-button"
-                        disabled={!admin && state.shifts.find((s) => s.id === c.shiftId)?.status !== 'open'}
-                        onClick={() =>
-                          setForm({
-                            title: 'Explicar diferencia',
-                            type: 'explain_difference',
-                            extra: { countId: c.id },
-                            fields: [
-                              { name: 'notes', label: 'Explicación', type: 'textarea', required: true },
-                              { name: 'evidenceId', label: 'Evidencia opcional', type: 'photo' },
-                            ],
-                          })
-                        }
-                      >
-                        Agregar explicación
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <OwnClosing />
+      {count &&
+        active &&
+        (count === 'audit' ? auditId && owns : !auditId) &&
+        (count === 'opening_audit' || (active.blindOpening && count !== 'audit') ? (
+          <BlindCountDialog
+            key={`${count}:${active.closingCountMode}`}
+            kind={count}
+            shift={active}
+            onClose={() => setCount(null)}
+          />
         ) : (
-          <Empty title="Aún no hay conteos" />
-        )}
-      </Panel>
-      {count && active && (count === 'audit' ? auditId && owns : !auditId) && (
-        <CountDialog
-          key={count === 'audit' ? auditId : count}
-          kind={count}
-          shift={active}
-          onClose={() => setCount(null)}
-        />
-      )}
+          <CountDialog
+            key={count === 'audit' ? auditId : `${count}:${active.closingCountMode}`}
+            kind={count}
+            shift={active}
+            onClose={() => setCount(null)}
+          />
+        ))}
       {admin &&
         (auditSetup === 'next_opening' || (auditSetup === 'current' && active?.status === 'open')) && (
           <AuditSetupDialog
@@ -1075,17 +1066,22 @@ function AdminCash() {
             onClose={() => setAuditSetup(null)}
           />
         )}
-      {reviewCount && admin && <CountReviewDialog count={reviewCount} onClose={() => setReviewCount(null)} />}
       {form && (
         <Modal title={form.title} onClose={() => setForm(null)}>
+          {form.extra?.action === 'set_closing_count_mode' && (
+            <p>
+              Aplica al turno actual. Al cerrar se siguen verificando los medios de pago y el destino del
+              efectivo.
+            </p>
+          )}
           <FieldsForm
             fields={form.fields}
             onCancel={() => setForm(null)}
             onSubmit={async (values) => {
-              await app.run(form.type, { ...form.extra, ...values });
-              app.toast('Registro guardado.');
+              const result = await app.run(form.type, { ...form.extra, ...values });
+              app.toast(form.type === 'review_shift' ? result.message : 'Registro guardado.');
               setForm(null);
-              if (form.type === 'request_shift' && admin) setCount(nextOpeningAudit ? 'audit' : 'opening');
+              if (form.type === 'request_shift' && admin) setCount('opening');
             }}
           />
         </Modal>
