@@ -1,16 +1,167 @@
 import { expect, it } from 'vitest';
 import {
+  applyCommand,
+  closingPreview,
   closingPaymentMethods,
   countArticles,
   countHasDifferences,
   redactState,
   shiftCountArticles,
   stockBalances,
+  visibleClosingPreview,
 } from '../src/domain/engine.ts';
-import { fixture, ids, run, order, cashier, admin, NOW } from './support/fixture.ts';
+import { fixture, ids, run, order, cashier, admin, NOW, cmd, approveChange } from './support/fixture.ts';
 import type { State } from '../src/domain/types.ts';
 
 const key = `transfer:${ids.location}`;
+
+it('un ajuste aprobado durante la revisión del cierre sustituye el esperado sin revertirse al confirmar', () => {
+  let state = fixture();
+  const article = `cup:${state.sizes[0].id}`;
+  state.shifts[0].blindOpening = { depth: 'simple', status: 'matched' };
+  const preview = visibleClosingPreview(state, state.shifts[0]);
+  const counted = run(state, 'submit_blind_count', {
+    shiftId: ids.shift,
+    kind: 'closing',
+    attempt: 1,
+    cash: preview.expectedCash,
+    preview,
+    items: preview.expectedItems,
+    payments: preview.expectedPayments,
+  });
+  state = run(counted.state, 'submit_closing', {
+    shiftId: ids.shift,
+    countId: counted.result.referenceId,
+    retained: 20000,
+    sent: 0,
+    verified: true,
+    cashTotal: 0,
+    transferTotal: 0,
+  }).state;
+  const original = state.counts.at(-1)!;
+  state = approveChange(
+    run(state, 'correct_inventory', { article, quantity: 7, notes: 'Saldo físico verificado' }, admin),
+  ).state;
+  expect(original.expectedItems?.[article]).toBe(0);
+  expect(closingPreview(state, ids.shift, original).expectedItems[article]).toBe(7);
+  const confirmed = run(state, 'approve_closing', { shiftId: ids.shift, adjustInventory: true }, admin).state;
+  expect(stockBalances(confirmed)[article]).toBe(7);
+
+  const opened = applyCommand(
+    confirmed,
+    cmd('request_shift', {}, cashier, { shiftId: undefined }),
+    cashier,
+    NOW,
+  );
+  const shift = opened.state.shifts.at(-1)!;
+  const items = Object.fromEntries(
+    shiftCountArticles(opened.state, shift, 'opening').map(({ id }) => [id, id === article ? 7 : 0]),
+  );
+  const opening = applyCommand(
+    opened.state,
+    cmd(
+      'submit_blind_count',
+      {
+        shiftId: shift.id,
+        kind: 'opening',
+        attempt: 1,
+        cash: shift.base,
+        items,
+      },
+      cashier,
+      { shiftId: shift.id },
+    ),
+    cashier,
+    NOW,
+  );
+  expect(opening.result.code).toBe('COUNT_MATCHED');
+  expect(visibleClosingPreview(opening.state, opening.state.shifts.at(-1)!).expectedItems[article]).toBe(7);
+});
+
+it('conserva juntos el faltante de 12 oz del cierre y el de 16 oz de la siguiente apertura', () => {
+  let state = fixture();
+  const [small, medium] = state.sizes;
+  const smallCup = `cup:${small.id}`;
+  const mediumCup = `cup:${medium.id}`;
+  state.shifts[0].blindOpening = { status: 'matched', depth: 'simple' };
+  state = run(state, 'open_package', { quantities: { [small.id]: 1, [medium.id]: 1 } }).state;
+  const preview = visibleClosingPreview(state, state.shifts[0]);
+  const items = Object.fromEntries(
+    Object.entries(preview.expectedItems).map(([id, amount]) => [id, Math.max(0, amount)]),
+  );
+  const counted = run(state, 'submit_blind_count', {
+    shiftId: ids.shift,
+    kind: 'closing',
+    attempt: 1,
+    cash: preview.expectedCash,
+    preview,
+    items: { ...items, [smallCup]: 19 },
+    payments: preview.expectedPayments,
+    notes: 'Falta un vaso de 12 oz.',
+  });
+  state = run(counted.state, 'submit_closing', {
+    shiftId: ids.shift,
+    countId: counted.result.referenceId,
+    retained: 20000,
+    sent: 0,
+    verified: true,
+    cashTotal: 0,
+    transferTotal: 0,
+  }).state;
+  const confirmed = run(state, 'approve_closing', { shiftId: ids.shift, adjustInventory: true }, admin);
+  const nextDay = '2026-10-24T16:00:00.000Z';
+  const open = applyCommand(
+    confirmed.state,
+    cmd('request_shift', {}, cashier, { at: nextDay, shiftId: undefined }),
+    cashier,
+    nextDay,
+  );
+  const shift = open.state.shifts.find((item) => item.id === open.result.referenceId)!;
+  const balance = stockBalances(open.state);
+  const openingItems = Object.fromEntries(
+    shiftCountArticles(open.state, shift, 'opening').map(({ id }) => [id, balance[id] ?? 0]),
+  );
+  const submit = (current: State, attempt: number) =>
+    applyCommand(
+      current,
+      cmd(
+        'submit_blind_count',
+        {
+          shiftId: shift.id,
+          kind: 'opening',
+          attempt,
+          cash: shift.base,
+          items: { ...openingItems, [mediumCup]: 19 },
+        },
+        cashier,
+        { at: nextDay, shiftId: shift.id },
+      ),
+      cashier,
+      nextDay,
+    );
+  state = submit(submit(open.state, 1).state, 2).state;
+  expect(stockBalances(state)).toMatchObject({ [smallCup]: 19, [mediumCup]: 20 });
+  expect(state.counts.find((item) => item.id === confirmed.result.referenceId)?.differences).toMatchObject({
+    [smallCup]: -1,
+    [mediumCup]: 0,
+  });
+  state = applyCommand(
+    state,
+    cmd(
+      'review_blind_opening',
+      {
+        shiftId: shift.id,
+        action: 'approve_count',
+      },
+      admin,
+      { at: nextDay },
+    ),
+    admin,
+    nextDay,
+  ).state;
+  expect(stockBalances(state)).toMatchObject({ [smallCup]: 19, [mediumCup]: 19 });
+  expect(state.shifts[0].closingReview?.openingChecks?.[0].differences).toEqual({ [mediumCup]: -1 });
+});
 function closing(state: State, payments: Record<string, number> = { [key]: 0 }) {
   return {
     kind: 'closing',

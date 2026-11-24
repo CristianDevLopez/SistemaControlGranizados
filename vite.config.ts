@@ -34,6 +34,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'prompt',
+      injectRegister: null,
       includeAssets: ['dexter.jpg', 'icon.svg'],
       manifest: {
         id: '/',

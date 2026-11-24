@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, it, expect } from 'vitest';
+import { beforeAll, afterAll, it, expect, vi } from 'vitest';
 import { PgBackend } from './support/backend.ts';
 import { admin, cashier, other, support, ids, cmd, NOW } from './support/fixture.ts';
 import { createGateway } from '../src/server/gateway.ts';
@@ -92,6 +92,36 @@ it('reintenta un mismo comando sin duplicar pagos ni consumos', async () => {
   const result = (await db.load()).state;
   expect(result.payments.filter((p) => p.eventId === pay.id)).toHaveLength(1);
   expect(result.deliveries.filter((p) => p.eventId === pay.id)).toHaveLength(1);
+});
+it('reintenta un cobro interrumpido por timeout sin crear una conciliación ni duplicarlo', async () => {
+  const state = (await db.load()).state;
+  const create = cmd('create_order', {
+    lines: [{ flavorId: ids.flavor, sizeId: state.sizes[0].id, quantity: 1 }],
+  });
+  const created = await request('commands', { commands: [create] });
+  expect(created.body.results[0].status).toBe('accepted');
+  const pay = cmd('pay', { orderId: created.body.results[0].referenceId, deliver: true });
+  const commit = vi.spyOn(PgBackend.prototype, 'commit').mockRejectedValueOnce({
+    code: '57014',
+    message: 'canceling statement due to statement timeout',
+  });
+  try {
+    const interrupted = await request('commands', { commands: [pay] });
+    expect(interrupted.status).toBe(503);
+    expect(interrupted.body.code).toBe('RETRY_SYNC');
+    expect(await db.receipt(pay.id)).toBeNull();
+    expect((await db.load()).state.requests.some((item) => item.id === pay.id)).toBe(false);
+  } finally {
+    commit.mockRestore();
+  }
+
+  const first = await request('commands', { commands: [pay] });
+  const second = await request('commands', { commands: [pay] });
+  expect(first.body.results[0]).toMatchObject({ id: pay.id, status: 'accepted' });
+  expect(second.body.results).toEqual(first.body.results);
+  const saved = (await db.load()).state;
+  expect(saved.payments.filter((payment) => payment.eventId === pay.id)).toHaveLength(1);
+  expect(saved.deliveries.filter((delivery) => delivery.eventId === pay.id)).toHaveLength(1);
 });
 it('guarda todos los sabores del combinado en PostgreSQL y conserva sus consumos por separado', async () => {
   const loaded = await db.load(),
@@ -259,7 +289,35 @@ it('rechaza un cambio de pedido desactualizado entre caja y apoyo', async () => 
     configVersion: state.settings[0].version,
   });
   const b = await request('commands', { commands: [second] });
-  expect(b.body.results[0].status).toBe('conflict');
+  expect(b.body.results[0]).toMatchObject({ status: 'conflict', code: 'ORDER_VERSION_CONFLICT' });
+
+  const before = (await db.load()).state;
+  const cutoff = new Date(Date.parse(NOW) - 1000).toISOString();
+  await db.db.query(
+    `update public.requests set data = data || jsonb_build_object('status', 'rejected', 'syncDiscardedThrough', $2::text)
+     where id = $1`,
+    [second.id, cutoff],
+  );
+  const oldRetry = cmd('pay', { orderId: oid, syncAfterConflict: second.id }, cashier, {
+    at: cutoff,
+    sequence: second.sequence + 1,
+  });
+  for (const command of [second, oldRetry]) {
+    const retried = await request('commands', { commands: [command] });
+    expect(retried.body.results[0]).toMatchObject({
+      status: 'conflict',
+      code: 'SYNC_DISCARDED',
+      finalRejection: true,
+    });
+  }
+  expect((await db.load()).state.requests.some((item) => item.id === oldRetry.id)).toBe(false);
+  const newRetry = { ...oldRetry, id: crypto.randomUUID(), at: NOW, sequence: oldRetry.sequence + 1 };
+  const retried = await request('commands', { commands: [newRetry] });
+  expect(retried.body.results[0]).toMatchObject({ code: 'ORDER_DEPENDENCY_CONFLICT', syncReview: true });
+  const after = (await db.load()).state;
+  expect(after.orders).toEqual(before.orders);
+  expect(after.payments).toEqual(before.payments);
+  expect(after.stock).toEqual(before.stock);
 });
 
 it('persiste el arqueo solicitado por admin y permite presentarlo solo a la caja responsable', async () => {

@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { applyCommand } from '../domain/engine.ts';
+import { applyCommand, syncOrderId } from '../domain/engine.ts';
 import { employeeView, operatingShift } from '../domain/employee-view.ts';
 import {
   type Actor,
@@ -19,7 +19,12 @@ import {
   type Snapshot,
 } from '../domain/types.ts';
 import { isReadOnlyView, rolePreview } from '../domain/views.ts';
-import { commandPermission, hasPermission } from '../domain/access.ts';
+import {
+  commandPermission,
+  hasPermission,
+  isCustomerOrderCommand,
+  isOrderAssistant,
+} from '../domain/access.ts';
 import {
   api,
   ApiError,
@@ -42,6 +47,9 @@ import {
   belongsToBranch,
   awaitsSync,
   isFinalRejection,
+  syncBlocker,
+  syncReviewDependency,
+  retryLegacyDatabaseConflicts,
   offlineSnapshot,
   type DeviceCredential,
   type OfflineAuthorizer,
@@ -87,6 +95,7 @@ export function useApp() {
 }
 const ONLINE_TYPES = new Set<CommandType>([
   'record_paper',
+  'send_order',
   'save_flavor',
   'save_size',
   'change_access',
@@ -111,6 +120,8 @@ const ONLINE_TYPES = new Set<CommandType>([
   'finish_audit',
   'adjust_count_inventory',
   'correct_inventory',
+  'save_supply',
+  'open_supply',
   'approve_closing',
   'submit_closing',
   'return_closing',
@@ -223,27 +234,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if ('unchanged' in result) return;
     setOnline(true);
     setError(null);
-    const queued = (await db.outbox.toArray())
+    const entries = (await db.outbox.toArray())
       .filter((x) => belongsToBranch(x, result))
       .sort((a, b) => a.sequence - b.sequence);
+    const queued = await retryLegacyDatabaseConflicts(entries, result.state);
     let state = result.state;
+    const unresolved: OutboxEntry[] = [];
+    const orderConflicts = new Map<string, { id: string; through: number }>();
     for (const entry of queued) {
       if (entry.status === 'acknowledged') {
         await db.outbox.delete(entry.id);
         continue;
       }
+      const orderId = syncOrderId(entry.command);
+      if (entry.status === 'reconciled' && orderId && entry.reconciledThrough !== undefined)
+        orderConflicts.set(orderId, { id: entry.id, through: entry.reconciledThrough });
       if (entry.status === 'conflict') {
         const review = result.state.requests.find((r) => r.type === 'sync' && r.id === entry.id);
         if ((review && review.status !== 'pending') || result.state.resolvedSyncIds?.includes(entry.id)) {
-          await db.outbox.update(entry.id, { status: 'reconciled' });
+          const through = queued.at(-1)!.sequence;
+          if (orderId) orderConflicts.set(orderId, { id: entry.id, through });
+          await db.outbox.update(entry.id, { status: 'reconciled', reconciledThrough: through });
           continue;
         }
         if (!review && isFinalRejection(entry)) {
           await db.outbox.update(entry.id, { status: 'rejected' });
           continue;
         }
+        if (!entry.reviewRecorded && (review || result.state.pendingSyncReviewIds?.includes(entry.id))) {
+          await db.outbox.update(entry.id, { reviewRecorded: true });
+          entry.reviewRecorded = true;
+        }
+        if (orderId) orderConflicts.set(orderId, { id: entry.id, through: Infinity });
       }
-      if (!entry.optimistic || !awaitsSync(entry)) continue;
+      if (entry.status === 'pending' && orderId) {
+        const conflict = orderConflicts.get(orderId);
+        if (conflict && entry.sequence <= conflict.through && !entry.dependsOnConflict) {
+          await db.outbox.update(entry.id, { dependsOnConflict: conflict.id });
+          entry.dependsOnConflict = conflict.id;
+        }
+      }
+      if (awaitsSync(entry) && (entry.status === 'conflict' || syncBlocker(entry, unresolved))) {
+        unresolved.push(entry);
+        if (orderId) continue;
+      }
+      if (!entry.optimistic || !awaitsSync(entry) || entry.dependsOnConflict) continue;
       try {
         state = applyCommand(
           state,
@@ -281,26 +316,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const entries = (await db.outbox.toArray())
         .filter((x) => belongsToBranch(x, current.current) && awaitsSync(x))
         .sort((a, b) => a.sequence - b.sequence);
+      const unresolved: OutboxEntry[] = [];
       for (const entry of entries) {
-        if (entry.status === 'conflict') break;
-        const response = await sendCommands([entry.command]);
+        const reviewDependency = syncReviewDependency(entry, unresolved);
+        if (entry.status === 'conflict' || (!reviewDependency && syncBlocker(entry, unresolved))) {
+          unresolved.push(entry);
+          continue;
+        }
+        const dependency = reviewDependency ?? entry.dependsOnConflict;
+        const command = dependency
+          ? {
+              ...entry.command,
+              payload: { ...entry.command.payload, syncAfterConflict: dependency },
+            }
+          : entry.command;
+        const response = await sendCommands([command]);
         const result = response.results[0];
         if (result?.id !== entry.id || !['accepted', 'review', 'conflict'].includes(result.status))
           throw new Error('Respuesta incompleta del servidor.');
         recentResults.current.set(entry.id, result);
-        const status =
+        const status: OutboxEntry['status'] =
           result.finalRejection || isFinalRejection(entry, result)
             ? 'rejected'
             : result.status === 'conflict'
               ? 'conflict'
               : 'acknowledged';
-        await db.outbox.update(entry.id, {
+        const updated = {
           status,
           result,
           message: result.message,
-        });
+          reviewRecorded: result.syncReview === true,
+        };
+        await db.outbox.update(entry.id, updated);
         if (result.status === 'conflict') toast(result.message);
-        if (status === 'conflict') break;
+        if (status === 'conflict') unresolved.push({ ...entry, ...updated });
       }
       const photos = (await db.photos.toArray()).filter(
         (x) => belongsToBranch(x, current.current) && x.status === 'pending',
@@ -369,6 +418,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         try {
           const snapshot = current.current;
           if (!snapshot) throw new Error('Inicia sesión.');
+          const orderAssistant = isOrderAssistant(snapshot.actor, snapshot.state);
+          if (orderAssistant && !isCustomerOrderCommand(type))
+            throw new Error('Desde apoyo solo puedes tomar y enviar tus pedidos a caja.');
           const permission = commandPermission(type);
           if (permission && !hasPermission(snapshot.actor, permission))
             throw new Error('No tienes permiso para esta operación.');
@@ -381,9 +433,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             ((type === 'open_bag' || type === 'open_package') && payload.correction === true) ||
             (type === 'count' && payload.preview !== undefined) ||
             (type === 'request_shift' && snapshot.actor.role === 'admin' && isOnline) ||
+            orderAssistant ||
             snapshot.actor.role === 'apoyo' ||
             type === 'redeem_coupon' ||
-            (type === 'pay' && Array.isArray(payload.codes) && payload.codes.length > 0);
+            (type === 'pay' && (isOnline || (Array.isArray(payload.codes) && payload.codes.length > 0)));
           if (requiresOnline && (!navigator.onLine || !online))
             throw new Error('Esta operación requiere conexión.');
           const shift =
@@ -402,6 +455,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
             sequence,
             payload: { ...payload, ...(!isOnline ? { offline: true } : {}) },
           };
+          const orderId = syncOrderId(command);
+          const payment = type === 'pay' || type === 'redeem_coupon';
+          if (orderId) {
+            const queued = (await db.outbox.toArray()).filter(
+              (entry) =>
+                belongsToBranch(entry, snapshot) &&
+                awaitsSync(entry) &&
+                syncOrderId(entry.command) === orderId,
+            );
+            const conflict = queued.find((entry) => entry.status === 'conflict');
+            if (conflict)
+              throw new Error(
+                `Este pedido tiene la operación ${conflict.sequence} por conciliar. Revisa Estado de sincronización.`,
+              );
+            if (
+              queued.some(
+                (entry) =>
+                  (type === 'send_order' && entry.command.type === type) ||
+                  (payment && ['pay', 'redeem_coupon'].includes(entry.command.type)),
+              )
+            )
+              throw new Error(
+                'Esta acción ya está pendiente de sincronización. Revisa Estado de sincronización.',
+              );
+            if (payment) {
+              const order = current.current?.state.orders.find((item) => item.id === orderId);
+              if (order?.status === 'paid') throw new Error('El cobro de este pedido ya está registrado.');
+              if (order && payload.expectedVersion !== undefined && order.version !== payload.expectedVersion)
+                throw new Error('El pedido cambió. Revisa los productos y el total antes de cobrar.');
+            }
+          }
           const optimistic = !requiresOnline;
           let next = snapshot.state,
             result: Result = { id: command.id, status: 'accepted', message: 'Pendiente de validación.' };
@@ -444,7 +528,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setData(current.current);
             await updatePending();
             void sync();
-            return result;
+            return { ...result, pendingSync: true };
           }
           await sync();
           if ((await db.outbox.get(command.id))?.status === 'pending' && navigator.onLine) await sync();
@@ -578,36 +662,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => (data?.actor.superAdmin && viewRole ? rolePreview(data, viewRole) : data),
     [data, viewRole],
   );
-  const installUpdate = useCallback(
-    async (activate: () => Promise<void>) => {
-      if (installingUpdate.current || switchingBranch.current || localWrites.current > 0)
-        throw new Error('Espera a que termine la operación en curso antes de actualizar.');
-      if (!navigator.onLine) throw new Error('Conéctate para sincronizar antes de actualizar.');
-      installingUpdate.current = true;
-      try {
-        await commandLock.current;
-        await sync();
-        // El primer intento puede haber esperado un envío anterior que aún no incluía el último registro.
-        await sync();
-        const snapshot = current.current;
-        if (!snapshot) throw new Error('Inicia sesión antes de actualizar.');
-        const queued = (await db.outbox.toArray()).some(
-          (entry) => belongsToBranch(entry, snapshot) && awaitsSync(entry),
-        );
-        const photos = (await db.photos.toArray()).some(
-          (photo) => belongsToBranch(photo, snapshot) && photo.status === 'pending',
-        );
-        if (queued || photos)
-          throw new Error(
-            'La actualización espera registros o fotos sin sincronizar. Revisa Estado de sincronización y vuelve a intentarlo.',
-          );
-        await activate();
-      } finally {
-        installingUpdate.current = false;
-      }
-    },
-    [sync],
-  );
+  const installUpdate = useCallback(async (activate: () => Promise<void>) => {
+    if (installingUpdate.current || switchingBranch.current || localWrites.current > 0)
+      throw new Error('Espera a que termine la operación en curso antes de actualizar.');
+    installingUpdate.current = true;
+    try {
+      await commandLock.current;
+      // The outbox and photos are durable. Startup resumes synchronization with the same IDs.
+      await activate();
+    } finally {
+      installingUpdate.current = false;
+    }
+  }, []);
   const switchBranch = useCallback(
     async (branchId: string) => {
       const saved = current.current;

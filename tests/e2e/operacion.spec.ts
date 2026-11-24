@@ -1,3 +1,4 @@
+import { enterVisibleClosing, submitCashDistribution } from '../support/visible-closing.ts';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { decodeGeneratedQr } from '../support/qr.ts';
 import { admin, cashier, other, support, cmd, ids } from '../support/fixture.ts';
@@ -86,6 +87,52 @@ test.beforeEach(async ({ request }) => {
   await request.post('http://127.0.0.1:5180/reset');
 });
 
+test('Mi turno muestra solo los cierres del día de Colombia', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-11-22T03:00:00Z'));
+  await page.route('**/dexter/snapshot', async (route) => {
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const body = await response.json();
+    const current = body.state.shifts[0];
+    for (const [key, closedAt, difference] of [
+      ['anterior', '2026-11-21T04:59:00.000Z', -11000],
+      ['hoy', '2026-11-22T02:00:00.000Z', -2000],
+    ] as const) {
+      const id = `turno-${key}`;
+      const countId = `conteo-${key}`;
+      body.state.shifts.push({
+        ...current,
+        id,
+        closedAt,
+        visibleClosing: true,
+        status: 'closed',
+        blindClosing: { status: 'review', countIds: [countId] },
+        closingReview: { status: 'pending' },
+      });
+      body.state.counts.push({
+        id: countId,
+        shiftId: id,
+        kind: 'closing',
+        at: closedAt,
+        items: {},
+        difference,
+      });
+    }
+    await route.fulfill({ response, json: body });
+  });
+
+  await login(page, 'caja@test.invalid');
+  await nav(page, 'Mi turno');
+  await expect(page.getByRole('heading', { name: /^Cierre ·/ })).toHaveCount(1);
+  await expect(page.getByText(/Faltan .*2\.000 en efectivo/)).toBeVisible();
+  await expect(page.getByText(/Faltan .*11\.000 en efectivo/)).toHaveCount(0);
+  const turns = page
+    .locator('section')
+    .filter({ has: page.getByRole('heading', { name: 'Mis turnos de hoy' }) });
+  await expect(turns.getByRole('row')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Cerrar turno', exact: true })).toBeVisible();
+});
+
 test('resuelve los cambios de pago de dos ventas desde Solicitudes', async ({ page, request, browser }) => {
   for (const notes of ['Se pagó a la cuenta', 'Segundo pago por transferencia']) {
     const created = await execute(
@@ -100,9 +147,9 @@ test('resuelve los cambios de pago de dos ventas desde Solicitudes', async ({ pa
     await execute(request, 'request_payment_change', { orderId: created.referenceId, notes }, cashier);
   }
   await login(page, 'admin@test.invalid');
-  await nav(page, 'Solicitudes');
-  await page.getByLabel('Tipo de solicitud').selectOption('payments');
-  const cards = page.locator('.request-card');
+  await nav(page, 'Revisiones');
+  await page.getByRole('button', { name: /^Medios de pago ·/ }).click();
+  const cards = page.locator('.request-card').filter({ hasText: 'Cambio de medio de pago' });
   await expect(cards).toHaveCount(2);
   for (let remaining = 2; remaining > 0; remaining--) {
     const card = cards.first();
@@ -114,7 +161,7 @@ test('resuelve los cambios de pago de dos ventas desde Solicitudes', async ({ pa
     await form.getByRole('button', { name: 'Guardar' }).click();
     await expect(cards).toHaveCount(remaining - 1);
   }
-  await expect(page.getByText('Sin solicitudes pendientes', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Medios de pago · 2$/ })).toBeVisible();
   await page.getByLabel('Estado de la solicitud').selectOption('all');
   await expect(cards).toHaveCount(2);
   for (const card of await cards.all()) {
@@ -191,6 +238,65 @@ test('recupera una cortesía rechazada en la versión anterior y envía la opera
   expect(state.audit.filter((a: { eventId: string }) => a.eventId === next.id)).toHaveLength(1);
 });
 
+test('recupera el timeout que bloqueaba la cola y registra la venta una sola vez', async ({
+  page,
+  request,
+}) => {
+  await login(page, 'caja@test.invalid');
+  const { branch, state } = await snapshot(request);
+  const orderId = crypto.randomUUID();
+  const options = {
+    at: new Date().toISOString(),
+    branchId: branch.id,
+    shiftId: state.shifts.find((shift: { status: string }) => shift.status === 'open').id,
+    configVersion: state.settings[0].version,
+  };
+  const outage = cmd('outage', {}, cashier, { ...options, sequence: 11 });
+  const order = cmd(
+    'create_order',
+    { orderId, lines: [{ flavorId: ids.flavor, sizeId: state.sizes[0].id, quantity: 1 }] },
+    cashier,
+    { ...options, sequence: 12 },
+  );
+  const pay = cmd('pay', { orderId, deliver: true }, cashier, { ...options, sequence: 13 });
+  await seedOutbox(page, [
+    {
+      ...pending(outage),
+      status: 'conflict',
+      result: {
+        id: outage.id,
+        status: 'conflict',
+        code: '57014',
+        message: 'canceling statement due to statement timeout',
+      },
+    },
+    pending(order),
+    pending(pay),
+  ]);
+
+  let timeout = true;
+  await page.route('**/dexter/commands', async (route) => {
+    if (timeout && route.request().postDataJSON().commands[0].id === outage.id) {
+      return route.fulfill({ status: 503, json: { code: 'RETRY_SYNC', error: 'Reintento pendiente.' } });
+    }
+    await route.continue();
+  });
+  await page.reload();
+  await page.getByRole('button', { name: 'Estado de sincronización' }).click();
+  await expect(page.getByText('Operación 11')).toBeVisible();
+  await expect(page.getByText('Por conciliar', { exact: true })).toHaveCount(0);
+  expect((await snapshot(request)).state.payments).toHaveLength(0);
+
+  timeout = false;
+  await page.getByRole('button', { name: 'Sincronizar ahora' }).click();
+  await expect(page.getByText('Todas tus operaciones están sincronizadas.')).toBeVisible();
+  const synced = (await snapshot(request)).state;
+  expect(synced.payments).toHaveLength(1);
+  expect(synced.payments[0].eventId).toBe(pay.id);
+  expect(synced.deliveries).toHaveLength(1);
+  expect(synced.requests).toHaveLength(0);
+});
+
 test('al agotar la cuota muestra el rechazo y permite solicitar una cortesía adicional', async ({
   page,
   request,
@@ -265,7 +371,7 @@ test('un conflicto de cobro conserva la cola hasta que un administrador lo conci
   await page.getByRole('button', { name: 'Estado de sincronización' }).click();
   const synchronize = page.getByRole('button', { name: 'Sincronizar ahora' });
   await synchronize.click();
-  await expect(page.getByText('Por conciliar', { exact: true })).toBeVisible();
+  await expect(page.getByText('En revisión', { exact: true })).toBeVisible();
   await expect(page.getByText(/Espera la conciliación de la operación 20/)).toBeVisible();
   const before = (await snapshot(request)).state;
   expect(before.requests).toHaveLength(1);
@@ -283,69 +389,258 @@ test('un conflicto de cobro conserva la cola hasta que un administrador lo conci
   expect(after.audit.filter((a: { eventId: string }) => a.eventId === next.id)).toHaveLength(1);
 });
 
-test('el empleado registra paquetes desde Inventario sin recibir avisos de saldo', async ({
+test('envía el conflicto y sus operaciones dependientes a revisión sin bloquear otro pedido', async ({
   page,
   request,
 }) => {
   await login(page, 'caja@test.invalid');
-  const openPackage = async () => {
-    await nav(page, 'Inventario');
-    await page.getByRole('button', { name: 'Abrir paquete de vasos', exact: true }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog.getByLabel('Unidades del paquete', { exact: false })).toHaveCount(0);
-    await dialog.getByRole('combobox').selectOption({ label: '12 oz' });
-    await dialog.getByRole('checkbox').check();
-    await dialog.getByRole('button', { name: 'Registrar', exact: true }).click();
-    await expect(dialog).toHaveCount(0);
-  };
-  await openPackage();
   const s = await snapshot(request);
-  const created = await execute(request, 'create_order', {
-    lines: [{ sizeId: s.state.sizes[0].id, flavorId: ids.flavor, quantity: 20 }],
-  });
-  const command = cmd('pay', { orderId: created.referenceId, deliver: true }, cashier, {
+  const lines = [{ sizeId: s.state.sizes[0].id, flavorId: ids.flavor, quantity: 1 }];
+  const first = await execute(request, 'create_order', { lines }, support);
+  const order = (await snapshot(request)).state.orders[0];
+  await execute(
+    request,
+    'update_order',
+    { orderId: order.id, expectedVersion: 1, lines: [{ ...order.lines[0], quantity: 2 }] },
+    support,
+  );
+  const second = await execute(request, 'create_order', { lines }, cashier);
+  const opts = {
     at: new Date().toISOString(),
     branchId: s.branch.id,
     configVersion: s.state.settings[0].version,
+  };
+  const stale = cmd('update_order', { orderId: first.referenceId, expectedVersion: 1, lines }, cashier, {
+    ...opts,
+    sequence: 1119,
   });
-  const response = await request.post('http://127.0.0.1:5180/dexter/commands', {
+  // This expected version matches the other device's edit, but the intended edit never landed.
+  const dependent = cmd('pay', { orderId: first.referenceId, expectedVersion: 2 }, cashier, {
+    ...opts,
+    sequence: 1120,
+  });
+  const independent = cmd('pay', { orderId: second.referenceId, expectedVersion: 1 }, cashier, {
+    ...opts,
+    sequence: 1121,
+  });
+  const legacyConflict = await request.post('http://127.0.0.1:5180/dexter/commands', {
     headers: { ...headers, authorization: `Bearer ${cashier.id}`, 'x-device-id': cashier.deviceId },
-    data: { commands: [command] },
+    data: { commands: [stale] },
   });
-  expect((await response.json()).results[0].status).toBe('accepted');
-  await page.reload();
-  await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
-  await nav(page, 'Mostrador');
-  await expect(page.getByRole('button', { name: 'Registrar apertura de paquete', exact: true })).toHaveCount(
-    0,
-  );
-  await openPackage();
+  const { results } = await legacyConflict.json();
+  expect(results[0]).toMatchObject({ code: 'ORDER_VERSION_CONFLICT', syncReview: true });
+  const { syncReview: _syncReview, ...savedResult } = results[0];
+  await seedOutbox(page, [
+    { ...pending(stale), status: 'conflict', result: savedResult, message: savedResult.message },
+    pending(dependent),
+    pending(independent),
+  ]);
+  await page.getByRole('button', { name: 'Estado de sincronización' }).click();
+  const synchronize = page.getByRole('button', { name: 'Sincronizar ahora' });
+  await synchronize.click();
+  await expect(page.getByText('En revisión', { exact: true })).toHaveCount(2);
+  await expect(page.getByRole('dialog').getByText(/después de un cambio que no se aplicó/)).toBeVisible();
+  await expect(page.getByText('Operación 1121', { exact: true })).toHaveCount(0);
+  await synchronize.click();
+  const { state } = await snapshot(request);
+  expect(state.requests).toHaveLength(2);
+  for (const id of [stale.id, dependent.id])
+    expect(state.requests).toContainEqual(expect.objectContaining({ id, type: 'sync', status: 'pending' }));
+  expect(state.payments).toEqual([
+    expect.objectContaining({ orderId: second.referenceId, eventId: independent.id }),
+  ]);
+  expect(state.orders.find((o: { id: string }) => o.id === first.referenceId)).toMatchObject({
+    status: 'open',
+    version: 2,
+  });
+  await execute(request, 'resolve_request', {
+    requestId: stale.id,
+    approve: false,
+    resolutionNotes: 'Conservar la edición que ya figura en el pedido de apoyo.',
+  });
+  await synchronize.click();
+  await expect(page.getByText('En revisión', { exact: true })).toHaveCount(1);
+  expect((await snapshot(request)).state.payments).toHaveLength(1);
+});
+
+test('registra un gasto desde mostrador, conserva el borrador y permite aprobarlo', async ({
+  page,
+  browser,
+  request,
+}) => {
+  const initial = (await snapshot(request)).state;
+  const size = initial.sizes.find((item: { name: string }) => item.name === '16 oz');
+  for (const [article, quantity] of [
+    [`cup:${size.id}`, 5],
+    [`package:${size.id}`, 4],
+  ]) {
+    const correction = await execute(request, 'correct_inventory', {
+      article,
+      quantity,
+      notes: 'Inventario del ensayo',
+    });
+    await execute(request, 'resolve_change', { requestId: correction.referenceId, approve: true }, other);
+  }
+  await login(page, 'caja@test.invalid');
+  await nav(page, 'Inventario');
+  await page.getByRole('button', { name: 'Agregar paquetes', exact: true }).click();
+  const packages = page.getByRole('dialog', { name: 'Agregar paquetes' });
+  await packages.getByLabel('16 oz', { exact: true }).fill('3');
+  await expect(packages.getByRole('checkbox')).toHaveCount(0);
+  await packages.getByRole('button', { name: 'Agregar paquetes', exact: true }).click();
+  await expect(packages).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('Sincronizado');
-  const final = (await snapshot(request)).state;
-  expect(final.packages).toHaveLength(2);
-  expect(
-    final.stock
-      .filter((m: any) => m.article === `cup:${s.state.sizes[0].id}`)
-      .reduce((n: number, m: any) => n + m.quantity, 0),
-  ).toBe(20);
+  await nav(page, 'Mi turno');
+  await page.getByRole('button', { name: 'Cerrar turno', exact: true }).click();
+  const closing = page.getByRole('dialog', { name: 'Cierre de caja' });
+  const cups = closing.getByRole('row').filter({ hasText: 'Vasos sueltos · 16 oz' });
+  const cash = closing.getByRole('row', { name: /^Efectivo/ });
+  await expect(cups.getByRole('cell').last()).toHaveText('65');
+  await expect(cash.getByRole('cell').last()).toContainText('20.000');
+  await expect(closing.getByText('¿Se abrió un paquete sin registrar?')).toHaveCount(0);
+  await closing.getByLabel('Vasos sueltos · 16 oz', { exact: true }).fill('65');
+  await closing.getByLabel('Efectivo', { exact: true }).fill('10.000');
+  await closing.getByRole('button', { name: 'Guardar borrador y salir' }).click();
+  await expect(page.getByRole('button', { name: 'Registrar gasto', exact: true })).toBeVisible();
+  await nav(page, 'Mostrador');
+  await page.getByRole('button', { name: 'Registrar gasto', exact: true }).click();
+  const expense = page.getByRole('dialog', { name: 'Registrar gasto' });
+  await expense.getByLabel('Categoría').selectOption('Insumos');
+  await expense.getByLabel('Monto pagado').fill('10.000');
+  await expense.getByLabel('Proveedor').fill('Proveedor de prueba');
+  await expense.getByLabel('Nota (obligatoria si no hay foto)', { exact: true }).fill('Insumos del turno');
+  await expense.getByRole('button', { name: 'Guardar', exact: true }).click();
+  await expect(expense).toHaveCount(0);
+  await expect(page.getByText('Gasto enviado a aprobación.')).toBeVisible();
+  const [registered] = (await snapshot(request)).state.expenses;
+  expect(registered).toMatchObject({ by: cashier.id, amount: 10000, source: 'cash', status: 'pending' });
+  const context = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
+  try {
+    const reviewer = await context.newPage();
+    await login(reviewer, 'admin@test.invalid');
+    await nav(reviewer, 'Revisiones');
+    await reviewer.getByRole('button', { name: 'Gastos · 1', exact: true }).click();
+    await reviewer.getByRole('button', { name: 'Aprobar', exact: true }).click();
+    await expect(reviewer.getByRole('button', { name: 'Gastos · 0', exact: true })).toBeVisible();
+    expect((await snapshot(request)).state.expenses).toEqual([
+      expect.objectContaining({ id: registered.id, status: 'approved', approvedBy: admin.id }),
+    ]);
+  } finally {
+    await context.close();
+  }
+  await nav(page, 'Mi turno');
+  await page.getByRole('button', { name: 'Cerrar turno', exact: true }).click();
+  await expect(closing.getByLabel('Vasos sueltos · 16 oz', { exact: true })).toHaveValue('65');
+  await expect(closing.getByLabel('Efectivo', { exact: true })).toHaveValue('10.000');
+  await expect(cash.getByRole('cell').last()).toContainText('10.000');
+  await closing.getByLabel('Vasos sueltos · 16 oz', { exact: true }).fill('85');
+  await expect(closing.getByText('¿Se abrió un paquete sin registrar?')).toBeVisible();
+  await closing.getByRole('button', { name: 'Agregar paquetes', exact: true }).click();
+  await expect(packages.getByLabel('16 oz', { exact: true })).toHaveValue('1');
+  await packages.getByRole('button', { name: 'Agregar paquetes', exact: true }).click();
+  await expect(packages).toHaveCount(0);
+  await expect(cups.getByRole('cell').last()).toHaveText('85');
+  await expect(closing.getByText('¿Se abrió un paquete sin registrar?')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('el apoyo envía un pedido, caja identifica al vendedor y lo edita y cobra', async ({
+for (const seller of [support, admin])
+  test(`${seller.role} prepara, envía a caja y el pedido se cobra una sola vez`, async ({
+    page,
+    browser,
+    request,
+  }) => {
+    await login(page, seller.role === 'apoyo' ? 'support@test.invalid' : 'admin@test.invalid');
+    await nav(page, 'Mostrador');
+    const filter = page.getByRole('group', { name: 'Filtrar sabores por licor' });
+    await filter.getByRole('button', { name: 'Sin licor', exact: true }).click();
+    await expect(page.locator('.flavor-card')).toHaveCount(1);
+    await expect(page.locator('.flavor-card')).toContainText('sin licor');
+    await filter.getByRole('button', { name: 'Con licor', exact: true }).click();
+    await page.getByLabel('Nombre del pedido (opcional)').fill('  María  ');
+    await page.locator('.flavor-card').click();
+    await expect(page.getByRole('heading', { name: /^Pedido #.* · María$/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Cobrar y entregar', exact: true })).toHaveCount(0);
+    const context = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
+    try {
+      const cash = await context.newPage();
+      await login(cash, 'caja@test.invalid');
+      await nav(cash, 'Mostrador');
+      await cash.getByRole('button', { name: 'Ver pedidos abiertos', exact: true }).click();
+      const incoming = cash.locator('.open-order-picker button').filter({ hasText: seller.name });
+      await expect(cash.getByText('No hay pedidos abiertos.', { exact: true })).toBeVisible();
+      await expect(incoming).toHaveCount(0);
+      await page.getByRole('button', { name: 'Enviar a caja', exact: true }).click();
+      await expect(page.getByText('Pedido disponible en el equipo de caja.', { exact: true })).toBeVisible();
+      await expect(incoming).toContainText('María');
+      await incoming.click();
+      await expect(cash.locator('.cart-meta')).toContainText(seller.name);
+      const name = cash.getByLabel('Nombre del pedido (opcional)');
+      await name.fill('');
+      await cash.getByRole('button', { name: 'Guardar nombre', exact: true }).click();
+      await expect(cash.getByRole('heading', { name: /^Pedido #[A-Z0-9]+$/ })).toBeVisible();
+      await name.fill('María González');
+      await cash.getByRole('button', { name: 'Guardar nombre', exact: true }).click();
+      await expect(cash.getByRole('heading', { name: /^Pedido #.* · María González$/ })).toBeVisible();
+      await cash.getByRole('button', { name: 'Aumentar cantidad', exact: true }).click();
+      await expect(cash.locator('.cart-total')).toContainText('28.000');
+      await cash.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
+      await expect(cash.getByText(/Venta registrada/)).toBeVisible();
+      const { state } = await snapshot(request);
+      expect(state.payments).toEqual([expect.objectContaining({ amount: 28000 })]);
+      expect(state.orders).toEqual([
+        expect.objectContaining({ customerName: 'María González', total: 28000, status: 'paid' }),
+      ]);
+      await nav(cash, 'Pedidos');
+      await cash.getByRole('button', { name: 'Cobrados', exact: true }).click();
+      await cash.getByLabel('Buscar pedido').fill('gonzález');
+      await expect(cash.getByRole('button', { name: /^#.* · María González$/ })).toBeVisible();
+    } finally {
+      await context.close();
+    }
+  });
+
+test('un encargado en equipo secundario toma pedidos y la caja principal los cobra', async ({
   page,
+  request,
   browser,
 }) => {
+  const change = await execute(request, 'change_access', {
+    kind: 'user',
+    targetId: support.id,
+    role: 'encargado',
+  });
+  await execute(request, 'resolve_change', { requestId: change.referenceId, approve: true }, other);
+
   await login(page, 'support@test.invalid');
   await nav(page, 'Mostrador');
-  const filter = page.getByRole('group', { name: 'Filtrar sabores por licor' });
-  await filter.getByRole('button', { name: 'Sin licor', exact: true }).click();
-  await expect(page.locator('.flavor-card')).toHaveCount(1);
-  await expect(page.locator('.flavor-card')).toContainText('sin licor');
-  await filter.getByRole('button', { name: 'Con licor', exact: true }).click();
-  await page.locator('.flavor-card').click();
-  await expect(page.getByRole('button', { name: 'Cobrar y entregar', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Dejar en caja', exact: true }).click();
+  await expect(page.getByRole('navigation').getByRole('button', { name: 'Inventario' })).toHaveCount(0);
+  await expect(page.getByRole('navigation').getByRole('button', { name: 'Mi turno' })).toHaveCount(0);
+  await page.locator('.flavor-card').filter({ hasText: 'Sabor de prueba con licor' }).click();
+  await page.getByRole('button', { name: 'Aumentar cantidad', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Cobrar y entregar' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /entregados/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Enviar a caja', exact: true }).click();
   await expect(page.getByText('Pedido disponible en el equipo de caja.', { exact: true })).toBeVisible();
+
+  const sent = await snapshot(request);
+  const [order] = sent.state.orders;
+  expect(order).toMatchObject({ status: 'open', sellerId: support.id, total: 28000 });
+  expect(sent.state.payments).toHaveLength(0);
+  for (const type of ['pay', 'expense', 'open_package', 'deliver'] as const) {
+    const command = cmd(type, { orderId: order.id }, support, {
+      at: new Date().toISOString(),
+      branchId: sent.branch.id,
+      shiftId: order.shiftId,
+      configVersion: sent.state.settings[0].version,
+    });
+    const response = await request.post('http://127.0.0.1:5180/dexter/commands', {
+      headers: { ...headers, authorization: `Bearer ${support.id}`, 'x-device-id': support.deviceId },
+      data: { commands: [command] },
+    });
+    expect((await response.json()).results[0]).toMatchObject({ status: 'conflict', code: 'FORBIDDEN' });
+  }
+
   const context = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
   try {
     const cash = await context.newPage();
@@ -353,11 +648,9 @@ test('el apoyo envía un pedido, caja identifica al vendedor y lo edita y cobra'
     await nav(cash, 'Mostrador');
     await cash.getByRole('button', { name: 'Ver pedidos abiertos', exact: true }).click();
     await cash.locator('.open-order-picker button').filter({ hasText: support.name }).click();
-    await expect(cash.locator('.cart-meta')).toContainText(support.name);
-    await cash.getByRole('button', { name: 'Aumentar cantidad', exact: true }).click();
-    await expect(cash.locator('.cart-total')).toContainText('28.000');
     await cash.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
     await expect(cash.getByText(/Venta registrada/)).toBeVisible();
+    await expect.poll(async () => (await snapshot(request)).state.payments[0]?.amount).toBe(28000);
   } finally {
     await context.close();
   }
@@ -430,25 +723,20 @@ test('admin aprueba permisos y revisa diferencias ciegas y transferencias', asyn
     const cash = await context.newPage();
     await login(cash, 'caja@test.invalid');
     await nav(cash, 'Inventario');
-    await cash.getByRole('button', { name: 'Abrir paquete de vasos', exact: true }).click();
+    await cash.getByRole('button', { name: 'Agregar paquetes', exact: true }).click();
     const inventory = cash.getByRole('dialog');
-    await inventory.getByRole('combobox').selectOption({ label: '16 oz' });
-    await inventory.getByRole('checkbox').check();
-    await inventory.getByRole('button', { name: 'Registrar', exact: true }).click();
+    await inventory.getByLabel('16 oz', { exact: true }).fill('1');
+    await inventory.getByRole('button', { name: 'Agregar paquetes', exact: true }).click();
     await expect(inventory).toHaveCount(0);
     await nav(cash, 'Mi turno');
     await cash.getByRole('button', { name: 'Cerrar turno', exact: true }).click();
-    for (const attempt of [1, 2]) {
-      if (attempt === 2) await cash.getByRole('button', { name: 'Volver a contar el cierre' }).click();
-      const dialog = cash.getByRole('dialog');
-      await dialog.getByLabel('Efectivo contado *', { exact: true }).fill('37.000');
-      for (const input of await dialog.getByRole('spinbutton').all()) await input.fill('0');
-      await dialog.getByRole('spinbutton', { name: 'Vasos · 16 oz', exact: true }).fill('19');
-      await expect(dialog).not.toContainText(/Esperado|Transferencias verificadas/);
-      await dialog.getByRole('button', { name: 'Enviar conteo', exact: true }).click();
-      await expect(dialog).toHaveCount(0);
-    }
-    await expect(cash.getByRole('table')).toContainText('En revisión');
+    await enterVisibleClosing(
+      cash,
+      '20.000',
+      { 'Cuenta de prueba': '14.000' },
+      { 'Vasos sueltos · 16 oz': '19' },
+    );
+    await submitCashDistribution(cash, '20.000');
     await expect(cash.getByRole('navigation').getByRole('button', { name: 'Compras y gastos' })).toHaveCount(
       0,
     );
@@ -457,64 +745,109 @@ test('admin aprueba permisos y revisa diferencias ciegas y transferencias', asyn
   }
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
-  await nav(page, 'Revisar turnos');
-  await page.getByRole('button', { name: /^Ver turno/ }).click();
+  await nav(page, 'Revisiones');
+  await page.getByRole('button', { name: /^Medios de pago · 1$/ }).click();
+  await page.getByRole('button', { name: 'Confirmar transferencia', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^Medios de pago · 0$/ })).toBeVisible();
+  await page.getByRole('button', { name: /^Caja ·/ }).click();
+  await page.getByRole('button', { name: 'Revisar turno', exact: true }).click();
   const review = page.getByRole('dialog');
-  await expect(review.getByText('Posible venta sin registrar · 16 oz.', { exact: true })).toBeVisible();
-  await expect(review.locator('summary').filter({ hasText: 'Cierre' })).toHaveCount(2);
-  await expect(review).toContainText('Cuenta de prueba');
-  await review.getByRole('button', { name: /^Marcar verificada/ }).click();
   await expect(review).toContainText('Verificada por');
+  await expect(review.getByRole('columnheader', { name: 'Corrección del admin' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('revision-cierre.png'), fullPage: true });
-  await review.getByRole('button', { name: /^Cerrar diferencia/ }).click();
-  const resolution = page.getByRole('dialog', { name: 'Cerrar diferencia', exact: true });
-  await resolution.getByRole('combobox').selectOption('surplus');
-  await resolution.getByRole('textbox').fill('Revisamos los dos conteos y los comprobantes.');
-  await resolution.getByRole('button', { name: 'Guardar', exact: true }).click();
-  await expect(resolution).toHaveCount(0);
+  await review.getByRole('button', { name: 'Confirmar sin ajustar inventario', exact: true }).click();
+  await expect(review).toContainText('Inventario por verificar');
   const final = (await snapshot(request)).state;
-  expect(final.shifts[0].operationsReview.resolution.outcome).toBe('surplus');
-  expect(final.counts).toHaveLength(2);
-  expect(final.counts[1].difference).toBe(17000);
+  expect(final.shifts[0].closingReview.inventoryVerification.status).toBe('pending');
 });
 
-test('confirma manualmente el 3x2 desde el cobro de mostrador', async ({ page, request }) => {
-  const proposed = await execute(request, 'save_promotion', {
-    name: 'Promoción 3x2',
-    effect: 'nxm',
-    delivery: 'schedule',
-    take: 3,
-    pay: 2,
-    startsAt: new Date(Date.now() - 60000).toISOString(),
-    endsAt: new Date(Date.now() + 600000).toISOString(),
-  });
-  await execute(request, 'resolve_change', { requestId: proposed.referenceId, approve: true }, other);
+test('ofrece dos promociones excluyentes y guarda el descuento en Pedidos', async ({ page, request }) => {
+  for (const config of [
+    { name: 'Promoción 3x2', effect: 'nxm', take: 3, pay: 2, checkoutText: 'Verifica que sigue a Dexter’s.' },
+    {
+      name: 'Subir un tamaño',
+      effect: 'upgrade',
+      steps: 1,
+      checkoutText: 'Confirma el tamaño con el cliente.',
+    },
+  ]) {
+    const proposed = await execute(request, 'save_promotion', {
+      ...config,
+      delivery: 'schedule',
+      startsAt: new Date(Date.now() - 60000).toISOString(),
+      endsAt: new Date(Date.now() + 600000).toISOString(),
+    });
+    await execute(request, 'resolve_change', { requestId: proposed.referenceId, approve: true }, other);
+  }
   await login(page, 'caja@test.invalid');
   await nav(page, 'Mostrador');
-  await expect(page.getByText('Hay promoción de 3x2.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '16 ONZAS', exact: true }).click();
   await page.locator('.flavor-card').filter({ hasText: 'Sabor de prueba con licor' }).click();
   const add = page.getByRole('button', { name: 'Aumentar cantidad', exact: true });
   await add.click();
   await add.click();
   await page.getByRole('button', { name: 'Revisar cobro', exact: true }).click();
-  const dialog = page.getByRole('dialog'),
-    checkbox = dialog.getByRole('checkbox', { name: 'Aplicar descuento 3x2' }),
-    total = dialog.locator('.checkout-amount strong'),
-    fullPrice = await total.textContent();
-  await expect(checkbox).not.toBeChecked();
-  await checkbox.click();
-  await expect(total).not.toHaveText(fullPrice!);
-  await expect(checkbox).toBeChecked();
-  await checkbox.click();
-  await expect(total).toHaveText(fullPrice!);
-  await expect(checkbox).not.toBeChecked();
-  await checkbox.click();
-  await expect(total).not.toHaveText(fullPrice!);
+  const dialog = page.getByRole('dialog');
+  const three = dialog.getByRole('checkbox', { name: /Promoción 3x2/ });
+  const upgrade = dialog.getByRole('checkbox', { name: /Subir un tamaño/ });
+  const total = dialog.locator('.checkout-amount strong');
+  await expect(three).not.toBeChecked();
+  await expect(upgrade).not.toBeChecked();
+  await expect(total).toContainText('51.000');
+  await three.click();
+  await expect(total).toContainText('34.000');
+  await upgrade.click();
+  await expect(total).toContainText('42.000');
+  await expect(three).not.toBeChecked();
+  await expect(upgrade).toBeChecked();
   await dialog.getByRole('button', { name: 'Confirmar cobro', exact: true }).click();
   await expect(dialog).toHaveCount(0);
+  await nav(page, 'Pedidos');
+  await page.getByLabel('Filtrar por promoción').selectOption({ label: 'Con promoción' });
+  await expect(page.getByRole('row').filter({ hasText: 'Descuento' })).toContainText('9.000');
+});
+
+test('cobra 43.000 por cuatro vasos cuando el tercero más caro es el regalo del 3x2', async ({
+  page,
+  request,
+}) => {
+  const proposed = await execute(request, 'save_promotion', {
+    name: 'Promoción 3x2',
+    effect: 'nxm',
+    take: 3,
+    pay: 2,
+    delivery: 'schedule',
+    startsAt: new Date(Date.now() - 60000).toISOString(),
+    endsAt: new Date(Date.now() + 600000).toISOString(),
+  });
+  await execute(request, 'resolve_change', { requestId: proposed.referenceId, approve: true }, other);
+
+  await login(page, 'caja@test.invalid');
+  await nav(page, 'Mostrador');
+  const withAlcohol = page.locator('.flavor-card').filter({ hasText: 'Sabor de prueba con licor' });
+  await page.getByRole('button', { name: '12 ONZAS', exact: true }).click();
+  await withAlcohol.click();
+  await page.getByRole('button', { name: 'Aumentar cantidad', exact: true }).click();
+  await page.getByRole('button', { name: '16 ONZAS', exact: true }).click();
+  await page.locator('.flavor-card').filter({ hasText: 'Sabor de prueba sin licor' }).click();
+  await withAlcohol.click();
+
+  await page.getByRole('button', { name: 'Revisar cobro', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  const total = dialog.locator('.checkout-amount strong');
+  await expect(total).toContainText('57.000');
+  await dialog.getByRole('checkbox', { name: 'Promoción 3x2' }).click();
+  await expect(total).toContainText('43.000');
+  await dialog.getByRole('button', { name: 'Confirmar cobro', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
   const { state } = await snapshot(request);
-  expect(state.payments[0].amount).toBe(28000);
-  expect(state.promotions[0].redemptions).toBe(1);
+  expect(state.payments[0].amount).toBe(43000);
+  expect(state.orders[0].lines).toMatchObject([
+    { listPrice: 14000, quantity: 2, discount: 14000 },
+    { listPrice: 12000, quantity: 1, discount: 0 },
+    { listPrice: 17000, quantity: 1, discount: 0 },
+  ]);
 });
 
 test('comparte un QR legible y canjea dos de tres cortesías sin consumir la sobrante', async ({

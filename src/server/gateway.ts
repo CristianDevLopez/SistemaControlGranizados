@@ -1,4 +1,14 @@
-import { applyCommand, assert, id, redactState, quotePayment, closingPreview } from '../domain/engine.ts';
+import {
+  applyCommand,
+  assert,
+  id,
+  redactState,
+  quotePayment,
+  closingPreview,
+  visibleClosingPreview,
+  promotionSelection,
+  syncOrderId,
+} from '../domain/engine.ts';
 import {
   DomainError,
   type Actor,
@@ -11,6 +21,7 @@ import { hasPermission, isShiftCashier, shiftBlocksSales } from '../domain/acces
 import type { ApprovalAccess } from '../domain/change-approval.ts';
 import type { Access } from '../domain/platform.ts';
 import type { Backend, DeviceSecret } from './backend.ts';
+import { isRetryableDatabaseCode } from '../domain/sync-errors.ts';
 import { constantEqual, couponCode, encryptPermit, pinHash, randomToken, sha256 } from './crypto.ts';
 
 const staffCommands = new Set([
@@ -21,6 +32,7 @@ const staffCommands = new Set([
   'submit_blind_opening_audit',
   'finish_audit',
   'create_order',
+  'send_order',
   'update_order',
   'cancel_order',
   'taste',
@@ -37,8 +49,10 @@ const staffCommands = new Set([
   'execute_transfer',
   'answer_shift_review',
   'open_package',
+  'open_supply',
   'open_bag',
   'report_damage',
+  'expense',
   'register_attachment',
   'outage',
 ]);
@@ -83,7 +97,15 @@ export function createGateway(options: GatewayOptions) {
           'Demasiados intentos. Espera unos minutos.',
           'RATE_LIMIT',
         );
-      if (route === 'health') return json({ ok: true, app: 'dexter', version: 2, multiLocal: true });
+      if (route === 'health')
+        return json({
+          ok: true,
+          app: 'dexter',
+          version: 3,
+          multiLocal: true,
+          orderHandoff: true,
+          retryableSync: true,
+        });
       if (route === 'superadmin/setup') {
         await rate(`owner-setup:${ip}`, 5, 900);
         assert(req.method === 'POST', 'Método no permitido.');
@@ -439,6 +461,42 @@ export function createGateway(options: GatewayOptions) {
       const commitBusinessCommand = async (command: Command, context: Actor) => {
         for (let attempt = 0; attempt < 5; attempt++) {
           const loaded = await store.load();
+          const discardedMessage = 'La operación quedó archivada por el cuadre de caja e inventario.';
+          const discarded = loaded.state.requests.find(
+            (request) =>
+              request.id === command.id &&
+              request.type === 'sync' &&
+              request.by === context.id &&
+              request.status === 'rejected' &&
+              request.syncDiscardedThrough,
+          );
+          assert(!discarded, discardedMessage, 'SYNC_DISCARDED');
+          const priorConflict = command.payload.syncAfterConflict;
+          if (typeof priorConflict === 'string') {
+            const orderId = syncOrderId(command);
+            const priorReview = loaded.state.requests.find(
+              (request) =>
+                request.id === priorConflict && request.type === 'sync' && request.by === context.id,
+            );
+            const source = priorReview?.originalCommand;
+            assert(
+              source && orderId && syncOrderId(source) === orderId,
+              'No se pudo comprobar la operación anterior. La operación se conserva para revisión.',
+              'ORDER_DEPENDENCY_CONFLICT',
+            );
+            if (
+              priorReview?.status === 'rejected' &&
+              priorReview.syncDiscardedThrough &&
+              source.deviceId === command.deviceId &&
+              command.sequence > source.sequence &&
+              Date.parse(command.at) <= Date.parse(priorReview.syncDiscardedThrough)
+            )
+              throw new DomainError(discardedMessage, 'SYNC_DISCARDED');
+            throw new DomainError(
+              'Esta operación se preparó después de un cambio que no se aplicó. Verifica el pedido y cualquier cobro o entrega antes de conciliar.',
+              'ORDER_DEPENDENCY_CONFLICT',
+            );
+          }
           if (
             (command.type === 'submit_closing' && Number(command.payload.sent) > 0) ||
             (command.type === 'request_transfer' &&
@@ -478,7 +536,7 @@ export function createGateway(options: GatewayOptions) {
               throw error;
           }
         }
-        throw new DomainError('Hay otra operación en curso. Se reintentará sin duplicar.', 'CONFLICT');
+        throw new DomainError('Hay otra operación en curso. Se reintentará sin duplicar.', 'RETRY_SYNC');
       };
       const updateAccess = async (payload: Record<string, unknown>) => {
         const command: Command = {
@@ -562,24 +620,24 @@ export function createGateway(options: GatewayOptions) {
         );
       }
       if (route === 'closing-preview') {
-        admin();
         const loaded = await store.load();
         const shift = loaded.state.shifts.find((s) => s.id === body.shiftId);
-        assert(
-          !loaded.state.transfers.some(
-            (transfer) =>
-              transfer.shiftId === shift?.id &&
-              transfer.recipientId === actor.id &&
-              transfer.status === 'in_transit',
-          ),
-          'Confirma primero la recepción del efectivo.',
-        );
         assert(shift && !loaded.state.settings[0].auditId, 'Turno no disponible o arqueo en curso.');
         assert(
           shift.status === 'open' && hasPermission(actor, 'shifts') && isShiftCashier(actor, shift),
           'Solo el responsable de la caja puede revisar su cierre abierto.',
           'FORBIDDEN',
         );
+        if (body.visible === true) {
+          assert(
+            !shiftBlocksSales(shift) ||
+              shift.blindClosing?.status === 'recount' ||
+              (shift.blindClosing?.status === 'ready' && shift.blindClosing.countIds?.length === 1),
+            'Completa el conteo de apertura.',
+          );
+          return json(visibleClosingPreview(loaded.state, shift));
+        }
+        admin();
         return json(closingPreview(loaded.state, shift.id));
       }
       if (route === 'quote') {
@@ -606,15 +664,14 @@ export function createGateway(options: GatewayOptions) {
             ),
           'Cupones inválidos.',
         );
-        const counterPromotionId =
-          body.counterPromotionId === undefined ? undefined : id(body.counterPromotionId);
+        const selectedPromotions = promotionSelection(body.promotionIds, body.counterPromotionId);
         const quote = quotePayment(
           loaded.state,
           order,
           now().toISOString(),
           true,
           body.codes,
-          counterPromotionId,
+          selectedPromotions,
         );
         return json({
           total: quote.total,
@@ -848,25 +905,39 @@ export function createGateway(options: GatewayOptions) {
               });
           } catch (error) {
             const e = error as Error & { code?: string };
+            if (e.code === 'RETRY_SYNC' || e.code === 'RATE_LIMIT' || isRetryableDatabaseCode(e.code))
+              throw error;
+            if (e instanceof DomainError && e.code === 'SYNC_DISCARDED') {
+              results.push({
+                id: command.id,
+                status: 'conflict',
+                code: e.code,
+                message: e.message,
+                finalRejection: true,
+              });
+              break;
+            }
             const needsReview =
               (actor.role === 'admin' || e.code !== 'FORBIDDEN') &&
-              [
-                'create_order',
-                'update_order',
-                'deliver',
-                'pay',
-                'count',
-                'taste',
-                'update_tasting',
-                'remove_tasting',
-                'authorize_shift',
-                'replace_order',
-                'refund_order',
-                'receive_shipment',
-                'expense',
-                'execute_transfer',
-                'confirm_transfer',
-              ].includes(command.type);
+              (e.code === 'ORDER_VERSION_CONFLICT' ||
+                e.code === 'ORDER_DEPENDENCY_CONFLICT' ||
+                [
+                  'create_order',
+                  'update_order',
+                  'deliver',
+                  'pay',
+                  'count',
+                  'taste',
+                  'update_tasting',
+                  'remove_tasting',
+                  'authorize_shift',
+                  'replace_order',
+                  'refund_order',
+                  'receive_shipment',
+                  'expense',
+                  'execute_transfer',
+                  'confirm_transfer',
+                ].includes(command.type));
             if (needsReview) await store.security('sync_conflict', { command, message: e.message });
             const rejectedRecovery =
               command.type === 'record_employee_recovery' &&
@@ -883,11 +954,12 @@ export function createGateway(options: GatewayOptions) {
                   ? e.message
                   : 'El servidor no pudo validar este registro.',
               code: e.code ?? 'VALIDATION',
+              ...(needsReview ? { syncReview: true as const } : {}),
               ...(rejectedRecovery ||
               rejectedAudit ||
               (!needsReview &&
                 error instanceof DomainError &&
-                ['FORBIDDEN', 'VALIDATION', 'ONLINE_REQUIRED'].includes(error.code))
+                ['FORBIDDEN', 'VALIDATION', 'ONLINE_REQUIRED', 'CLOSING_CHANGED'].includes(error.code))
                 ? { finalRejection: true }
                 : {}),
             });
@@ -992,6 +1064,16 @@ export function createGateway(options: GatewayOptions) {
       return json({ error: 'Ruta no encontrada.' }, 404);
     } catch (error) {
       const e = error as Error & { code?: string };
+      if (isRetryableDatabaseCode(e.code)) {
+        console.warn('Temporary database failure', e.code);
+        return json(
+          {
+            error: 'El servidor no respondió a tiempo. Los registros locales se conservan y se reintentarán.',
+            code: 'RETRY_SYNC',
+          },
+          503,
+        );
+      }
       const statuses: Record<string, number> = {
         UNAUTHORIZED: 401,
         FORBIDDEN: 403,
@@ -1002,6 +1084,7 @@ export function createGateway(options: GatewayOptions) {
         BRANCH_INACTIVE: 403,
         RATE_LIMIT: 429,
         CONFLICT: 409,
+        RETRY_SYNC: 503,
       };
       const known = error instanceof DomainError;
       if (!known) console.error('Gateway failure', e.code ?? '', e.message);

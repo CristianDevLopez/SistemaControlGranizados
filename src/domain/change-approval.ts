@@ -37,8 +37,32 @@ function check(condition: unknown, message: string, code = 'VALIDATION'): assert
 }
 
 function requiresChangeApproval(state: State, { type, payload }: Command): boolean {
+  if (payload.reviewClosing === true) {
+    const shift = state.shifts.find(
+      (item) =>
+        item.id === payload.shiftId && item.closingReview?.status === 'pending' && !item.closingArchive,
+    );
+    const request = state.requests.find(
+      (item) => item.id === payload.requestId && item.type === 'damage' && item.status === 'pending',
+    );
+    check(
+      shift &&
+        ((['open_bag', 'open_package'].includes(type) && payload.correction === true) ||
+          (type === 'resolve_request' &&
+            request &&
+            (request.referenceId === shift.id ||
+              (!request.referenceId &&
+                shift.openedAt &&
+                shift.closedAt &&
+                request.at >= shift.openedAt &&
+                request.at <= shift.closedAt)))),
+      'La corrección debe corresponder a un cierre pendiente.',
+    );
+    return false;
+  }
   return (
     protectedTypes.has(type) ||
+    (type === 'configure' && payload.reviewParameters === true) ||
     (type === 'resolve_request' &&
       payload.approve === true &&
       state.requests.some((request) => request.id === payload.requestId && request.type === 'damage')) ||
@@ -165,6 +189,18 @@ function changeValues(
 ): Values {
   const { referenceId } = candidate.result;
   if (command.type === 'change_access') return accessValues(state, command, actor, access);
+  if (command.type === 'configure') {
+    const before = state.settings[0];
+    const after = candidate.state.settings[0];
+    const keys = (Object.keys(after) as (keyof typeof after)[]).filter(
+      (key) => key !== 'version' && !equal(before[key], after[key]),
+    );
+    return {
+      label: 'Parámetros de operación',
+      before: Object.fromEntries(keys.map((key) => [key, before[key]])),
+      after: Object.fromEntries(keys.map((key) => [key, after[key]])),
+    };
+  }
   if (command.type === 'save_size') {
     const before = state.sizes.find((size) => size.id === referenceId);
     const after = candidate.state.sizes.find((size) => size.id === referenceId);
@@ -344,7 +380,7 @@ export function applyChangeApproval(
       inventoryDelta,
     },
   });
-  const message = 'Propuesta enviada. Consulta su estado en Solicitudes.';
+  const message = 'Propuesta enviada. Consulta su estado en Revisiones.';
   proposal.audit.push({
     ...audit,
     action: 'propose_change',

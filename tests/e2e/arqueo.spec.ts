@@ -50,76 +50,22 @@ async function enterAdmin(page: Page) {
   await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
 }
 
-test('el cierre de empleado conserva el recuento y el servidor responde sin cifras', async ({
-  page,
-  request,
-}) => {
+test('la apertura permanece a ciegas mientras el cierre muestra lo esperado', async ({ page, request }) => {
   await request.post('http://127.0.0.1:5180/reset');
   const snapshot = page.waitForResponse(
     (response) => response.url().endsWith('/dexter/snapshot') && response.ok(),
   );
-  const previewRequests: string[] = [];
-  page.on('request', (entry) => {
-    if (entry.url().includes('/closing-preview')) previewRequests.push(entry.url());
-  });
   await enterCashier(page);
-  const cashierSnapshot = await (await snapshot).json();
-  expect(cashierSnapshot.state.counts).toEqual([]);
-  expect(cashierSnapshot.state.payments).toEqual([]);
-  expect(cashierSnapshot.state.shifts[0]).not.toHaveProperty('base');
+  const data = await (await snapshot).json();
+  expect(data.state.counts).toEqual([]);
+  expect(data.state.payments).toEqual([]);
+  expect(data.state.shifts[0]).not.toHaveProperty('base');
   await nav(page, 'Mi turno');
   await page.getByRole('button', { name: 'Cerrar turno', exact: true }).click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toContainText('Vasos sueltos del paquete abierto');
+  const dialog = page.getByRole('dialog', { name: 'Cierre de caja' });
+  await expect(dialog).toContainText('Debería haber');
   await expect(dialog).toContainText('Paquetes cerrados');
-  await expect(dialog).toContainText('Bolsas selladas');
-  await expect(dialog).toContainText('Coronitas');
-  await expect(dialog).not.toContainText(/Esperado|Diferencia|Copitas|Transferencias verificadas/);
-
-  for (const [attempt, message] of [
-    [1, 'Algo no coincide. Vuelve a contar todo.'],
-    [2, 'Turno enviado a revisión'],
-  ] as const) {
-    if (attempt === 2) await page.getByRole('button', { name: 'Volver a contar el cierre' }).click();
-    const cash = dialog.getByLabel('Efectivo contado *', { exact: true });
-    await expect(cash).toHaveValue('');
-    await cash.fill('15.000');
-    for (const field of await dialog.getByRole('spinbutton').all()) {
-      await expect(field).toHaveValue('');
-      await field.fill('0');
-    }
-    const response = page.waitForResponse(
-      (entry) =>
-        entry.url().endsWith('/dexter/commands') &&
-        entry.request().postData()?.includes('submit_blind_count') === true,
-    );
-    await dialog.getByRole('button', { name: 'Enviar conteo' }).click();
-    const result = (await (await response).json()).results[0];
-    expect(result).toMatchObject({
-      status: 'accepted',
-      message,
-      code: attempt === 1 ? 'COUNT_RECOUNT' : 'COUNT_REVIEW',
-    });
-    expect(Object.keys(result).sort()).toEqual(['at', 'code', 'id', 'message', 'revision', 'status']);
-    await expect(dialog).toHaveCount(0);
-    await expect(page.getByText(message, { exact: true })).toBeVisible();
-  }
-  expect(previewRequests).toEqual([]);
-  await expect(page.getByRole('table')).toContainText('En revisión');
-  await expect(page.getByRole('table')).not.toContainText(/15\.000|20\.000|5\.000/);
-
-  const response = await request.get('http://127.0.0.1:5180/dexter/snapshot', {
-    headers: {
-      authorization: `Bearer ${admin.id}`,
-      'x-device-id': admin.deviceId,
-      'x-device-token': 'test-device-token',
-    },
-  });
-  const full = (await response.json()).state;
-  const attempts = full.counts.filter((count: { shiftId?: string }) => count.shiftId === ids.shift);
-  expect(attempts).toHaveLength(2);
-  for (const count of attempts)
-    expect(count).toMatchObject({ cash: 15000, expectedCash: 20000, difference: -5000 });
+  await expect(dialog).not.toContainText(/Bolsas selladas|Coronitas/);
 });
 
 test('el admin selecciona ítems, el cajero cuenta a ciegas y el admin revisa el corte original', async ({
@@ -270,6 +216,8 @@ test('programa una apertura completa y permite proponer un ajuste de inventario 
     .last()
     .click();
   await expect(adjustment).toContainText('Inventario ajustado por');
-  await expect(adjustment.getByRole('row').filter({ hasText: 'Coronitas' })).toContainText('0 unidades');
+  const coronitas = adjustment.getByRole('row').filter({ hasText: 'Coronitas' });
+  await expect(coronitas.getByRole('cell').nth(2)).toHaveText('3 unidades');
+  await expect(coronitas.getByRole('cell').nth(3)).toHaveText('0');
   await expect(adjustment.getByRole('button', { name: 'Ajustar inventario al conteo' })).toHaveCount(0);
 });

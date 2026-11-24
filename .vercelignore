@@ -8,3 +8,4 @@ playwright-report
 backups
 .env*
 *.docx
+.codex-attachments

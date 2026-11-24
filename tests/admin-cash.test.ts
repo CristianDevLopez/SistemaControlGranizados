@@ -64,7 +64,7 @@ async function accepted(type: CommandType, payload: Record<string, unknown>, act
 }
 
 it.each([admin, owner])(
-  '$name inicia, cuenta, cobra y cierra su caja sin otro admin activo',
+  '$name inicia, cobra y presenta su caja, que debe confirmar otro admin',
   async (actor) => {
     for (const profile of await db.profiles())
       if (profile.role === 'admin' && profile.id !== actor.id)
@@ -139,11 +139,10 @@ it.each([admin, owner])(
     );
     state = (await db.load()).state;
     expect(state.shifts[0].status).toBe('closed');
-    await accepted('approve_closing', { shiftId }, actor);
-    await accepted('respond_closing', { shiftId, outcome: 'accepted', notes: 'Confirmo el cierre.' }, actor);
-    await accepted('request_shift', { base: 99999 }, actor);
-    state = (await db.load()).state;
-    expect(state.shifts.find((s) => s.status === 'open')?.base).toBe(26000);
+    expect((await send('approve_closing', { shiftId }, actor)).result.code).toBe('FORBIDDEN');
+    expect((await send('request_shift', { base: 99999 }, actor)).result.message).toMatch(
+      /confirmar el cierre anterior/,
+    );
     expect(state.audit.find((a) => a.eventId === opening.command.id)).toMatchObject({
       by: actor.id,
       deviceId: actor.deviceId,

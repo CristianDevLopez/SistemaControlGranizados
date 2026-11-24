@@ -1,3 +1,6 @@
+import { supplies } from '../domain/supplies.ts';
+import { supplyDuration } from '../domain/inventory.ts';
+import { AddPackages } from './AddPackages.tsx';
 import { useState, type ReactNode } from 'react';
 import { AlertTriangle, Droplets, PackageOpen } from 'lucide-react';
 import { canWork } from '../domain/access.ts';
@@ -97,6 +100,32 @@ function AdminInventory({ snapshot, onCorrect }: { snapshot: Snapshot; onCorrect
                     {amount.format(balances[row.id] ?? 0)}
                   </td>
                   <td>{row.unit}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </InventoryTable>
+      <InventoryTable title="Duración de insumos" description="Promedio entre aperturas registradas.">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Insumo</th>
+                <th>Unidades cerradas</th>
+                <th>Días por unidad</th>
+                <th>Vasos por unidad abierta</th>
+                <th>Días restantes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {supplyDuration(state).map((item) => (
+                <tr key={item.id}>
+                  <th scope="row">{item.name}</th>
+                  <td>{item.initialized ? amount.format(item.remaining) : 'Sin saldo inicial'}</td>
+                  <td>{item.days == null ? '—' : amount.format(item.days)}</td>
+                  <td>{item.cups == null ? '—' : amount.format(item.cups)}</td>
+                  <td>{item.days == null ? '—' : amount.format(item.days * Math.max(0, item.remaining))}</td>
                 </tr>
               ))}
             </tbody>
@@ -208,29 +237,28 @@ export function Inventory() {
   const canRecord = !!active && canWork(actor, state, 'inventory', active.id);
   const openings = !admin && active ? inventoryOpenings(state, active) : [];
   const [form, setForm] = useState<{ title: string; type: CommandType; fields: Field[] } | null>(null);
-  const articleOptions = articles(state).map((item) => ({
-    value: item.id,
-    label: `${item.name} (${item.unit})`,
-  }));
-  const openPackage = () =>
+  const articleOptions = articles(state)
+    .filter((item) => !item.id.startsWith('supply:'))
+    .map((item) => ({
+      value: item.id,
+      label: `${item.name} (${item.unit})`,
+    }));
+  const [addingPackages, setAddingPackages] = useState(false);
+  const availableSupplies = supplies(state).filter((item) => item.initialized);
+  const openSupply = () =>
     setForm({
-      title: 'Abrir paquete de vasos',
-      type: 'open_package',
+      title: 'Abrir insumo',
+      type: 'open_supply',
       fields: [
         {
-          name: 'sizeId',
-          label: 'Tamaño',
+          name: 'article',
+          label: 'Unidad cerrada abierta',
           type: 'select',
           required: true,
-          options: state.sizes
-            .filter((size) => size.cups > 0)
-            .map((size) => ({ value: size.id, label: size.name })),
-        },
-        {
-          name: 'confirmEmpty',
-          label: 'Confirmo que cualquier paquete anterior de este tamaño está vacío',
-          type: 'checkbox',
-          required: true,
+          options: availableSupplies.map((item) => ({
+            value: item.id,
+            label: `${item.name} · ${item.unit}`,
+          })),
         },
       ],
     });
@@ -288,9 +316,17 @@ export function Inventory() {
     <div className="page-stack">
       <div className="page-toolbar">
         <h2>Inventario</h2>
+        {addingPackages && <AddPackages onClose={() => setAddingPackages(false)} />}
         <div className="button-row">
-          <button className="button secondary" disabled={!canRecord} onClick={openPackage}>
-            <PackageOpen size={17} /> Abrir paquete de vasos
+          <button className="button secondary" disabled={!canRecord} onClick={() => setAddingPackages(true)}>
+            <PackageOpen size={17} /> Agregar paquetes
+          </button>
+          <button
+            className="button secondary"
+            disabled={!canRecord || !availableSupplies.length}
+            onClick={openSupply}
+          >
+            Abrir insumo
           </button>
           <button className="button primary" disabled={!canRecord} onClick={openBag}>
             <Droplets size={17} /> Abrir bolsa de líquido

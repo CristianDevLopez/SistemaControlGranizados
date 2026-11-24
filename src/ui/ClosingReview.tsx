@@ -1,15 +1,159 @@
 import { useState } from 'react';
-import { adjustedClosingArticles, closingPreview } from '../domain/engine.ts';
-import { suggestedCupCharge } from '../domain/reconciliation.ts';
+import {
+  adjustedClosingArticles,
+  closingPreview,
+  isLegacyCoolerArticle,
+  approvedInventoryUpdatesSince,
+} from '../domain/engine.ts';
 import type { ClosingPreview, Count } from '../domain/types.ts';
 import { useApp } from '../lib/store.tsx';
-import { moneyText, parseMoney } from '../lib/money.ts';
+import { parseMoney } from '../lib/money.ts';
 import { FieldsForm, Modal, MoneyInput, date, money, type Field } from './components.tsx';
 
 export interface ClosingValues {
   cash: number;
   items: Record<string, number>;
   payments: Record<string, number>;
+}
+
+export function ClosingConfirmation({ count, blocked }: { count: Count; blocked: boolean }) {
+  const app = useApp();
+  const { state, actor } = app.data!;
+  const shift = state.shifts.find((item) => item.id === count.shiftId)!;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const expected = closingPreview(state, shift.id, count);
+  const updated = approvedInventoryUpdatesSince(state, count);
+  const rows = [
+    ...(!count.blindHandoff
+      ? [{ id: 'cash', label: 'Efectivo', counted: count.cash, expected: expected.expectedCash, money: true }]
+      : []),
+    ...Object.entries(expected.expectedPayments).map(([id, amount]) => ({
+      id,
+      label: expected.paymentLabels[id],
+      counted: count.payments?.[id],
+      expected: amount,
+      money: true,
+    })),
+    ...Object.entries(count.items)
+      .filter(([id]) => !isLegacyCoolerArticle(id))
+      .map(([id, amount]) => ({
+        id,
+        label: count.itemLabels?.[id] ?? id,
+        counted: amount,
+        expected: expected.expectedItems[id] ?? count.expectedItems?.[id] ?? 0,
+        money: false,
+      })),
+  ];
+  const format = (value: number | undefined, monetary: boolean) =>
+    value === undefined ? '—' : monetary ? money(value) : value;
+  const own = shift.cashierId === actor.id;
+  return (
+    <form
+      className="fields-form"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+        if (!submitter || own || busy || blocked) return;
+        const data = new FormData(event.currentTarget);
+        const read = (id: string, monetary = true) => {
+          const value = data.get(id);
+          if (value === null || value === '') return null;
+          const result = monetary ? parseMoney(value, id !== 'cash') : Number(value);
+          if (result === null) throw new Error('Escribe una corrección válida.');
+          return result;
+        };
+        setError('');
+        setBusy(true);
+        try {
+          const result = await app.run(
+            'approve_closing',
+            {
+              shiftId: shift.id,
+              adjustInventory: submitter.value === 'adjust',
+              ...(count.blindHandoff ? {} : { preview: expected }),
+              cash: read('cash'),
+              payments: Object.fromEntries(
+                Object.keys(expected.expectedPayments).map((id) => [id, read(id)]),
+              ),
+              items: Object.fromEntries(Object.keys(count.items).map((id) => [id, read(id, false)])),
+              notes: data.get('notes'),
+            },
+            { onlineOnly: true },
+          );
+          app.toast(result.message);
+        } catch (failure) {
+          setError((failure as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Artículo</th>
+              <th>Contaste</th>
+              <th>Debería haber</th>
+              <th>Corrección del admin</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <th scope="row">{row.label}</th>
+                <td>{format(row.counted, row.money)}</td>
+                <td>{format(row.expected, row.money)}</td>
+                <td>
+                  {row.money ? (
+                    <MoneyInput
+                      name={row.id}
+                      ariaLabel={`Corrección · ${row.label}`}
+                      allowNegative={row.id !== 'cash'}
+                    />
+                  ) : (
+                    <input
+                      name={row.id}
+                      aria-label={`Corrección · ${row.label}`}
+                      type="number"
+                      min="0"
+                      max="1000000"
+                      step="1"
+                    />
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <label className="field">
+        <span>Nota de revisión</span>
+        <textarea name="notes" maxLength={1500} />
+      </label>
+      {rows.some(({ id }) => updated.has(id)) && (
+        <p>
+          Se conservarán los saldos aprobados después del conteo. Escribe una corrección para cambiar alguno.
+        </p>
+      )}
+      {own && <p>Otro administrador debe confirmar este cierre.</p>}
+      {count.blindHandoff && <p>El efectivo se muestra cuando confirmes la recepción del traslado.</p>}
+      {error && (
+        <p role="alert" className="form-error">
+          {error}
+        </p>
+      )}
+      <div className="button-row">
+        <button className="button primary" value="adjust" disabled={blocked || own || busy || !app.online}>
+          Confirmar y ajustar inventario
+        </button>
+        <button className="button secondary" value="verify" disabled={blocked || own || busy || !app.online}>
+          Confirmar sin ajustar inventario
+        </button>
+      </div>
+    </form>
+  );
 }
 export function closingHasDifferences(values: ClosingValues, preview: ClosingPreview) {
   return (
@@ -90,8 +234,6 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
     items: count.items,
     payments: count.payments ?? {},
   });
-  const [employeeCharge, setEmployeeCharge] = useState<string | null>(null);
-  const suggestedCharge = suggestedCupCharge(state.sizes, preview.expectedItems, values.items);
   const labels = count.itemLabels ?? {};
   const alreadyAdjusted = [...adjustedClosingArticles(state, count)]
     .filter((key) => Object.hasOwn(preview.expectedItems, key))
@@ -188,13 +330,10 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
           })
         }
         onSubmit={async (form) => {
-          const confirmedCharge = employeeCharge === null ? suggestedCharge : parseMoney(employeeCharge);
-          if (confirmedCharge === null) throw new Error('Escribe el monto confirmado o 0.');
           const result = await app.run('approve_closing', {
             shiftId: shift.id,
             ...form,
             preview,
-            employeeCharge: confirmedCharge,
             items: Object.fromEntries(Object.keys(preview.expectedItems).map((key) => [key, form[key]])),
             payments: Object.fromEntries(
               Object.keys(preview.expectedPayments).map((key) => [key, form[key]]),
@@ -203,22 +342,7 @@ export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClos
           if (!result.approvalPending) app.toast('Cierre aprobado.');
           onClose();
         }}
-      >
-        <label className="field">
-          <span>Valor del faltante a reportar al empleado</span>
-          <MoneyInput
-            required
-            value={employeeCharge ?? moneyText(suggestedCharge)}
-            onChange={setEmployeeCharge}
-          />
-          <small>Precio de venta sugerido por los vasos faltantes {money(suggestedCharge)}.</small>
-        </label>
-        {employeeCharge !== null && (
-          <button type="button" className="text-button" onClick={() => setEmployeeCharge(null)}>
-            Usar valor sugerido
-          </button>
-        )}
-      </FieldsForm>
+      />
     </Modal>
   );
 }

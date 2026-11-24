@@ -22,14 +22,20 @@ import { ChangeRequestCard } from './ChangeLog.tsx';
 import { TurnReview } from './TurnReview.tsx';
 import { Money } from './Money.tsx';
 import { EvidenceButton } from './Purchasing.tsx';
-export function Control() {
+export function Control({
+  onHistory,
+  initialCategory = 'shifts',
+}: {
+  onHistory: () => void;
+  initialCategory?: keyof typeof requestCategories;
+}) {
   const app = useApp(),
     { state, actor, profiles } = app.data!,
     [filter, setFilter] = useState('pending'),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [reconcile, setReconcile] = useState<{ requestId: string; approve: boolean } | null>(null);
-  const [category, setCategory] = useState('all');
+  const [category, setCategory] = useState(initialCategory);
   const [shiftId, setShiftId] = useState<string>();
   const [transferId, setTransferId] = useState<string>();
   const [action, setAction] = useState<{
@@ -39,9 +45,7 @@ export function Control() {
     fields: Field[];
   }>();
   const entries = adminRequests(state);
-  const visible = entries.filter(
-    (item) => (filter === 'all' || item.pending) && (category === 'all' || item.category === category),
-  );
+  const visible = entries.filter((item) => (filter === 'all' || item.pending) && item.category === category);
   const notifications = state.notifications.filter(
     (item) => !inRehearsalPeriod(state, item.at) && item.channel !== 'mermas',
   );
@@ -61,7 +65,24 @@ export function Control() {
       return;
     }
     try {
-      const result = await app.run('resolve_request', { requestId, approve });
+      const shift =
+        request?.type === 'damage'
+          ? state.shifts.find(
+              (item) =>
+                item.closingReview?.status === 'pending' &&
+                (request.referenceId === item.id ||
+                  (!request.referenceId &&
+                    item.openedAt &&
+                    item.closedAt &&
+                    request.at >= item.openedAt &&
+                    request.at <= item.closedAt)),
+            )
+          : undefined;
+      const result = await app.run('resolve_request', {
+        requestId,
+        approve,
+        ...(shift ? { shiftId: shift.id, reviewClosing: true } : {}),
+      });
       app.toast(
         approve
           ? request?.type === 'void'
@@ -80,10 +101,29 @@ export function Control() {
           {error}
         </div>
       )}
+      <div className="tabs" aria-label="Categorías de revisión">
+        {(Object.entries(requestCategories) as [keyof typeof requestCategories, string][]).map(
+          ([key, label]) => (
+            <button
+              className={category === key ? 'active' : ''}
+              aria-pressed={category === key}
+              key={key}
+              onClick={() => setCategory(key)}
+            >
+              {label} · {entries.filter((entry) => entry.category === key && entry.pending).length}
+            </button>
+          ),
+        )}
+      </div>
       <Panel
-        title={`Bandeja de solicitudes · ${entries.filter((item) => item.pending).length} pendientes`}
+        title={requestCategories[category]}
         action={
           <div className="button-row">
+            {category === 'shifts' && (
+              <button className="button secondary" onClick={onHistory}>
+                Historial y período de ensayo
+              </button>
+            )}
             <select
               aria-label="Estado de la solicitud"
               value={filter}
@@ -91,18 +131,6 @@ export function Control() {
             >
               <option value="pending">Pendientes</option>
               <option value="all">Todas</option>
-            </select>
-            <select
-              aria-label="Tipo de solicitud"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            >
-              <option value="all">Todos los tipos</option>
-              {Object.entries(requestCategories).map(([id, label]) => (
-                <option key={id} value={id}>
-                  {label}
-                </option>
-              ))}
             </select>
           </div>
         }
@@ -113,9 +141,12 @@ export function Control() {
               if (entry.source === 'request') {
                 const request = entry.item;
                 if (request.change) return <ChangeRequestCard key={request.id} request={request} />;
-                const sale = ['payment_change', 'void', 'unpaid'].includes(request.type)
-                  ? state.orders.find((order) => order.id === request.referenceId)
-                  : undefined;
+                const original = request.type === 'sync' ? request.originalCommand : undefined;
+                const sale = original
+                  ? state.orders.find((order) => order.id === original.payload.orderId)
+                  : ['payment_change', 'void', 'unpaid'].includes(request.type)
+                    ? state.orders.find((order) => order.id === request.referenceId)
+                    : undefined;
                 const turn = state.shifts.find((shift) => shift.id === sale?.shiftId);
                 const payment =
                   sale &&
@@ -169,9 +200,17 @@ export function Control() {
                     at={request.at}
                   >
                     <p>{request.notes}</p>
+                    {original && (
+                      <p>
+                        Operación {original.sequence}
+                        {typeof original.payload.expectedTotal === 'number' &&
+                          ` · Total al intentar cobrar: ${money(original.payload.expectedTotal)}`}
+                      </p>
+                    )}
                     {sale && (
                       <p>
                         Pedido #{sale.number} · {money(sale.total)}
+                        {original && payment ? ` · Cobro registrado: ${money(payment.amount)}` : ''}
                       </p>
                     )}
                     {payment && request.type === 'payment_change' && (
@@ -241,7 +280,7 @@ export function Control() {
                                   disabled={!app.online}
                                   onClick={() => void resolve(request.id, false)}
                                 >
-                                  Rechazar
+                                  {original ? 'Descartar' : 'Rechazar'}
                                 </button>
                               )}
                               <button
@@ -249,12 +288,65 @@ export function Control() {
                                 disabled={!app.online}
                                 onClick={() => void resolve(request.id, true)}
                               >
-                                {request.type === 'difference' ? 'Aceptar explicación' : 'Aprobar'}
+                                {original
+                                  ? 'Vincular registro'
+                                  : request.type === 'difference'
+                                    ? 'Aceptar explicación'
+                                    : 'Aprobar'}
                               </button>
                             </>
                           ))}
                       </div>
                     </div>
+                  </RequestCard>
+                );
+              }
+              if (entry.source === 'sale_transfer') {
+                const payment = entry.item;
+                const decision = entry.shift.operationsReview?.verifiedTransfers?.[payment.id];
+                const account = state.locations.find((item) => item.id === payment.accountId);
+                return (
+                  <RequestCard
+                    key={payment.id}
+                    title={account?.name ?? 'Transferencia'}
+                    at={payment.at}
+                    status={decision?.missing ? 'disputed' : decision ? 'confirmed' : 'pending'}
+                  >
+                    <p>
+                      {money(payment.amount)} · Pedido #
+                      {state.orders.find((order) => order.id === payment.orderId)?.number ?? '—'}
+                      {payment.reference && ` · Ref. ${payment.reference}`}
+                    </p>
+                    {!decision && entry.pending && (
+                      <button
+                        className="button small primary"
+                        disabled={!app.online}
+                        onClick={() =>
+                          void perform('review_shift', {
+                            shiftId: entry.shift.id,
+                            action: 'verify_transfer',
+                            paymentId: payment.id,
+                          })
+                        }
+                      >
+                        Confirmar transferencia
+                      </button>
+                    )}
+                  </RequestCard>
+                );
+              }
+              if (entry.source === 'inventory_count') {
+                return (
+                  <RequestCard
+                    key={entry.item.id}
+                    title="Conteo de inventario"
+                    at={entry.at}
+                    status={entry.pending ? 'pending' : 'reviewed'}
+                  >
+                    <p>{profiles.find((person) => person.id === entry.item.by)?.name}</p>
+                    <button className="button small primary" onClick={() => setShiftId(entry.shift.id)}>
+                      Revisar conteo
+                    </button>
                   </RequestCard>
                 );
               }

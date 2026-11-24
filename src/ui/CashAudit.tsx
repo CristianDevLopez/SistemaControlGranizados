@@ -1,6 +1,9 @@
+import { reconciledCount } from '../domain/turn-review.ts';
 import { useState } from 'react';
 import {
   adjustableCountArticles,
+  approvedInventoryUpdatesSince,
+  isLegacyCoolerArticle,
   articles,
   closingPaymentMethods,
   countInventoryAdjustment,
@@ -149,6 +152,9 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
   const adjustmentEvent = countInventoryAdjustment(state, count.id);
   const adjustment = adjustmentEvent?.inventoryAdjustment;
   const label = (id?: string) => profiles.find((p) => p.id === id)?.name ?? 'Sin registro';
+  const updated = approvedInventoryUpdatesSince(state, count);
+  const shift = state.shifts.find((item) => item.id === count.shiftId);
+  const preview = shift && count.kind === 'opening' ? reconciledCount(state, shift, count) : count;
   const rows = [
     ...(count.cash === undefined
       ? []
@@ -170,18 +176,20 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
       difference: count.paymentDifferences?.[key] ?? 0,
       monetary: true,
     })),
-    ...Object.entries(count.items).map(([key, amount]) => {
-      const article = articles(state).find((a) => a.id === key),
-        unit = key.startsWith('liquid:') ? 'oz' : (article?.unit ?? 'unidades');
-      return {
-        key,
-        name: count.itemLabels?.[key] ?? article?.name ?? key,
-        counted: `${amount} ${unit}`,
-        expected: `${count.expectedItems?.[key] ?? 0} ${unit}`,
-        difference: count.differences?.[key] ?? 0,
-        monetary: false,
-      };
-    }),
+    ...Object.entries(count.items)
+      .filter(([key]) => !isLegacyCoolerArticle(key))
+      .map(([key, amount]) => {
+        const article = articles(state).find((a) => a.id === key),
+          unit = key.startsWith('liquid:') ? 'oz' : (article?.unit ?? 'unidades');
+        return {
+          key,
+          name: count.itemLabels?.[key] ?? article?.name ?? key,
+          counted: `${amount} ${unit}`,
+          expected: `${preview.expectedItems?.[key] ?? 0} ${unit}`,
+          difference: preview.differences?.[key] ?? 0,
+          monetary: false,
+        };
+      }),
   ];
   if (adjusting && !adjustment) {
     return (
@@ -196,7 +204,7 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
               name: id,
               label: `${name} (${unit}) · registrado ${adjusting[id] ?? 0}`,
               type: 'number' as const,
-              value: count.items[id],
+              value: updated.has(id) ? (adjusting[id] ?? 0) : count.items[id],
               min: 0,
               step: '1',
               required: true,
@@ -244,7 +252,7 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
             <tr>
               <th>Ítem solicitado</th>
               <th>Contado / verificado</th>
-              <th>Esperado original</th>
+              <th>{preview === count ? 'Esperado original' : 'Esperado en revisión'}</th>
               <th>Diferencia</th>
             </tr>
           </thead>
@@ -272,16 +280,6 @@ export function CountReviewDialog({ count, onClose }: { count: Count; onClose: (
         <p>
           Inventario ajustado por {label(adjustmentEvent.by)} · {date(adjustmentEvent.receivedAt)}.{' '}
           {adjustment.notes}
-        </p>
-      )}
-      {count.revisesId && (
-        <p>
-          Revisión administrativa; se conserva el conteo original. Faltante reportado al empleado:{' '}
-          {money(
-            state.shifts.find((s) => s.closingReview?.countId === count.id)?.closingReview?.employeeCharge ??
-              0,
-          )}
-          . Este registro no ejecuta descuentos de nómina.
         </p>
       )}
       <div className="form-actions">

@@ -1,4 +1,5 @@
 import { COLLECTIONS, type State, type Size, type Settings } from './types.ts';
+export const COOLER_SIZE_ID = '00000000-0000-4000-8000-000000003000';
 export const SETTINGS_ID = '00000000-0000-4000-8000-000000000001';
 export const DEFAULT_LIQUID_BAG_WINDOW = 5;
 export function initialState(): State {
@@ -34,7 +35,7 @@ export function initialState(): State {
     rank: i,
   }));
   s.sizes.push({
-    id: '00000000-0000-4000-8000-000000003000',
+    id: COOLER_SIZE_ID,
     name: 'Nevera 3 litros',
     ounces: 0,
     alcoholPrice: null,

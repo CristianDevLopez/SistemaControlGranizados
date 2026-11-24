@@ -1,6 +1,8 @@
 import Dexie, { type EntityTable } from 'dexie';
 import type { Command, Result, Snapshot } from '../domain/types.ts';
 import { employeeView } from '../domain/employee-view.ts';
+import { syncOrderId } from '../domain/engine.ts';
+import { isRetryableDatabaseCode } from '../domain/sync-errors.ts';
 export interface OutboxEntry {
   id: string;
   branchId?: string;
@@ -11,9 +13,52 @@ export interface OutboxEntry {
   status: 'pending' | 'acknowledged' | 'conflict' | 'reconciled' | 'rejected';
   result?: Result;
   message?: string;
+  reviewRecorded?: boolean;
+  dependsOnConflict?: string;
+  reconciledThrough?: number;
 }
 export function awaitsSync(entry: OutboxEntry) {
   return entry.status === 'pending' || entry.status === 'conflict';
+}
+
+export function syncReviewDependency(entry: OutboxEntry, previous: OutboxEntry[]) {
+  const orderId = syncOrderId(entry.command);
+  if (!orderId) return;
+  return previous.find(
+    (item) => item.status === 'conflict' && item.reviewRecorded && syncOrderId(item.command) === orderId,
+  )?.id;
+}
+
+export function syncBlocker(entry: OutboxEntry, unresolved: OutboxEntry[]): OutboxEntry | undefined {
+  if (
+    entry.command.type === 'resolve_request' &&
+    unresolved.some(
+      (previous) => previous.status === 'conflict' && previous.id === entry.command.payload.requestId,
+    )
+  )
+    return;
+  const orderId = syncOrderId(entry.command);
+  return unresolved.find((previous) => {
+    const previousOrder = syncOrderId(previous.command);
+    // Preserve order across shared operations (for example, a pending shift closing).
+    return !orderId || !previousOrder || previousOrder === orderId;
+  });
+}
+
+export function outboxBlockers(entries: OutboxEntry[]): Map<string, OutboxEntry> {
+  const unresolved: OutboxEntry[] = [];
+  const blockers = new Map<string, OutboxEntry>();
+  for (const entry of entries) {
+    if (entry.status === 'conflict') unresolved.push(entry);
+    else if (entry.status === 'pending') {
+      const blocker = syncReviewDependency(entry, unresolved) ? undefined : syncBlocker(entry, unresolved);
+      if (blocker) {
+        blockers.set(entry.id, blockers.get(blocker.id) ?? blocker);
+        unresolved.push(entry);
+      }
+    }
+  }
+  return blockers;
 }
 // Respuestas inequívocas del gateway anterior: el cupón no llegó a guardarse.
 const legacyCouponRejections = new Set([
@@ -90,6 +135,47 @@ export class DexterDB extends Dexie {
   }
 }
 export const db = new DexterDB();
+
+export async function retryLegacyDatabaseConflicts(
+  entries: OutboxEntry[],
+  state: Snapshot['state'],
+  database = db,
+) {
+  const reviewed = new Set([
+    ...state.requests.filter((request) => request.type === 'sync').map((request) => request.id),
+    ...(state.pendingSyncReviewIds ?? []),
+    ...(state.resolvedSyncIds ?? []),
+  ]);
+  const candidates = entries.filter(
+    (entry) =>
+      entry.status === 'conflict' &&
+      !entry.reviewRecorded &&
+      !entry.result?.syncReview &&
+      isRetryableDatabaseCode(entry.result?.code) &&
+      !reviewed.has(entry.id),
+  );
+  if (!candidates.length) return entries;
+
+  return database.transaction('rw', database.outbox, async () => {
+    const retried = new Set<string>();
+    for (const entry of candidates) {
+      const current = await database.outbox.get(entry.id);
+      if (current?.status !== 'conflict' || current.reviewRecorded || current.result?.syncReview) continue;
+      if (!isRetryableDatabaseCode(current.result?.code)) continue;
+      await database.outbox.update(entry.id, { status: 'pending', result: undefined, message: undefined });
+      retried.add(entry.id);
+    }
+
+    const updated = await database.outbox.bulkGet(entries.map((entry) => entry.id));
+    for (const entry of updated) {
+      if (entry?.status === 'pending' && entry.dependsOnConflict && retried.has(entry.dependsOnConflict)) {
+        await database.outbox.update(entry.id, { dependsOnConflict: undefined });
+        delete entry.dependsOnConflict;
+      }
+    }
+    return updated.filter((entry) => entry !== undefined);
+  });
+}
 export function photoBlob(photo: LocalPhoto): Blob {
   if (photo.bytes) return new Blob([photo.bytes], { type: photo.mime ?? 'image/jpeg' });
   if (photo.blob) return photo.blob;

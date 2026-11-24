@@ -18,7 +18,7 @@ export const roleGuide = {
   admin:
     'Administra catálogo, usuarios y cortesías. Revisa turnos y propone cambios de precios, permisos e inventario.',
   encargado:
-    'La caja principal crea y edita pedidos, cobra y realiza el cuadre de su turno. Recibe los pedidos del apoyo con el nombre de quien los tomó.',
+    'En su turno y equipo principal, cobra y cuadra la caja. Fuera de esa caja, toma y envía pedidos.',
   apoyo:
     'Toma, edita y envía pedidos y registra entregas desde celular, tablet u otro dispositivo conectado. Nunca cobra ni mueve dinero.',
 };
@@ -37,12 +37,17 @@ export function canWork(actor: Profile, state: State, permission: Permission, sh
   );
 }
 export function commandPermission(type: CommandType): Permission | undefined {
-  if (['create_order', 'update_order', 'cancel_order', 'close_tastings'].includes(type)) return 'orders';
+  if (['create_order', 'send_order', 'update_order', 'cancel_order', 'close_tastings'].includes(type))
+    return 'orders';
   if (['deliver', 'taste'].includes(type)) return 'deliveries';
   if (['pay', 'redeem_coupon', 'request_void', 'replace_order', 'refund_order', 'unpaid'].includes(type))
     return 'payments';
   if (type === 'expense') return 'expenses';
-  if (['open_package', 'open_bag', 'exhaust_bag', 'receive_shipment', 'report_damage'].includes(type))
+  if (
+    ['open_supply', 'open_package', 'open_bag', 'exhaust_bag', 'receive_shipment', 'report_damage'].includes(
+      type,
+    )
+  )
     return 'inventory';
   if (['request_transfer', 'execute_transfer', 'confirm_transfer'].includes(type)) return 'transfers';
   if (
@@ -72,4 +77,14 @@ export function isShiftCashier(actor: Actor, shift: Shift | undefined): boolean 
     shift.cashierId === actor.id &&
     ((actor.primary && shift.deviceId === actor.deviceId) || (actor.role === 'admin' && actor.online))
   );
+}
+
+export function isOrderAssistant(actor: Actor, state: State): boolean {
+  if (actor.role !== 'encargado') return false;
+  const shift = operatingShift(state);
+  return !actor.primary || (!!shift && !isShiftCashier(actor, shift));
+}
+
+export function isCustomerOrderCommand(type: CommandType): boolean {
+  return ['create_order', 'send_order', 'update_order', 'cancel_order'].includes(type);
 }

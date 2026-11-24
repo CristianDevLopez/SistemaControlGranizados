@@ -1,3 +1,4 @@
+import { enterVisibleClosing, submitCashDistribution } from '../support/visible-closing.ts';
 import { expect, test, type Page } from '@playwright/test';
 
 async function nav(page: Page, name: string) {
@@ -19,66 +20,11 @@ async function count(page: Page, cash: number) {
   await expect(dialog).toHaveCount(0);
 }
 
-test('el tipo de cuadre se puede cambiar en el turno y caja solo cuenta el alcance elegido', async ({
-  page,
-  request,
-}) => {
-  await request.post('http://127.0.0.1:5180/reset', { data: { emptyCash: true } });
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Administrador', exact: true }).click();
-  await page.getByLabel('Correo electrónico').fill('admin@test.invalid');
-  await page.getByLabel('Contraseña', { exact: true }).fill('test-password-only');
-  await page.getByRole('button', { name: 'Continuar', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
-  await nav(page, 'Turno y caja');
-  await page.getByRole('button', { name: 'Iniciar caja', exact: true }).click();
-  await page.getByRole('dialog').getByLabel('Base inicial', { exact: false }).fill('12.000');
-  await page.getByRole('dialog').getByRole('button', { name: 'Guardar', exact: true }).click();
-  await count(page, 12000);
-  const choose = async (mode: string) => {
-    await page.getByRole('button', { name: 'Elegir tipo de cuadre' }).click();
-    const form = page.getByRole('dialog', { name: 'Tipo de cuadre de este turno' });
-    await form.getByLabel('Conteo físico al cerrar').selectOption(mode);
-    await form.getByRole('button', { name: 'Guardar' }).click();
-    await expect(form).toHaveCount(0);
-    await page.getByRole('button', { name: 'Cerrar y contar caja' }).click();
-    return page.getByRole('dialog', { name: 'Conteo de cierre' });
-  };
-  const full = await choose('full');
-  await expect(full.locator('.count-list')).toContainText('Bolsas selladas');
-  await full.getByRole('button', { name: 'Cancelar' }).click();
-  const quick = await choose('cash');
-  await expect(quick.locator('.count-list input')).toHaveCount(0);
-  await count(page, 12000);
-  await expect(page.getByRole('button', { name: 'Elegir tipo de cuadre' })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Confirmar pagos y repartir efectivo' }).click();
-  const closing = page.getByRole('dialog');
-  await closing.getByLabel('Confirmo ambos medios', { exact: false }).check();
-  await closing.getByLabel('Efectivo que dejas', { exact: false }).fill('12.000');
-  await closing.getByRole('button', { name: 'Enviar cierre' }).click();
-  await expect(closing).toHaveCount(0);
-  await nav(page, 'Solicitudes');
-  const card = page.locator('.request-card').filter({ hasText: 'Revisión de cuadre' });
-  await card.getByRole('button', { name: 'Revisar turno' }).click();
-  await page
-    .getByRole('dialog')
-    .getByRole('button', { name: /Aprobar cierre/ })
-    .click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Cerrar', exact: true }).click();
-  await expect(card).toHaveCount(0);
-
-  await nav(page, 'Turno y caja');
-  await page.getByRole('button', { name: 'Iniciar caja', exact: true }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Guardar', exact: true }).click();
-  await count(page, 12000);
-  await expect(page.getByText('Cuadre de cierre · Sencillo · Efectivo y vasos sueltos')).toBeVisible();
-});
-
 for (const account of [
   { email: 'admin@test.invalid', name: 'Administrador de prueba' },
   { email: 'owner@test.invalid', name: 'Superadmin de prueba' },
 ]) {
-  test(`${account.name} inicia caja, cuenta, cobra y cierra sin autorización ajena`, async ({
+  test(`${account.name} inicia caja, cobra y presenta el cierre para otra persona`, async ({
     page,
     request,
   }, testInfo) => {
@@ -108,23 +54,38 @@ for (const account of [
     await page.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
     await expect(page.getByText('Venta registrada ·', { exact: false })).toBeVisible();
     await nav(page, 'Turno y caja');
+    const chooseSupplies = page.getByRole('button', { name: 'Elegir insumos para el cierre' });
+    const supplies = page.getByRole('dialog', { name: 'Insumos para contar al cierre' });
+    const pitillos = supplies.getByRole('checkbox', { name: 'Pitillo cuchara (bolsa)' });
+    const coronitas = supplies.getByRole('checkbox', { name: 'Coronitas (unidades)' });
+    await chooseSupplies.click();
+    await expect(supplies.getByRole('checkbox', { name: /Bolsas ·/ }).first()).toBeVisible();
+    await expect(supplies.getByRole('checkbox', { name: /Líquido|Vasos|Paquetes/ })).toHaveCount(0);
+    await pitillos.check();
+    await coronitas.check();
+    await supplies.getByRole('button', { name: 'Guardar', exact: true }).click();
+    await expect(supplies).toHaveCount(0);
+    await chooseSupplies.click();
+    await expect(pitillos).toBeChecked();
+    await expect(coronitas).toBeChecked();
+    await coronitas.uncheck();
+    await supplies.getByRole('button', { name: 'Guardar', exact: true }).click();
+    await expect(supplies).toHaveCount(0);
+
     await page.getByRole('button', { name: 'Cerrar y contar caja', exact: true }).click();
-    await expect(page.getByRole('dialog').locator('.count-list')).not.toContainText(
-      /Bolsas|Paquetes|Líquido|Coronitas|Copitas/,
-    );
-    await expect(page.getByRole('dialog').locator('.count-list')).toContainText(
-      'Vasos sueltos del paquete abierto',
-    );
-    await count(page, 26000);
-    await page.getByRole('button', { name: 'Confirmar pagos y repartir efectivo' }).click();
-    const closing = page.getByRole('dialog');
-    await closing.getByLabel('Confirmo ambos medios', { exact: false }).check();
-    await closing.getByLabel('Efectivo que dejas', { exact: false }).fill('16.000');
-    await closing.getByRole('button', { name: 'Enviar cierre' }).click();
-    await expect(closing.getByRole('alert')).toContainText('igual al efectivo contado');
-    await closing.getByLabel('Efectivo que dejas', { exact: false }).fill('26.000');
-    await closing.getByRole('button', { name: 'Enviar cierre' }).click();
-    await expect(closing).toHaveCount(0);
+    const closing = page.getByRole('dialog', { name: 'Cierre de caja' });
+    await expect(closing).toContainText('Paquetes cerrados');
+    await expect(closing).not.toContainText(/Bolsas selladas|Coronitas/);
+    await expect(closing.getByRole('spinbutton', { name: 'Pitillo cuchara' })).toBeVisible();
+    await enterVisibleClosing(page, '26.000', { 'Cuenta de prueba': '0' }, { 'Pitillo cuchara': '3' });
+    await submitCashDistribution(page, '26.000');
+    await nav(page, 'Revisiones');
+    await page.getByRole('button', { name: 'Revisar turno', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Confirmar y ajustar inventario', exact: true }),
+    ).toBeDisabled();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cerrar', exact: true }).click();
+    await nav(page, 'Turno y caja');
     await expect(page.getByRole('button', { name: 'Iniciar caja', exact: true })).toBeVisible();
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();

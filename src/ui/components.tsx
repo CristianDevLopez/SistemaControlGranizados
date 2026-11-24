@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { X, Camera, LoaderCircle, Inbox } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
 import { moneyText, parseMoney } from '../lib/money.ts';
+import type { Order } from '../domain/types.ts';
 export const money = (value: number) =>
   new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(
     value,
@@ -418,3 +419,6 @@ export const stateNames: Record<string, string> = {
   redeemed: 'Redimido',
   cancelled: 'Cancelado',
 };
+export function orderLabel(order: Order) {
+  return `#${order.number}${order.customerName ? ` · ${order.customerName}` : ''}`;
+}

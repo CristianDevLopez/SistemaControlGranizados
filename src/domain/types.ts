@@ -38,6 +38,7 @@ export interface Size {
   rank: number;
 }
 export interface Settings {
+  supplies?: Record<string, { unit: string; initialized: boolean }>;
   id: ID;
   version: number;
   cashLimit: number;
@@ -116,10 +117,14 @@ export interface Tasting {
   flavorId: ID;
   at: string;
 }
+export const ORDER_NAME_MAX_LENGTH = 60;
+
 export interface Order {
+  cashHandoff?: 'draft' | 'sent';
   additions?: import('./additions.ts').CandyAddition[];
   id: ID;
   number: string;
+  customerName?: string;
   shiftId: ID;
   sellerId: ID;
   cashierId?: ID;
@@ -198,6 +203,9 @@ export type ClosingCountMode = 'cash' | 'simple' | 'full';
 
 export interface Shift {
   closingCountMode?: ClosingCountMode;
+  closingSupplies?: string[];
+  visibleClosing?: boolean;
+  reconcileClosingId?: ID;
   id: ID;
   cashierId: ID;
   deviceId: ID;
@@ -246,6 +254,9 @@ export interface Shift {
     at?: string;
     notes?: string;
     employeeCharge?: number;
+    inventoryVerification?: { status: 'pending' | 'verified'; countId?: ID };
+    openingChecks?: { countId: ID; differences: Record<string, number>; cash?: number }[];
+    handoffDifferences?: Record<ID, number>;
     recoveries?: { id: ID; amount: number; paidOn: string; at: string; by: ID }[];
   };
   operationsReview?: {
@@ -253,6 +264,10 @@ export interface Shift {
     countResolutions?: Record<ID, { notes: string; at: string; by: ID }>;
     camera?: { at: string; notes: string; by: ID };
     openingResolution?: { notes: string; at: string; by: ID };
+    openingDifferences?: {
+      countId: ID;
+      items: Record<string, { difference: number; lastFullCountAt?: string }>;
+    };
     resolution?: { outcome: 'shortage' | 'surplus' | 'matched'; notes: string; at: string; by: ID };
   };
 }
@@ -263,6 +278,8 @@ export interface Count {
   by: ID;
   at: string;
   blindAttempt?: 1 | 2;
+  visibleClosing?: boolean;
+  blindHandoff?: boolean;
   cash?: number;
   items: Record<string, number>;
   expectedCash?: number;
@@ -301,6 +318,11 @@ export interface ClosingPreview {
   expectedItems: Record<string, number>;
   expectedPayments: Record<string, number>;
   paymentLabels: Record<string, string>;
+}
+export interface VisibleClosingPreview extends ClosingPreview {
+  cashFlow: { base: number; sales: number; expenses: number; transfers: number };
+  cups: Record<string, { initial: number; packages: number; sold: number; damage: number; other: number }>;
+  movements: { id: ID; at: string; label: string }[];
 }
 export interface ShipmentLine {
   article: string;
@@ -384,6 +406,8 @@ export interface Transfer {
 }
 export type PromoEffect = 'fixed' | 'upgrade' | 'nxm' | 'free';
 export interface Promotion {
+  checkoutText?: string;
+  limitedSchedule?: boolean;
   id: ID;
   name: string;
   effect: PromoEffect;
@@ -455,6 +479,7 @@ export interface Request {
   originalCommand?: Command;
   resolutionNotes?: string;
   resolutionId?: ID;
+  syncDiscardedThrough?: string;
   response?: { notes: string; at: string };
   change?: ChangeProposal;
 }
@@ -527,6 +552,7 @@ export interface Notification {
 }
 export interface Package {
   id: ID;
+  voidedAt?: string;
   sizeId: ID;
   units: number;
   openedAt: string;
@@ -537,6 +563,7 @@ export interface Package {
 }
 export interface Bag {
   id: ID;
+  voidedAt?: string;
   flavorId: ID;
   ounces: number;
   openedAt: string;
@@ -568,6 +595,7 @@ export interface State {
     sizes: { name: string; quantity: number }[];
     payments: { name: string; amount: number }[];
     transferAccounts?: { name: string; amount: number }[];
+    cards?: { id: string; name: string; amount: number; count: number; confirmed: number }[];
     expectedCash?: number;
     expenses: number;
     handoffs: {
@@ -590,6 +618,7 @@ export interface State {
   orderPaymentMethods?: Record<ID, string[]>;
   shiftReviewPrompt?: { id: ID; notes: string; at: string }[];
   resolvedSyncIds?: ID[];
+  pendingSyncReviewIds?: ID[];
   /** Resumen por cuenta del turno propio en la vista del empleado. */
   transferSummary?: { name: string; amount: number }[];
   /** Proyección operativa para mostrador, sin movimientos privados de inventario. */
@@ -682,6 +711,7 @@ export type CommandType =
   | 'finish_audit'
   | 'adjust_count_inventory'
   | 'create_order'
+  | 'send_order'
   | 'update_order'
   | 'taste'
   | 'update_tasting'
@@ -697,6 +727,8 @@ export type CommandType =
   | 'create_shipment'
   | 'receive_shipment'
   | 'open_package'
+  | 'open_supply'
+  | 'save_supply'
   | 'open_bag'
   | 'exhaust_bag'
   | 'expense'
@@ -725,6 +757,8 @@ export interface Command {
   payload: Record<string, unknown>;
 }
 export interface Result {
+  syncReview?: true;
+  pendingSync?: boolean;
   id: ID;
   status: 'accepted' | 'review' | 'conflict';
   message: string;

@@ -195,8 +195,26 @@ export function dashboardData(state: State, filter: DashboardFilter) {
     Array.from(map, ([key, bucket]) => ({ key, ...bucket })).sort(
       (a, b) => b.units - a.units || b.amount - a.amount,
     );
+  const promotions = new Map<
+    string,
+    { id: string; name: string; orders: Set<string>; cups: number; discount: number }
+  >();
+  for (const order of sales) {
+    for (const line of order.lines) {
+      const cups = state.sizes.find((item) => item.id === line.sizeId)?.cups ?? 0;
+      for (const rule of line.appliedRules ?? []) {
+        const { id, name } = rule.promotion;
+        const entry = promotions.get(id) ?? { id, name, orders: new Set<string>(), cups: 0, discount: 0 };
+        entry.orders.add(order.id);
+        entry.cups += rule.quantity * cups;
+        entry.discount += (line.listPrice - rule.unitAmount) * rule.quantity;
+        promotions.set(id, entry);
+      }
+    }
+  }
   return {
     ...summary,
+    promotions: [...promotions.values()].map((item) => ({ ...item, orders: item.orders.size })),
     courtesyCost: Math.min(summary.discounts, courtesyCost),
     promotionCost: Math.max(0, summary.discounts - courtesyCost),
     breakdown: { sizes: ranked(sizes), flavors: ranked(flavors), alcohol: ranked(alcohol) },

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { businessDay } from '../domain/business-date.ts';
 import { inRehearsalPeriod } from '../domain/closing-archive.ts';
 import { salesByMethod } from '../domain/engine.ts';
 import type { Count } from '../domain/types.ts';
@@ -25,18 +26,22 @@ function differences(count: Count) {
   );
 }
 
-export function OwnClosing({ requestsOnly = false }: { requestsOnly?: boolean } = {}) {
+export function OwnClosing({ requestsOnly = false, day }: { requestsOnly?: boolean; day?: string } = {}) {
   const app = useApp();
   const { state, actor, profiles } = app.data!;
   const [editing, setEditing] = useState<string>();
-  const [responding, setResponding] = useState<string>();
   return state.shifts
     .filter(
       (shift) =>
         shift.cashierId === actor.id &&
-        shift.blindOpening?.depth &&
+        (!day ||
+          shift.status === 'open' ||
+          businessDay(shift.closedAt ?? shift.openedAt ?? shift.requestedAt) === day) &&
+        (shift.blindOpening?.depth || shift.visibleClosing) &&
         !!shift.blindClosing &&
-        (!requestsOnly || !!shift.closingReview) &&
+        (!requestsOnly ||
+          shift.closingReview?.status === 'pending' ||
+          shift.closingReview?.status === 'returned') &&
         !shift.closingArchive &&
         !inRehearsalPeriod(state, shift.closedAt ?? shift.requestedAt),
     )
@@ -82,14 +87,7 @@ export function OwnClosing({ requestsOnly = false }: { requestsOnly?: boolean } 
               }))
           : (state.transferDestinations ?? []);
       const canEdit = shift.status === 'open' || !!shift.closingFlow?.returned;
-      const canRespond = !!shift.closingFlow?.responseDueAt && !shift.closingFlow.response;
-      if (
-        !canEdit &&
-        !canRespond &&
-        shift.closingReview?.status === 'approved' &&
-        !shift.closingFlow?.response
-      )
-        return null;
+      if (!canEdit && shift.closingReview?.status === 'approved') return null;
       return (
         <Panel key={shift.id} title={`Cierre · ${date(count.at)}`}>
           <p>{differences(count)}</p>
@@ -106,12 +104,7 @@ export function OwnClosing({ requestsOnly = false }: { requestsOnly?: boolean } 
           {shift.closingFlow?.response && <p>Respuesta registrada · {shift.closingFlow.response.notes}</p>}
           {canEdit && (
             <button className="button primary" disabled={!app.online} onClick={() => setEditing(shift.id)}>
-              {shift.closingFlow?.returned ? 'Corregir y reenviar' : 'Confirmar pagos y repartir efectivo'}
-            </button>
-          )}
-          {canRespond && (
-            <button className="button primary" disabled={!app.online} onClick={() => setResponding(shift.id)}>
-              Responder a las diferencias
+              {shift.closingFlow?.returned ? 'Corregir y reenviar' : 'Repartir efectivo'}
             </button>
           )}
           {editing === shift.id && (
@@ -196,32 +189,6 @@ export function OwnClosing({ requestsOnly = false }: { requestsOnly?: boolean } 
                   });
                   app.toast(result.message);
                   setEditing(undefined);
-                }}
-              />
-            </Modal>
-          )}
-          {responding === shift.id && (
-            <Modal title="Responder a las diferencias" onClose={() => setResponding(undefined)}>
-              <p>{differences(count)}</p>
-              <FieldsForm
-                fields={[
-                  {
-                    name: 'outcome',
-                    label: 'Respuesta',
-                    type: 'select',
-                    required: true,
-                    options: [
-                      { value: 'accepted', label: 'Acepto' },
-                      { value: 'disagreed', label: 'No estoy de acuerdo' },
-                    ],
-                  },
-                  { name: 'notes', label: 'Nota', type: 'textarea', required: true },
-                ]}
-                submit="Enviar respuesta"
-                onCancel={() => setResponding(undefined)}
-                onSubmit={async (values) => {
-                  await app.run('respond_closing', { ...values, shiftId: shift.id });
-                  setResponding(undefined);
                 }}
               />
             </Modal>
