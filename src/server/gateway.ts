@@ -22,6 +22,7 @@ import type { ApprovalAccess } from '../domain/change-approval.ts';
 import type { Access } from '../domain/platform.ts';
 import type { Backend, DeviceSecret } from './backend.ts';
 import { isRetryableDatabaseCode } from '../domain/sync-errors.ts';
+import { counterChanges, counterNeedsFullState, counterScope, counterState } from './counter-state.ts';
 import { constantEqual, couponCode, encryptPermit, pinHash, randomToken, sha256 } from './crypto.ts';
 
 const staffCommands = new Set([
@@ -67,6 +68,7 @@ export function createGateway(options: GatewayOptions) {
   const now = () => options.now?.() ?? new Date();
   return async function gateway(req: Request): Promise<Response> {
     let store = options.backend;
+    let databasePhase = 'request';
     const origin = req.headers.get('origin') ?? '',
       allowed = !origin || options.allowedOrigins.includes(origin);
     const headers: Record<string, string> = {
@@ -105,6 +107,7 @@ export function createGateway(options: GatewayOptions) {
           multiLocal: true,
           orderHandoff: true,
           retryableSync: true,
+          scopedCounter: true,
         });
       if (route === 'superadmin/setup') {
         await rate(`owner-setup:${ip}`, 5, 900);
@@ -459,8 +462,14 @@ export function createGateway(options: GatewayOptions) {
         aal: identity.aal,
       };
       const commitBusinessCommand = async (command: Command, context: Actor) => {
+        const scope = counterScope(command);
         for (let attempt = 0; attempt < 5; attempt++) {
-          const loaded = await store.load();
+          databasePhase = 'load';
+          const scoped = scope ? await store.loadCounter(scope) : undefined;
+          const useScoped = scoped && scope && !counterNeedsFullState(scoped.state, scope);
+          const loaded = useScoped
+            ? { state: counterState(scoped.state), revision: scoped.revision }
+            : await store.load();
           const discardedMessage = 'La operación quedó archivada por el cuadre de caja e inventario.';
           const discarded = loaded.state.requests.find(
             (request) =>
@@ -527,7 +536,9 @@ export function createGateway(options: GatewayOptions) {
             if (shift) shift.status = 'closed';
           }
           try {
-            return await store.commit(loaded.revision, command, applied.state, applied.result);
+            const state = useScoped ? counterChanges(loaded.state, applied.state) : applied.state;
+            databasePhase = 'commit';
+            return await store.commit(loaded.revision, command, state, applied.result);
           } catch (error) {
             if (
               (error as { code?: string }).code !== '40001' &&
@@ -558,9 +569,13 @@ export function createGateway(options: GatewayOptions) {
           .filter((x) => profile.role === 'admin' || x.userId === profile.id)
           .map(({ tokenHash: _, ...d }) => d);
       if (route === 'snapshot') {
-        const revision = await store.revision();
-        if (url.searchParams.get('since') === String(revision))
-          return json({ unchanged: true, revision, actor, branch, access, serverAt: now().toISOString() });
+        databasePhase = 'snapshot';
+        const since = url.searchParams.get('since');
+        if (since !== null) {
+          const revision = await store.revision();
+          if (since === String(revision))
+            return json({ unchanged: true, revision, actor, branch, access, serverAt: now().toISOString() });
+        }
         const loaded = await store.load();
         const state = redactState(loaded.state, actor);
         const profiles = await store.profiles();
@@ -1065,7 +1080,7 @@ export function createGateway(options: GatewayOptions) {
     } catch (error) {
       const e = error as Error & { code?: string };
       if (isRetryableDatabaseCode(e.code)) {
-        console.warn('Temporary database failure', e.code);
+        console.warn('Temporary database failure', { code: e.code, phase: databasePhase });
         return json(
           {
             error: 'El servidor no respondió a tiempo. Los registros locales se conservan y se reintentarán.',

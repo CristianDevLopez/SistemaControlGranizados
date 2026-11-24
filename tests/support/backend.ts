@@ -2,6 +2,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { readFile, readdir } from 'node:fs/promises';
 import type { Session } from '@supabase/supabase-js';
 import type { AuthIdentity, Backend, DeviceSecret } from '../../src/server/backend.ts';
+import type { CounterScope, StateChanges } from '../../src/server/counter-state.ts';
 import { COLLECTIONS, type Command, type Profile, type Result, type State } from '../../src/domain/types.ts';
 import { sha256, pinHash } from '../../src/server/crypto.ts';
 import { admin, other, cashier, support, owner, ids, fixture } from './fixture.ts';
@@ -147,6 +148,14 @@ export class PgBackend implements Backend {
   async revision() {
     return (await this.security('revision')).revision as number;
   }
+  async loadCounter(scope: CounterScope) {
+    return (
+      await this.db.query<{ value: { state: StateChanges; revision: number } }>(
+        'select public.dexter_branch_read_counter(coalesce($1,private.legacy_branch()),$2) as value',
+        [this.branchId ?? null, scope],
+      )
+    ).rows[0].value;
+  }
   async receipt(id: string) {
     const r = await this.db.query<any>(
       'select actor_id as "actorId",result from public.command_receipts where id=$1 and branch_id=coalesce($2,private.legacy_branch())',
@@ -154,7 +163,7 @@ export class PgBackend implements Backend {
     );
     return r.rows[0] ?? null;
   }
-  async commit(revision: number, command: Command, state: State, result: Result) {
+  async commit(revision: number, command: Command, state: StateChanges, result: Result) {
     return (
       await this.db.query<{ value: Result }>(
         'select public.dexter_branch_commit(coalesce($5,private.legacy_branch()),$1,$2,$3,$4)as value',

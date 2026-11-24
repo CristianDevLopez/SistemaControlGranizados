@@ -43,6 +43,9 @@ it('impide leer y mutar tablas o invocar comandos desde roles del navegador', as
     try {
       await expect(db.db.query('select * from public.payments')).rejects.toThrow(/permission denied/);
       await expect(db.db.query('select public.dexter_read_state()')).rejects.toThrow(/permission denied/);
+      await expect(db.db.query("select public.dexter_branch_read_counter(null, '{}')")).rejects.toThrow(
+        /permission denied/,
+      );
       await expect(db.db.query("select public.dexter_security('revision','{}')")).rejects.toThrow(
         /permission denied/,
       );

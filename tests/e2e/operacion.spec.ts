@@ -285,7 +285,15 @@ test('recupera el timeout que bloqueaba la cola y registra la venta una sola vez
   await page.getByRole('button', { name: 'Estado de sincronización' }).click();
   await expect(page.getByText('Operación 11')).toBeVisible();
   await expect(page.getByText('Por conciliar', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Reintento pendiente.')).toBeVisible();
   expect((await snapshot(request)).state.payments).toHaveLength(0);
+
+  const prematureRetry = page.waitForRequest('**/dexter/commands', { timeout: 700 }).then(
+    () => true,
+    () => false,
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  expect(await prematureRetry).toBe(false);
 
   timeout = false;
   await page.getByRole('button', { name: 'Sincronizar ahora' }).click();

@@ -22,6 +22,19 @@ async function nav(page: Page) {
 test('el propietario solicita otro local y lo consulta sin habilitar ventas', async ({ page }, testInfo) => {
   await enter(page, 'admin@test.invalid');
   await nav(page);
+  const initialBranch = await page.getByLabel('Local de trabajo').inputValue();
+  // El listado del panel ya incluye la sede nueva aunque el snapshot del local actual esté atrasado.
+  await page.route('**/dexter/snapshot**', async (route) => {
+    if (route.request().headers()['x-branch-id'] !== initialBranch) return route.continue();
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const data = await response.json();
+    if (data.access)
+      data.access.branches = data.access.branches.filter(
+        (branch: { name: string }) => branch.name !== 'Sede Medellín',
+      );
+    await route.fulfill({ response, json: data });
+  });
   await page.getByRole('button', { name: 'Solicitar local', exact: true }).click();
   await page.getByLabel('Nombre del local').fill('Sede Medellín');
   await page.getByLabel('Ciudad o municipio').fill('Medellín');
@@ -30,6 +43,9 @@ test('el propietario solicita otro local y lo consulta sin habilitar ventas', as
   await expect(page.getByRole('dialog')).toHaveCount(0);
   const card = page.locator('.branch-card').filter({ hasText: 'Sede Medellín' });
   await expect(card).toContainText('Pendiente de activación');
+  await expect(
+    page.getByLabel('Local de trabajo').locator('option').filter({ hasText: 'Sede Medellín' }),
+  ).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Configurar y activar', exact: true })).toHaveCount(0);
   const queuedId = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve) => {
@@ -49,7 +65,17 @@ test('el propietario solicita otro local y lo consulta sin habilitar ventas', as
           sequence: 999,
           optimistic: false,
           status: 'conflict',
-          command: {},
+          command: {
+            id,
+            actorId: actor.id,
+            branchId: actor.branchId,
+            deviceId: actor.deviceId,
+            at: new Date().toISOString(),
+            type: 'outage',
+            sequence: 999,
+            configVersion: read.result.value.state.settings[0].version,
+            payload: {},
+          },
         });
       };
       tx.oncomplete = () => resolve();
