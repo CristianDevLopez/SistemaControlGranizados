@@ -1,4 +1,5 @@
-import { stockBalances } from './engine.ts';
+import { supplies } from './supplies.ts';
+import { stockBalances, usesCupPackages } from './engine.ts';
 import { inRehearsalPeriod } from './closing-archive.ts';
 import { DEFAULT_LIQUID_BAG_WINDOW } from './initial.ts';
 import type { Shift, State, StockMovement } from './types.ts';
@@ -12,16 +13,20 @@ export function inventoryOpenings(state: State, shift?: Shift) {
         (!target.closedAt || Date.parse(opening.openedAt) <= Date.parse(target.closedAt));
   const byId = new Map(state.shifts.map((item) => [item.id, item]));
   return [
-    ...state.bags.map((bag) => ({
-      ...bag,
-      article: state.flavors.find((flavor) => flavor.id === bag.flavorId)?.name ?? bag.flavorId,
-      kind: 'Bolsa' as const,
-    })),
-    ...state.packages.map((pack) => ({
-      ...pack,
-      article: state.sizes.find((size) => size.id === pack.sizeId)?.name ?? pack.sizeId,
-      kind: 'Paquete' as const,
-    })),
+    ...state.bags
+      .filter((bag) => !bag.voidedAt)
+      .map((bag) => ({
+        ...bag,
+        article: state.flavors.find((flavor) => flavor.id === bag.flavorId)?.name ?? bag.flavorId,
+        kind: 'Bolsa' as const,
+      })),
+    ...state.packages
+      .filter((pack) => !pack.voidedAt)
+      .map((pack) => ({
+        ...pack,
+        article: state.sizes.find((size) => size.id === pack.sizeId)?.name ?? pack.sizeId,
+        kind: 'Paquete' as const,
+      })),
   ]
     .filter((opening) => !shift || belongsTo(opening, shift))
     .sort((a, b) => Date.parse(b.openedAt) - Date.parse(a.openedAt))
@@ -88,7 +93,7 @@ export function liquidBagInventory(state: State) {
           : movement,
       );
     const bags = state.bags
-      .filter((bag) => bag.flavorId === flavor.id)
+      .filter((bag) => !bag.voidedAt && bag.flavorId === flavor.id)
       .sort((a, b) => Date.parse(a.openedAt) - Date.parse(b.openedAt))
       .map((bag, index, sorted) => {
         const endsAt = sorted[index + 1]?.openedAt ?? bag.exhaustedAt;
@@ -166,7 +171,7 @@ export function inventoryDiscrepancies(state: State, liquid = liquidBagInventory
   }
   const balances = stockBalances(state);
   const cutoff = state.settings[0].rehearsalBaseline?.at;
-  for (const size of state.sizes.filter((item) => item.cups > 0)) {
+  for (const size of state.sizes.filter(usesCupPackages)) {
     const id = `cup:${size.id}`;
     const latest = state.packages
       .filter((pack) => pack.sizeId === size.id)
@@ -206,5 +211,39 @@ export function inventoryDiscrepanciesAt(state: State, at: string) {
       .map((bag) =>
         bag.exhaustedAt && Date.parse(bag.exhaustedAt) > cutoff ? { ...bag, exhaustedAt: undefined } : bag,
       ),
+  });
+}
+
+export function supplyDuration(state: State) {
+  const balances = stockBalances(state);
+  const sold = state.orders.filter((order) => order.status === 'paid' || order.status === 'void_requested');
+  const sizes = new Map(state.sizes.map((size) => [size.id, size.cups]));
+  return supplies(state).map((item) => {
+    const openings = state.stock
+      .filter((entry) => entry.article === item.id && entry.reason === 'open_supply')
+      .map((entry) => entry.at)
+      .sort();
+    const first = openings[0];
+    const last = openings.at(-1);
+    const intervals = openings.length - 1;
+    const total =
+      intervals > 0
+        ? sold
+            .filter((order) => {
+              const at = order.paidAt ?? order.createdAt;
+              return at >= first && at < last!;
+            })
+            .reduce(
+              (sum, order) =>
+                sum + order.lines.reduce((n, line) => n + line.quantity * (sizes.get(line.sizeId) ?? 0), 0),
+              0,
+            )
+        : null;
+    return {
+      ...item,
+      remaining: balances[item.id] ?? 0,
+      days: intervals > 0 ? (Date.parse(last!) - Date.parse(first)) / 86_400_000 / intervals : null,
+      cups: total === null ? null : total / intervals,
+    };
   });
 }

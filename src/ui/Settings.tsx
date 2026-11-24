@@ -1,3 +1,4 @@
+import { supplies } from '../domain/supplies.ts';
 import { configuredAdditions } from '../domain/additions.ts';
 import { useState } from 'react';
 import {
@@ -56,7 +57,7 @@ export function Settings() {
       initial,
       submit: type === 'save_size' ? 'Enviar propuesta' : undefined,
       save: async (v) => {
-        await app.run(type, { ...extra, ...v });
+        await app.run(type, { ...extra, ...v, ...(type === 'configure' ? { reviewParameters: true } : {}) });
       },
     });
   /** Campos de una caja o cuenta. Al editar, el saldo inicial ya no cambia. */
@@ -405,14 +406,6 @@ export function Settings() {
                 min: 0,
                 required: true,
               },
-              {
-                name: 'closingResponseDays',
-                label: 'Días para responder al cierre',
-                type: 'number',
-                min: 1,
-                max: 90,
-                required: true,
-              },
               ...configuredAdditions(settings.candyPrices).map((item) => ({
                 name: `candy:${item.id}`,
                 label: `Adición · ${item.name}`,
@@ -437,7 +430,6 @@ export function Settings() {
             initial={{
               ...settings,
               maxClosingBase: settings.maxClosingBase ?? settings.cashLimit,
-              closingResponseDays: settings.closingResponseDays ?? 3,
               ...Object.fromEntries(
                 configuredAdditions(settings.candyPrices).map((item) => [`candy:${item.id}`, item.unitPrice]),
               ),
@@ -468,6 +460,50 @@ export function Settings() {
               app.toast('Configuración publicada. Los cierres anteriores conservan sus valores originales.');
             }}
           />
+        </Panel>
+      )}
+      {tab === 'parameters' && (
+        <Panel title="Unidades cerradas de insumos">
+          {supplies(state).map((item) => (
+            <div className="list-row" key={item.id}>
+              <span>
+                {item.name} · {item.unit}
+              </span>
+              <button
+                className="button small secondary"
+                onClick={() =>
+                  businessForm(
+                    item.name,
+                    'save_supply',
+                    [
+                      {
+                        name: 'unit',
+                        label: 'Unidad cerrada',
+                        type: 'text',
+                        value: item.unit,
+                        required: true,
+                      },
+                      ...(!item.initialized
+                        ? [
+                            {
+                              name: 'initial',
+                              label: 'Cantidad inicial',
+                              type: 'number' as const,
+                              min: 0,
+                              step: '1',
+                            },
+                          ]
+                        : []),
+                    ],
+                    {},
+                    { article: item.id },
+                  )
+                }
+              >
+                {item.initialized ? 'Editar unidad' : 'Configurar unidad y saldo inicial'}
+              </button>
+            </div>
+          ))}
         </Panel>
       )}
       {tab === 'team' && (
@@ -571,7 +607,7 @@ export function Settings() {
                                   fields: Object.entries(permissionLabels)
                                     .filter(
                                       ([key]) =>
-                                        (p.role !== 'apoyo' && key !== 'expenses') ||
+                                        p.role !== 'apoyo' ||
                                         ['orders', 'deliveries', 'inventory'].includes(key),
                                     )
                                     .map(([key, label]) => ({ name: key, label, type: 'checkbox' as const })),
@@ -579,7 +615,7 @@ export function Settings() {
                                     Object.keys(permissionLabels)
                                       .filter(
                                         (key) =>
-                                          (p.role !== 'apoyo' && key !== 'expenses') ||
+                                          p.role !== 'apoyo' ||
                                           ['orders', 'deliveries', 'inventory'].includes(key),
                                       )
                                       .map((key) => [

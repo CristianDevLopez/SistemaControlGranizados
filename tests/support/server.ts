@@ -5,6 +5,7 @@ import { createGateway } from '../../src/server/gateway.ts';
 import { admin, cashier, support, owner, ids, NOW } from './fixture.ts';
 let backend = await PgBackend.create();
 let pauseCommands = false;
+let pausedCommandAttempts = 0;
 const gateway = () =>
   createGateway({ backend, allowedOrigins: ['http://127.0.0.1:5174'], now: () => new Date() });
 createServer(async (req, res) => {
@@ -42,6 +43,7 @@ createServer(async (req, res) => {
     }
     if (path === '/reset' && req.method === 'POST') {
       pauseCommands = false;
+      pausedCommandAttempts = 0;
       await backend.db.close();
       backend = await PgBackend.create();
       const options = body.length ? JSON.parse(body.toString()) : {};
@@ -56,9 +58,15 @@ createServer(async (req, res) => {
       res.end('ok');
       return;
     }
+    if (path === '/test/commands' && req.method === 'GET') {
+      res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ pausedCommandAttempts }));
+      return;
+    }
     if (path === '/dexter/commands' && pauseCommands) {
+      pausedCommandAttempts++;
       res.writeHead(503, { ...cors, 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Error temporal de prueba', code: 'TEMPORARY' }));
+      res.end(JSON.stringify({ error: 'Error temporal de prueba', code: 'RETRY_SYNC' }));
       return;
     }
     if (path === '/dexter/test-login') {

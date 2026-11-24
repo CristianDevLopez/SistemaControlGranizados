@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { applyCommand } from '../domain/engine.ts';
+import { applyCommand, syncOrderId } from '../domain/engine.ts';
 import { employeeView, operatingShift } from '../domain/employee-view.ts';
 import {
   type Actor,
@@ -19,7 +19,12 @@ import {
   type Snapshot,
 } from '../domain/types.ts';
 import { isReadOnlyView, rolePreview } from '../domain/views.ts';
-import { commandPermission, hasPermission } from '../domain/access.ts';
+import {
+  commandPermission,
+  hasPermission,
+  isCustomerOrderCommand,
+  isOrderAssistant,
+} from '../domain/access.ts';
 import {
   api,
   ApiError,
@@ -42,6 +47,9 @@ import {
   belongsToBranch,
   awaitsSync,
   isFinalRejection,
+  syncBlocker,
+  syncReviewDependency,
+  retryLegacyDatabaseConflicts,
   offlineSnapshot,
   type DeviceCredential,
   type OfflineAuthorizer,
@@ -87,6 +95,7 @@ export function useApp() {
 }
 const ONLINE_TYPES = new Set<CommandType>([
   'record_paper',
+  'send_order',
   'save_flavor',
   'save_size',
   'change_access',
@@ -111,6 +120,8 @@ const ONLINE_TYPES = new Set<CommandType>([
   'finish_audit',
   'adjust_count_inventory',
   'correct_inventory',
+  'save_supply',
+  'open_supply',
   'approve_closing',
   'submit_closing',
   'return_closing',
@@ -146,6 +157,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     localWrites = useRef(0);
   const switchingBranch = useRef(false);
   const installingUpdate = useRef(false);
+  const retry = useRef({ failures: 0, after: 0 });
+  const resetRetry = useCallback(() => {
+    retry.current = { failures: 0, after: 0 };
+  }, []);
+  const handleSyncError = useCallback((error: unknown) => {
+    if (!(error instanceof ApiError) || error.status === 408 || error.status === 429 || error.status >= 500) {
+      const failures = Math.min(retry.current.failures + 1, 5);
+      const delay = Math.min(5_000 * 2 ** (failures - 1), 60_000);
+      retry.current = { failures, after: Date.now() + delay + Math.random() * Math.min(delay / 5, 2_000) };
+    }
+    if (error instanceof ApiError) {
+      setError(error.message);
+      if (['UNAUTHORIZED', 'FORBIDDEN', 'DEVICE_REQUIRED', 'DEVICE_REVOKED'].includes(error.code))
+        setOnline(false);
+    } else {
+      setOnline(false);
+      setError('Sin conexión con el servidor. Los registros locales se conservan.');
+    }
+  }, []);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toast = useCallback((message: string) => {
     if (noticeTimer.current !== null) clearTimeout(noticeTimer.current);
@@ -181,7 +211,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setData(null);
     setOutbox([]);
     setPhotosPending(0);
-  }, []);
+    resetRetry();
+  }, [resetRetry]);
   const revokeCachedAccess = useCallback(
     async (error: unknown) => {
       const saved = current.current;
@@ -217,142 +248,191 @@ export function AppProvider({ children }: { children: ReactNode }) {
         .length,
     );
   }, []);
-  const load = useCallback(async () => {
-    await ensureBranch();
-    const result = await snapshot();
-    if ('unchanged' in result) return;
-    setOnline(true);
-    setError(null);
-    const queued = (await db.outbox.toArray())
-      .filter((x) => belongsToBranch(x, result))
-      .sort((a, b) => a.sequence - b.sequence);
-    let state = result.state;
-    for (const entry of queued) {
-      if (entry.status === 'acknowledged') {
-        await db.outbox.delete(entry.id);
-        continue;
-      }
-      if (entry.status === 'conflict') {
-        const review = result.state.requests.find((r) => r.type === 'sync' && r.id === entry.id);
-        if ((review && review.status !== 'pending') || result.state.resolvedSyncIds?.includes(entry.id)) {
-          await db.outbox.update(entry.id, { status: 'reconciled' });
-          continue;
-        }
-        if (!review && isFinalRejection(entry)) {
-          await db.outbox.update(entry.id, { status: 'rejected' });
-          continue;
-        }
-      }
-      if (!entry.optimistic || !awaitsSync(entry)) continue;
-      try {
-        state = applyCommand(
-          state,
-          entry.command,
-          { ...result.actor, online: entry.command.payload.offline !== true },
-          new Date().toISOString(),
-        ).state;
-      } catch {
-        /* The raw operation stays available in the incident queue. */
-      }
-    }
-    await remember({
-      ...result,
-      state: result.actor.role === 'admin' ? state : employeeView(state, result.actor),
-    });
-    const at = new Date().toISOString();
-    setLastSync(at);
-    await setMeta('lastSync', at);
-    await updatePending();
-  }, [remember, updatePending]);
-  const sync = useCallback(async () => {
-    if (syncLock.current) {
-      await syncDone.current;
-      return;
-    }
-    if (switchingBranch.current || !navigator.onLine || !current.current) return;
-    let finishSync!: () => void;
-    syncDone.current = new Promise<void>((resolve) => {
-      finishSync = resolve;
-    });
-    syncLock.current = true;
-    setSyncing(true);
-    try {
-      await load();
+  const load = useCallback(
+    async (received?: Snapshot) => {
+      if (!received) await ensureBranch();
+      const result = received ?? (await snapshot());
+      if ('unchanged' in result) return;
+      setOnline(true);
+      setError(null);
       const entries = (await db.outbox.toArray())
-        .filter((x) => belongsToBranch(x, current.current) && awaitsSync(x))
+        .filter((x) => belongsToBranch(x, result))
         .sort((a, b) => a.sequence - b.sequence);
-      for (const entry of entries) {
-        if (entry.status === 'conflict') break;
-        const response = await sendCommands([entry.command]);
-        const result = response.results[0];
-        if (result?.id !== entry.id || !['accepted', 'review', 'conflict'].includes(result.status))
-          throw new Error('Respuesta incompleta del servidor.');
-        recentResults.current.set(entry.id, result);
-        const status =
-          result.finalRejection || isFinalRejection(entry, result)
-            ? 'rejected'
-            : result.status === 'conflict'
-              ? 'conflict'
-              : 'acknowledged';
-        await db.outbox.update(entry.id, {
-          status,
-          result,
-          message: result.message,
-        });
-        if (result.status === 'conflict') toast(result.message);
-        if (status === 'conflict') break;
-      }
-      const photos = (await db.photos.toArray()).filter(
-        (x) => belongsToBranch(x, current.current) && x.status === 'pending',
-      );
-      for (const photo of photos) {
-        try {
-          const blob = photoBlob(photo);
-          const target = await api('attachments/upload', { id: photo.id });
-          if (target.completed) {
-            await db.photos.delete(photo.id);
+      const queued = await retryLegacyDatabaseConflicts(entries, result.state);
+      let state = result.state;
+      const unresolved: OutboxEntry[] = [];
+      const orderConflicts = new Map<string, { id: string; through: number }>();
+      for (const entry of queued) {
+        if (entry.status === 'acknowledged') {
+          await db.outbox.delete(entry.id);
+          continue;
+        }
+        const orderId = syncOrderId(entry.command);
+        if (entry.status === 'reconciled' && orderId && entry.reconciledThrough !== undefined)
+          orderConflicts.set(orderId, { id: entry.id, through: entry.reconciledThrough });
+        if (entry.status === 'conflict') {
+          const review = result.state.requests.find((r) => r.type === 'sync' && r.id === entry.id);
+          if ((review && review.status !== 'pending') || result.state.resolvedSyncIds?.includes(entry.id)) {
+            const through = queued.at(-1)!.sequence;
+            if (orderId) orderConflicts.set(orderId, { id: entry.id, through });
+            await db.outbox.update(entry.id, { status: 'reconciled', reconciledThrough: through });
             continue;
           }
-          if (testGateway) {
-            await fetch(
-              `${testGateway.replace('/dexter', '')}/test-upload/${photo.id}?path=${encodeURIComponent(target.path)}`,
-              { method: 'PUT', body: blob },
-            );
-          } else {
-            const uploaded = await supabase!.storage
-              .from('evidence')
-              .uploadToSignedUrl(target.path, target.token, blob, { contentType: blob.type });
-            if (uploaded.error) throw uploaded.error;
+          if (!review && isFinalRejection(entry)) {
+            await db.outbox.update(entry.id, { status: 'rejected' });
+            continue;
           }
-          await api('attachments/complete', { id: photo.id, path: target.path });
-          await db.photos.delete(photo.id);
-        } catch (e) {
-          await db.photos.update(photo.id, { error: (e as Error).message });
+          if (!entry.reviewRecorded && (review || result.state.pendingSyncReviewIds?.includes(entry.id))) {
+            await db.outbox.update(entry.id, { reviewRecorded: true });
+            entry.reviewRecorded = true;
+          }
+          if (orderId) orderConflicts.set(orderId, { id: entry.id, through: Infinity });
+        }
+        if (entry.status === 'pending' && orderId) {
+          const conflict = orderConflicts.get(orderId);
+          if (conflict && entry.sequence <= conflict.through && !entry.dependsOnConflict) {
+            await db.outbox.update(entry.id, { dependsOnConflict: conflict.id });
+            entry.dependsOnConflict = conflict.id;
+          }
+        }
+        if (awaitsSync(entry) && (entry.status === 'conflict' || syncBlocker(entry, unresolved))) {
+          unresolved.push(entry);
+          if (orderId) continue;
+        }
+        if (!entry.optimistic || !awaitsSync(entry) || entry.dependsOnConflict) continue;
+        try {
+          state = applyCommand(
+            state,
+            entry.command,
+            { ...result.actor, online: entry.command.payload.offline !== true },
+            new Date().toISOString(),
+          ).state;
+        } catch {
+          /* The raw operation stays available in the incident queue. */
         }
       }
-      await load();
-    } catch (e) {
-      if (await revokeCachedAccess(e)) return;
-      if (e instanceof ApiError) {
-        setError(e.message);
-        if (['UNAUTHORIZED', 'FORBIDDEN', 'DEVICE_REQUIRED', 'DEVICE_REVOKED'].includes(e.code))
-          setOnline(false);
-      } else {
-        setOnline(false);
-        setError('Sin conexión con el servidor. Los registros locales se conservan.');
+      await remember({
+        ...result,
+        state: result.actor.role === 'admin' ? state : employeeView(state, result.actor),
+      });
+      const at = new Date().toISOString();
+      setLastSync(at);
+      await setMeta('lastSync', at);
+      await updatePending();
+    },
+    [remember, updatePending],
+  );
+  const sync = useCallback(
+    async (manual = false) => {
+      if (syncLock.current) {
+        await syncDone.current;
+        return;
       }
-    } finally {
-      syncLock.current = false;
+      if (
+        switchingBranch.current ||
+        !navigator.onLine ||
+        !current.current ||
+        (!manual && Date.now() < retry.current.after)
+      )
+        return;
+      let finishSync!: () => void;
+      syncDone.current = new Promise<void>((resolve) => {
+        finishSync = resolve;
+      });
+      syncLock.current = true;
+      setSyncing(true);
       try {
-        if (live.current) {
-          setSyncing(false);
-          await updatePending();
+        const queued = async () =>
+          (await db.outbox.toArray())
+            .filter((x) => belongsToBranch(x, current.current))
+            .sort((a, b) => a.sequence - b.sequence);
+        let entries = await queued();
+        if (entries.some((entry) => entry.status === 'conflict' || entry.status === 'reconciled')) {
+          await load();
+          entries = await queued();
         }
+        const unresolved: OutboxEntry[] = [];
+        for (const entry of entries.filter(awaitsSync)) {
+          const reviewDependency = syncReviewDependency(entry, unresolved);
+          if (entry.status === 'conflict' || (!reviewDependency && syncBlocker(entry, unresolved))) {
+            unresolved.push(entry);
+            continue;
+          }
+          const dependency = reviewDependency ?? entry.dependsOnConflict;
+          const command = dependency
+            ? {
+                ...entry.command,
+                payload: { ...entry.command.payload, syncAfterConflict: dependency },
+              }
+            : entry.command;
+          const response = await sendCommands([command]);
+          const result = response.results[0];
+          if (result?.id !== entry.id || !['accepted', 'review', 'conflict'].includes(result.status))
+            throw new Error('Respuesta incompleta del servidor.');
+          recentResults.current.set(entry.id, result);
+          const status: OutboxEntry['status'] =
+            result.finalRejection || isFinalRejection(entry, result)
+              ? 'rejected'
+              : result.status === 'conflict'
+                ? 'conflict'
+                : 'acknowledged';
+          const updated = {
+            status,
+            result,
+            message: result.message,
+            reviewRecorded: result.syncReview === true,
+          };
+          await db.outbox.update(entry.id, updated);
+          if (result.status === 'conflict') toast(result.message);
+          if (status === 'conflict') unresolved.push({ ...entry, ...updated });
+        }
+        const photos = (await db.photos.toArray()).filter(
+          (x) => belongsToBranch(x, current.current) && x.status === 'pending',
+        );
+        for (const photo of photos) {
+          try {
+            const blob = photoBlob(photo);
+            const target = await api('attachments/upload', { id: photo.id });
+            if (target.completed) {
+              await db.photos.delete(photo.id);
+              continue;
+            }
+            if (testGateway) {
+              await fetch(
+                `${testGateway.replace('/dexter', '')}/test-upload/${photo.id}?path=${encodeURIComponent(target.path)}`,
+                { method: 'PUT', body: blob },
+              );
+            } else {
+              const uploaded = await supabase!.storage
+                .from('evidence')
+                .uploadToSignedUrl(target.path, target.token, blob, { contentType: blob.type });
+              if (uploaded.error) throw uploaded.error;
+            }
+            await api('attachments/complete', { id: photo.id, path: target.path });
+            await db.photos.delete(photo.id);
+          } catch (e) {
+            await db.photos.update(photo.id, { error: (e as Error).message });
+          }
+        }
+        await load();
+        resetRetry();
+      } catch (e) {
+        if (await revokeCachedAccess(e)) return;
+        handleSyncError(e);
       } finally {
-        finishSync();
+        syncLock.current = false;
+        try {
+          if (live.current) {
+            setSyncing(false);
+            await updatePending();
+          }
+        } finally {
+          finishSync();
+        }
       }
-    }
-  }, [load, revokeCachedAccess, toast, updatePending]);
+    },
+    [handleSyncError, load, resetRetry, revokeCachedAccess, toast, updatePending],
+  );
   const run = useCallback(
     (
       type: CommandType,
@@ -369,6 +449,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         try {
           const snapshot = current.current;
           if (!snapshot) throw new Error('Inicia sesión.');
+          const orderAssistant = isOrderAssistant(snapshot.actor, snapshot.state);
+          if (orderAssistant && !isCustomerOrderCommand(type))
+            throw new Error('Desde apoyo solo puedes tomar y enviar tus pedidos a caja.');
           const permission = commandPermission(type);
           if (permission && !hasPermission(snapshot.actor, permission))
             throw new Error('No tienes permiso para esta operación.');
@@ -381,9 +464,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             ((type === 'open_bag' || type === 'open_package') && payload.correction === true) ||
             (type === 'count' && payload.preview !== undefined) ||
             (type === 'request_shift' && snapshot.actor.role === 'admin' && isOnline) ||
+            orderAssistant ||
             snapshot.actor.role === 'apoyo' ||
             type === 'redeem_coupon' ||
-            (type === 'pay' && Array.isArray(payload.codes) && payload.codes.length > 0);
+            (type === 'pay' && (isOnline || (Array.isArray(payload.codes) && payload.codes.length > 0)));
           if (requiresOnline && (!navigator.onLine || !online))
             throw new Error('Esta operación requiere conexión.');
           const shift =
@@ -402,6 +486,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
             sequence,
             payload: { ...payload, ...(!isOnline ? { offline: true } : {}) },
           };
+          const orderId = syncOrderId(command);
+          const payment = type === 'pay' || type === 'redeem_coupon';
+          if (orderId) {
+            const queued = (await db.outbox.toArray()).filter(
+              (entry) =>
+                belongsToBranch(entry, snapshot) &&
+                awaitsSync(entry) &&
+                syncOrderId(entry.command) === orderId,
+            );
+            const conflict = queued.find((entry) => entry.status === 'conflict');
+            if (conflict)
+              throw new Error(
+                `Este pedido tiene la operación ${conflict.sequence} por conciliar. Revisa Estado de sincronización.`,
+              );
+            if (
+              queued.some(
+                (entry) =>
+                  (type === 'send_order' && entry.command.type === type) ||
+                  (payment && ['pay', 'redeem_coupon'].includes(entry.command.type)),
+              )
+            )
+              throw new Error(
+                'Esta acción ya está pendiente de sincronización. Revisa Estado de sincronización.',
+              );
+            if (payment) {
+              const order = current.current?.state.orders.find((item) => item.id === orderId);
+              if (order?.status === 'paid') throw new Error('El cobro de este pedido ya está registrado.');
+              if (order && payload.expectedVersion !== undefined && order.version !== payload.expectedVersion)
+                throw new Error('El pedido cambió. Revisa los productos y el total antes de cobrar.');
+            }
+          }
           const optimistic = !requiresOnline;
           let next = snapshot.state,
             result: Result = { id: command.id, status: 'accepted', message: 'Pendiente de validación.' };
@@ -444,7 +559,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setData(current.current);
             await updatePending();
             void sync();
-            return result;
+            return { ...result, pendingSync: true };
           }
           await sync();
           if ((await db.outbox.get(command.id))?.status === 'pending' && navigator.onLine) await sync();
@@ -578,72 +693,62 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => (data?.actor.superAdmin && viewRole ? rolePreview(data, viewRole) : data),
     [data, viewRole],
   );
-  const installUpdate = useCallback(
-    async (activate: () => Promise<void>) => {
-      if (installingUpdate.current || switchingBranch.current || localWrites.current > 0)
-        throw new Error('Espera a que termine la operación en curso antes de actualizar.');
-      if (!navigator.onLine) throw new Error('Conéctate para sincronizar antes de actualizar.');
-      installingUpdate.current = true;
-      try {
-        await commandLock.current;
-        await sync();
-        // El primer intento puede haber esperado un envío anterior que aún no incluía el último registro.
-        await sync();
-        const snapshot = current.current;
-        if (!snapshot) throw new Error('Inicia sesión antes de actualizar.');
-        const queued = (await db.outbox.toArray()).some(
-          (entry) => belongsToBranch(entry, snapshot) && awaitsSync(entry),
-        );
-        const photos = (await db.photos.toArray()).some(
-          (photo) => belongsToBranch(photo, snapshot) && photo.status === 'pending',
-        );
-        if (queued || photos)
-          throw new Error(
-            'La actualización espera registros o fotos sin sincronizar. Revisa Estado de sincronización y vuelve a intentarlo.',
-          );
-        await activate();
-      } finally {
-        installingUpdate.current = false;
-      }
-    },
-    [sync],
-  );
+  const installUpdate = useCallback(async (activate: () => Promise<void>) => {
+    if (installingUpdate.current || switchingBranch.current || localWrites.current > 0)
+      throw new Error('Espera a que termine la operación en curso antes de actualizar.');
+    installingUpdate.current = true;
+    try {
+      await commandLock.current;
+      // The outbox and photos are durable. Startup resumes synchronization with the same IDs.
+      await activate();
+    } finally {
+      installingUpdate.current = false;
+    }
+  }, []);
   const switchBranch = useCallback(
     async (branchId: string) => {
-      const saved = current.current;
-      if (!saved || saved.actor.branchId === branchId) return;
+      if (!current.current || current.current.actor.branchId === branchId) return;
       if (!online || !navigator.onLine) throw new Error('Cambiar de local requiere conexión.');
       if (preview.current) throw new Error('Vuelve a Superadministrador para cambiar de local.');
-      if (switchingBranch.current || syncLock.current || localWrites.current > 0 || installingUpdate.current)
+      if (switchingBranch.current || localWrites.current > 0 || installingUpdate.current)
         throw new Error('Espera a que termine la sincronización.');
-      const queued = (await db.outbox.toArray()).some((x) => x.actorId === saved.actor.id && awaitsSync(x));
-      const photos = (await db.photos.toArray()).some(
-        (x) => x.actorId === saved.actor.id && x.status === 'pending',
-      );
-      if (queued || photos)
-        throw new Error('Sincroniza y resuelve los registros pendientes antes de cambiar de local.');
-      if (!saved.access?.branches.some((b) => b.id === branchId))
-        throw new Error('No tienes acceso a este local.');
       switchingBranch.current = true;
       try {
-        await setActiveBranch(branchId, saved.actor.id);
-        setPreviewRole(null);
-        preview.current = null;
-        setViewRole(null);
+        if (syncLock.current) await syncDone.current;
+        const saved = current.current;
+        if (!saved || saved.actor.branchId === branchId) return;
+        const queued = (await db.outbox.toArray()).some((x) => x.actorId === saved.actor.id && awaitsSync(x));
+        const photos = (await db.photos.toArray()).some(
+          (x) => x.actorId === saved.actor.id && x.status === 'pending',
+        );
+        if (queued || photos)
+          throw new Error('Sincroniza y resuelve los registros pendientes antes de cambiar de local.');
+        const access = saved.access?.branches.some((b) => b.id === branchId)
+          ? saved.access
+          : await api<NonNullable<Snapshot['access']>>('access');
+        if (!access.branches.some((b) => b.id === branchId))
+          throw new Error('No tienes acceso a este local.');
         try {
-          await load();
+          await setActiveBranch(branchId, saved.actor.id);
+          setPreviewRole(null);
+          preview.current = null;
+          setViewRole(null);
+          try {
+            await load();
+          } catch (e) {
+            if (!(e instanceof ApiError && e.code === 'DEVICE_REQUIRED' && saved.actor.role === 'admin'))
+              throw e;
+            const device = await api('devices/self', { name: 'Navegador de administración', primary: false });
+            await saveDeviceCredential({ id: device.deviceId, token: device.deviceToken });
+            await load();
+          }
+          if (current.current?.actor.branchId !== branchId) throw new Error('No tienes acceso a este local.');
+          toast('Local seleccionado.');
         } catch (e) {
-          if (!(e instanceof ApiError && e.code === 'DEVICE_REQUIRED' && saved.actor.role === 'admin'))
-            throw e;
-          const device = await api('devices/self', { name: 'Navegador de administración', primary: false });
-          await saveDeviceCredential({ id: device.deviceId, token: device.deviceToken });
-          await load();
+          if (saved.actor.branchId) await setActiveBranch(saved.actor.branchId, saved.actor.id);
+          await remember(saved);
+          throw e;
         }
-        toast('Local seleccionado.');
-      } catch (e) {
-        if (saved.actor.branchId) await setActiveBranch(saved.actor.branchId, saved.actor.id);
-        await remember(saved);
-        throw e;
       } finally {
         switchingBranch.current = false;
       }
@@ -695,22 +800,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
         current.current &&
         navigator.onLine &&
         !switchingBranch.current &&
-        !syncLock.current
+        !syncLock.current &&
+        Date.now() >= retry.current.after
       ) {
         if (pending.some((x) => x.status === 'pending') || photosPending > 0) void sync();
         else {
           syncLock.current = true;
           syncDone.current = snapshot(current.current.revision)
-            .then((result) => {
+            .then(async (result) => {
+              if (!('unchanged' in result)) {
+                await load(result);
+                resetRetry();
+                return;
+              }
               setOnline(true);
-              if (!('unchanged' in result)) return load();
+              setError(null);
+              resetRetry();
               if (result.access && current.current) {
                 current.current = { ...current.current, access: result.access, branch: result.branch };
                 setData(current.current);
               }
             })
             .catch(async (error) => {
-              if (!(await revokeCachedAccess(error))) setOnline(false);
+              if (!(await revokeCachedAccess(error))) handleSyncError(error);
             })
             .finally(() => {
               syncLock.current = false;
@@ -725,7 +837,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('offline', changed);
       window.removeEventListener('focus', changed);
     };
-  }, [sync, load, pending, photosPending, revokeCachedAccess]);
+  }, [sync, load, pending, photosPending, revokeCachedAccess, resetRetry, handleSyncError]);
   return (
     <Context.Provider
       value={{
@@ -744,7 +856,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         error,
         load,
         run,
-        sync,
+        sync: () => sync(true),
         installUpdate,
         photo,
         unlockOffline,

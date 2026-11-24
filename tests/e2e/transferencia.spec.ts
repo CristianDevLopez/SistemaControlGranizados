@@ -1,3 +1,4 @@
+import { enterVisibleClosing } from '../support/visible-closing.ts';
 import { expect, test, type Page } from '@playwright/test';
 
 // Venta pagada por transferencia: el pedido queda pagado, la caja no espera ese dinero
@@ -162,9 +163,9 @@ test('configura Nequi y lo identifica al cobrar, en el ticket y separado del efe
   await nav(page, 'Turno y caja');
   await page.getByRole('button', { name: 'Cerrar y contar caja', exact: true }).click();
   const closing = page.getByRole('dialog');
-  await expect(closing.locator('.count-list')).not.toContainText(/Bolsas|Paquetes|Líquido|Coronitas|Copitas/);
-  await count(page, 12000);
-  await page.getByRole('button', { name: 'Confirmar pagos y repartir efectivo' }).click();
+  await expect(closing).not.toContainText(/Bolsas selladas|Coronitas/);
+  await enterVisibleClosing(page, '12.000', { Nequi: '28.000' });
+  await page.getByRole('button', { name: 'Repartir efectivo', exact: true }).click();
   await expect(closing).toContainText(/Transferencias registradas · .*28.000/);
   await closing.getByLabel('Confirmo ambos medios', { exact: false }).check();
   await closing.getByLabel('Efectivo que dejas', { exact: false }).fill('12.000');

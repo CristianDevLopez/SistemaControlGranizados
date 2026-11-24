@@ -1,3 +1,4 @@
+import { closingPreview } from '../src/domain/engine.ts';
 import { shiftCountArticles } from '../src/domain/engine.ts';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { PgBackend } from './support/backend.ts';
@@ -157,12 +158,26 @@ it('verifica transferencias por separado y aplica cambios de medio sin editar el
       .forBranch(branchId)
       .commit(loaded.revision, bypass, loaded.state, { id: bypass.id, status: 'accepted', message: '' }),
   ).rejects.toThrow(/SHIFT_CLOSED/);
-  expect((await execute('expense', expense, cashier)).code).toBe('FORBIDDEN');
+  expect((await execute('expense', expense, cashier)).code).toBe('SHIFT_CLOSED');
   expect((await execute('expense', expense)).status).toBe('accepted');
   expect((await db.load()).state.expenses[0].shiftId).toBe(ids.shift);
 });
 
 it('confirma un canje parcial de tres códigos con la venta y preserva el no utilizado en PostgreSQL', async () => {
+  const prior = (await db.load()).state;
+  const original = prior.counts.find((item) => item.id === prior.shifts[0].closingCountId)!;
+  const preview = closingPreview(prior, ids.shift, original);
+  const approved = await execute('approve_closing', {
+    shiftId: ids.shift,
+    preview,
+    verified: true,
+    notes: 'Cierre revisado',
+    cash: original.cash,
+    retained: original.cash,
+    items: original.items,
+    payments: preview.expectedPayments,
+  });
+  expect(approved.status, approved.message).toBe('accepted');
   const opening = await execute('request_shift', {}, cashier);
   expect(opening.status, opening.message).toBe('accepted');
   const state = (await db.load()).state;

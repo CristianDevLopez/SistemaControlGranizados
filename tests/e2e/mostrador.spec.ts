@@ -105,7 +105,7 @@ test('el administrador ve primero las diferencias de inventario y puede desplega
   await expect(
     page
       .getByRole('navigation', { includeHidden: true })
-      .getByRole('button', { name: 'Solicitudes', includeHidden: true }),
+      .getByRole('button', { name: 'Revisiones', includeHidden: true }),
   ).toBeAttached();
   await expect(page.getByRole('button', { name: 'Registrar inventario inicial' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Marcar agotada' })).toHaveCount(0);
@@ -128,7 +128,7 @@ test('el encargado registra aperturas y solo ve las del turno, sin saldos ni dif
   await enter(page);
   await nav(page, 'Inventario');
   await expect(page.getByRole('heading', { name: 'Aperturas del turno' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Abrir paquete de vasos' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Agregar paquetes' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Reportar daño' })).toBeVisible();
   await page.getByRole('button', { name: 'Abrir bolsa de líquido' }).click();
   const dialog = page.getByRole('dialog');
@@ -428,7 +428,7 @@ test('la PWA sobrevive una recarga sin internet y sincroniza un combinado sin du
   await page.getByRole('button').filter({ hasText: 'Sabor de prueba sin licor' }).click();
   await page.getByRole('button', { name: 'Agregar combinado' }).click();
   await page.getByRole('button', { name: 'Cobrar y entregar' }).click();
-  await expect(page.getByText('Venta registrada ·')).toBeVisible();
+  await expect(page.getByText('Venta guardada en este equipo, pendiente de sincronizar')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('pendientes');
   await page.reload();
   await page.getByRole('button', { name: 'Entrar sin conexión', exact: true }).click();

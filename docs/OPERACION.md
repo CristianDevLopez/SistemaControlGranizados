@@ -9,17 +9,54 @@
 
 ## Vercel
 
+El 23 de noviembre de 2026 se publicó la lectura acotada de operaciones del mostrador y la escritura de los registros que cambian. La migración `20261124010827_dexter_counter_state` agregó una lectura separada para la función `dexter` versión 34. Se verificó que la API anterior conserva su contrato, que el candidato y el dominio público sirven el mismo bundle y que los reintentos automáticos se espacian ante fallos temporales.
+
+El 23 de noviembre de 2026 se publicó el reintento de operaciones interrumpidas por un timeout de base de datos. La función `dexter` versión 32 devuelve `RETRY_SYNC` y la PWA recupera conflictos antiguos de este tipo cuando el servidor no tiene una revisión registrada. Se verificó el candidato antes de promoverlo y después se comprobó el mismo bundle en el dominio público. No se aplicaron migraciones.
+
+El 23 de noviembre de 2026 se publicó la corrección de la base de apertura. Dexter usa el efectivo aprobado en el último cierre y resta el remanente que ya salió de caja. La función `dexter` versión 31, el dominio de producción y el service worker se verificaron tras el despliegue. No se aplicaron migraciones.
+
+El 22 de noviembre de 2026 se publicó el aviso persistente de actualización y la instalación con registros locales pendientes. La función `dexter` versión 29 impide reabrir los conflictos archivados del incidente. En el local principal se archivaron 28 intentos de sincronización de tres pedidos y se verificó que la bandeja quedó en cero. Se conservaron los pedidos, pagos, entregas e inventario registrados. No se aplicaron migraciones.
+
+El 22 de noviembre de 2026 se publicó la revisión conjunta de operaciones de un pedido y la actualización de la PWA con conflictos ya recibidos por el servidor. Se verificaron el dominio de producción, el service worker y la función `dexter` versión 28. El despliegue no requirió migraciones.
+
+El 21 de noviembre de 2026 se publicó la corrección de sincronización y envío a caja con la función `dexter` versión 27. Se verificaron el dominio de producción, el bundle, la PWA y la respuesta de salud. El despliegue no requirió migraciones.
+
+El 21 de noviembre de 2026 se publicó Dexter v3. La migración `20261121174910_dexter_operacion_v3` está aplicada y la función `dexter` está activa en Supabase (versión 23). Se verificaron el dominio de producción, el bundle v3, la PWA y el endpoint de salud.
+
 Actualización del 14 de noviembre de 2026: migraciones de permisos y revisión de cierres aplicadas, función `dexter` versión 13 activa y frontend de producción publicado. Se verificaron el dominio, el bundle con los controles nuevos, el backend correcto y la actualización PWA. Los registros del negocio conservan sus huellas antes y después del despliegue. Ver [cuadres e inventario](CUADRES.md) y [validación](VALIDACION.md).
 
 Publicada para revisión en **https://dexter-granizados.vercel.app**, bajo `cristiandevlopez@gmail.com`, equipo `crisdevlopez` (Dev), proyecto `dexter-granizados`. El titular eligió Hobby gratuito; no se activó ningún plan de pago. [Vercel restringe Hobby al uso personal no comercial](https://vercel.com/docs/limits/fair-use-guidelines). Resolver esa condición de alojamiento antes de operar el negocio.
 
 1. La CLI ya está conectada y este directorio está vinculado al proyecto. En otro equipo, iniciar sesión con `npx vercel login` y vincular con `npx vercel link --yes --scope crisdevlopez --project dexter-granizados`.
 2. `VITE_SUPABASE_URL=https://nglfyhcrpxuuqqnaeevf.supabase.co` y `VITE_SUPABASE_PUBLISHABLE_KEY` están configuradas en los tres destinos de Vercel. Solo son valores públicos; no se subieron claves de servicio, sesiones ni códigos de arranque.
-3. `vercel.json` fija preset Vite, instalación `npm ci`, build `npm run build` y salida `dist`. Actualizar con `npx vercel deploy --prod --yes --scope crisdevlopez`. El destino denominado production por Vercel es la publicación web; la operación del negocio sigue pendiente de habilitación.
+3. `vercel.json` fija el preset Vite, la instalación con `npm ci`, la compilación con `npm run build` y la salida en `dist`. Publicar con el flujo de candidato y promoción que se describe abajo.
 4. La función de Supabase usa el dominio publicado como `APP_URL` predeterminada y lo incluye en los orígenes permitidos. También permite los dos orígenes locales para esta etapa de revisión. Las variables de servidor `APP_URL` y `ALLOWED_ORIGINS` permiten sustituir esos valores por entorno; en producción definitiva, limitar los orígenes a los dominios usados allí. Auth tiene como Site URL `https://dexter-granizados.vercel.app` y admite el destino exacto `/recuperar-contrasena` para los enlaces de recuperación.
 5. Se verificaron HTTPS, archivos PWA y CORS: origen publicado aceptado, dominio ajeno rechazado y lectura anónima bloqueada. Falta validar acceso real con Google o contraseña y dispositivo y el ensayo completo con el equipo de caja.
 
-`vercel.json` configura las rutas de SPA, encabezados y evita cachear `sw.js`. La actualización se ofrece también con el turno abierto. **Actualizar app** sincroniza los registros y fotografías y comprueba la cola local antes de activar la nueva versión; si quedan pendientes o conflictos, conserva la sesión y muestra el bloqueo. No cierra el turno ni borra pedidos guardados. Si una versión anterior solo ofrece actualizar al cerrar turno, sincroniza primero, cierra todas las ventanas o pestañas de la aplicación y vuelve a abrirla; el turno permanece abierto. Las pruebas usan el modo `e2e`; **no desplegar ese modo** ni su directorio.
+`vercel.json` configura las rutas de la app y la revalidación de `sw.js`. Dexter busca actualizaciones al abrir, al volver a primer plano, al recuperar conexión y cada minuto mientras está visible. Cuando la versión ya se descargó, **Actualizar app** aparece en la cabecera incluso con el turno abierto. La app conserva la cola y las fotos guardadas en el equipo y retoma la sincronización al volver a abrir. Para pasar desde una versión anterior que no muestra el aviso, cierra todas las ventanas y pestañas de Dexter y vuelve a abrir en el mismo navegador. Las pruebas usan el modo `e2e`; **no desplegar ese modo** ni su directorio.
+
+### Publicación con candidato y promoción
+
+1. Preparar una copia con el código que se va a publicar. Ejecutar `npm run check`, `npm run build` y las pruebas de navegador del flujo afectado. Para cambios de caja o sincronización, comprobar una venta entre dos equipos con historial acumulado, un reintento sin duplicados y la actualización de la PWA con un turno abierto y operaciones pendientes. Las pruebas usan PGlite y datos de ejemplo.
+2. Guardar el ID del despliegue activo (`npx vercel inspect dexter-granizados.vercel.app --scope crisdevlopez`). Si cambia la función de Supabase, guardar su código activo con `supabase functions download dexter --use-api --workdir <directorio-vacío> --project-ref nglfyhcrpxuuqqnaeevf`. Validar que la función nueva acepta los comandos de la versión web activa y su cola antes de publicarla. Cuando haya cambios de esquema, aplicar primero las migraciones compatibles con las versiones activa y nueva.
+3. Crear el candidato de Vercel con la configuración de producción y conservar el dominio en el despliegue activo. Tomar la URL del resultado.
+
+   ```powershell
+   npx vercel deploy --prod --skip-domain --yes --scope crisdevlopez
+   ```
+
+4. Al cambiar la función, publicarla y comprobar primero su salud. Verificar la web candidata y guardar el nombre del bundle que devuelve el script. Usar `-ProtectedDeployment` para la URL protegida de Vercel. Si la CLI crea un secreto de bypass para la comprobación, retirarlo al terminar desde la configuración de protección del proyecto.
+
+   ```powershell
+   $bundle = ./scripts/verify-release.ps1 -WebOrigin $candidato -ProtectedDeployment
+   ```
+
+5. Promover el candidato validado y comprobar que el dominio público sirve ese mismo bundle. Si falla la verificación de la web, volver al despliegue anterior con `npx vercel rollback <id-anterior> --yes --scope crisdevlopez` y verificar de nuevo. Si falla la función, volver a publicar su código anterior mientras el esquema siga siendo compatible.
+
+   ```powershell
+   npx vercel promote $candidato --yes --scope crisdevlopez
+   ./scripts/verify-release.ps1 -ExpectedBundle $bundle
+   ```
 
 ## Migraciones y función
 
@@ -79,7 +116,7 @@ Configurar un bot del negocio y los IDs de los chats de gastos, anulaciones, mer
 
 ## Jornada de ensayo
 
-El cuadre de cierre registra efectivo, cobros netos del turno verificados por cuenta (Nequi y demás cuentas configuradas) y vasos restantes del paquete abierto de cada tamaño. No exige contar líquidos, bolsas, paquetes cerrados ni otros insumos. Las diferencias por cuenta quedan separadas del efectivo y no alteran la base retenida ni el remanente.
+El cierre muestra el efectivo esperado, los cobros netos por cuenta, los vasos sueltos y paquetes cerrados por tamaño, y los insumos elegidos para el turno. El empleado puede guardar un borrador y volver tras registrar un movimiento. El conteo de apertura y los arqueos siguen a ciegas. Otro administrador confirma el cierre para habilitar el siguiente turno. Si confirma sin ajustar inventario, la próxima apertura exige un arqueo completo y su aprobación se vincula al cierre anterior.
 
 1. Registrar y autorizar turno, contar apertura sin consultar esperados y abrir una bolsa/paquete reales de ensayo.
 2. Crear pedidos desde apoyo y caja; realizar entrega parcial, cobro y entrega pendiente; registrar degustación sin venta.
@@ -88,12 +125,14 @@ El cuadre de cierre registra efectivo, cobros netos del turno verificados por cu
 5. Como admin, solicitar un arqueo sorpresa seleccionando los ítems. Como responsable del turno, presentar solo los conteos solicitados; separar el efectivo posterior de la planilla. Como admin, revisar los resultados y diferencias contra el corte original e ingresar después cada folio con foto.
 6. Anular con otro admin y corregir conservando o reemplazando la entrega física según corresponda. Comprobar la diferencia de dinero real.
 7. Recibir mercancía parcial y dañada, revisar cruce; aprobar o rechazar los gastos y mermas con soporte.
-8. Cerrar con base retenida y remanente. Después del cierre, un administrador registra la entrega/consignación y otro administrador receptor confirma; el trabajador ya no modifica ese turno. Abrir el siguiente día y comprobar el saldo físico.
+8. Cerrar con base retenida y remanente. El custodio de destino confirma el traslado contando a ciegas. Otro administrador puede confirmar el cierre con el traslado en camino. Abrir el siguiente día y comprobar el saldo físico.
 9. Exportar CSV y ejecutar el ensayo de recuperación de respaldo antes de habilitar producción.
 
 ## Incidentes
 
-- **Conflicto al sincronizar:** conservar el dispositivo y exportar su cola. El admin revisa la solicitud; registra el hecho correcto con sus soportes, lo vincula o descarta con explicación y luego reintenta. No volver a cobrar por un mensaje de espera.
+- **Tiempo de espera de la base de datos.** Dexter conserva la operación en la cola y la reintenta con la misma referencia, aumentando la pausa si persiste el fallo. **Sincronizar ahora** permite pedir un intento inmediato. Si una versión anterior dejó un timeout **Por conciliar** y el servidor no tiene una revisión registrada, actualizar en el mismo navegador recupera la cola en orden. Conservar los datos del navegador y evitar repetir cobros pendientes. En Supabase, revisar el código y la fase de los eventos `Temporary database failure` para ubicar el retraso de lectura, guardado o actualización de la vista.
+- **Conflicto al sincronizar un pedido.** Los pedidos independientes siguen sincronizando, respetando el orden de cierres y otras operaciones compartidas. Al recibir un conflicto, el servidor también recibe las operaciones pendientes del mismo pedido para revisión conjunta. En **Revisiones → Sincronización**, el administrador verifica los soportes, vincula el registro correcto o descarta la operación con explicación. Evita repetir cobros que estén pendientes o en revisión.
+- **Pedido de apoyo:** el borrador solo aparece a quien lo toma. **Enviar a caja** muestra la confirmación cuando el servidor lo pone a disposición de caja. Desde entonces, caja gestiona los cambios de productos. En caja, si se trabaja sin conexión, el mensaje de venta indica que quedó guardada en ese equipo y pendiente de sincronizar.
 - **Cortesía rechazada por cuota agotada:** el código no se emitió. En la versión corregida, incluso los rechazos guardados por la versión anterior pasan a **Operaciones no aplicadas**; **Sincronizar ahora** envía los pendientes en orden. Para emitir esa cortesía, usar **Promociones → Solicitar cortesía adicional**, esperar la aprobación de otro administrador y seleccionarla al emitir. Si la versión anterior impide actualizar por el conflicto, exportar el respaldo local; una vez descargada la actualización, cerrar todas las ventanas y pestañas de la app y volver a abrirla en el mismo navegador, usuario y local. No borrar los datos ni repetir la operación pendiente.
 - **Vigencia equivocada:** comprobar **Promociones → Cortesías y cupones emitidos**. Si la emisión fue rechazada y no hay código, corregir **Vence (hora de Colombia)** en el formulario o empezar una emisión nueva. Si el código aparece como **Vencido**, sí se emitió y cuenta en la cuota mensual del administrador que lo generó. No se edita ni se elimina el código emitido; si el beneficio sigue autorizado, se emite uno nuevo con la vigencia correcta, con aprobación adicional si ya no hay cuota.
 - **Dispositivo desactivado:** la API lo rechaza en cada operación conectada. Los pendientes permanecen locales para conciliación por un admin; no se deben borrar los datos del navegador.

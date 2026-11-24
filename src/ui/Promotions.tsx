@@ -4,7 +4,6 @@ import { Plus, Ticket, Gift, Download, Share2, CalendarClock, Power, Copy } from
 import { useApp } from '../lib/store.tsx';
 import type { Coupon, Promotion, PromoEffect, State } from '../domain/types.ts';
 import { colombiaMonth } from '../domain/engine.ts';
-import { isCounterThreeForTwo } from '../domain/pricing.ts';
 import { downloadFile } from '../lib/export.ts';
 import {
   Badge,
@@ -31,7 +30,7 @@ const effect = (p: Promotion) =>
 export function Promotions() {
   const app = useApp(),
     { state, actor, profiles } = app.data!,
-    [edit, setEdit] = useState<Promotion | 'three-for-two' | null | undefined>(undefined),
+    [edit, setEdit] = useState<Promotion | null | undefined>(undefined),
     [issue, setIssue] = useState(false),
     [courtesy, setCourtesy] = useState(false),
     [showId, setShowId] = useState<string | null>(null),
@@ -58,10 +57,6 @@ export function Promotions() {
             <Plus size={17} />
             Crear promoción
           </button>
-          <button className="button secondary" onClick={() => setEdit('three-for-two')}>
-            <Plus size={17} />
-            Crear 3x2
-          </button>
         </div>
       </div>
       <div className="promo-grid">
@@ -78,14 +73,15 @@ export function Promotions() {
             <p>
               {p.delivery === 'coupon'
                 ? 'Se aplica con código verificado online'
-                : `${p.startTime}–${p.endTime} · Hora de Colombia`}
+                : (p.limitedSchedule ??
+                    (p.days.length > 0 || p.startTime !== '00:00' || p.endTime !== '23:59'))
+                  ? `Selección en el cobro · ${p.startTime}–${p.endTime}`
+                  : 'Selección en el cobro'}
             </p>
             <small>
               {date(p.startsAt)} — {date(p.endsAt)}
             </small>
-            {isCounterThreeForTwo(p) && (
-              <small>Validación en caja · Excluye neveras · Una vez por persona</small>
-            )}
+            {p.delivery === 'schedule' && p.checkoutText && <small>{p.checkoutText}</small>}
             <small>
               {p.redemptions} beneficios aplicados{p.maxRedemptions !== null ? ` de ${p.maxRedemptions}` : ''}
             </small>
@@ -196,13 +192,7 @@ export function Promotions() {
           />
         )}
       </Panel>
-      {edit !== undefined && (
-        <PromotionDialog
-          promotion={edit === 'three-for-two' ? null : edit}
-          threeForTwo={edit === 'three-for-two'}
-          onClose={() => setEdit(undefined)}
-        />
-      )}
+      {edit !== undefined && <PromotionDialog promotion={edit} onClose={() => setEdit(undefined)} />}
       {courtesy && (
         <CourtesyDialog
           onClose={() => setCourtesy(false)}
@@ -386,52 +376,61 @@ function CourtesyDialog({ onClose, onIssued }: { onClose: () => void; onIssued: 
     </Modal>
   );
 }
-function PromotionDialog({
-  promotion,
-  threeForTwo,
-  onClose,
-}: {
-  promotion: Promotion | null;
-  threeForTwo: boolean;
-  onClose: () => void;
-}) {
+function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; onClose: () => void }) {
   const app = useApp(),
     { state } = app.data!,
-    [effect, setEffect] = useState<PromoEffect>(promotion?.effect ?? (threeForTwo ? 'nxm' : 'fixed')),
+    [effect, setEffect] = useState<PromoEffect>(promotion?.effect ?? 'fixed'),
     [delivery, setDelivery] = useState(promotion?.delivery ?? 'schedule');
-  const tomorrow = localDateTime(new Date(Date.now() + 86400000)).slice(0, 10);
-  const nextMidnight = localDateTime(new Date(Date.now() + 2 * 86400000)).slice(0, 10);
+  const [limited, setLimited] = useState(
+    promotion?.limitedSchedule ??
+      (!!promotion &&
+        (promotion.days.length > 0 || promotion.startTime !== '00:00' || promotion.endTime !== '23:59')),
+  );
+  const [draft, setDraft] = useState<Record<string, unknown>>({});
   const fields: Field[] = [
     {
       name: 'name',
       label: 'Nombre de la promoción',
       required: true,
-      value: threeForTwo ? 'Promoción 3x2' : '',
     },
     {
       name: 'startsAt',
       label: 'Desde (Colombia)',
       type: 'datetime-local',
       required: true,
-      value: threeForTwo ? `${tomorrow}T00:01` : localDateTime(),
+      value: localDateTime(),
     },
     {
       name: 'endsAt',
       label: 'Hasta (Colombia)',
       type: 'datetime-local',
       required: true,
-      value: threeForTwo ? `${nextMidnight}T00:00` : localDateTime(new Date(Date.now() + 30 * 86400000)),
+      value: localDateTime(new Date(Date.now() + 30 * 86400000)),
     },
-    { name: 'startTime', label: 'Hora de inicio diaria', type: 'time', required: true, value: '00:00' },
-    { name: 'endTime', label: 'Hora de fin diaria', type: 'time', required: true, value: '23:59' },
-    {
-      name: 'days',
-      label: 'Días (sin seleccionar: todos)',
-      type: 'multiselect',
-      options: ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'].map(
-        (label, value) => ({ value: String(value), label }),
-      ),
-    },
+    ...(limited
+      ? ([
+          { name: 'startTime', label: 'Hora de inicio diaria', type: 'time', required: true, value: '00:00' },
+          { name: 'endTime', label: 'Hora de fin diaria', type: 'time', required: true, value: '23:59' },
+          {
+            name: 'days',
+            label: 'Días (sin seleccionar: todos)',
+            type: 'multiselect',
+            options: ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'].map(
+              (label, value) => ({ value: String(value), label }),
+            ),
+          },
+        ] satisfies Field[])
+      : []),
+    ...(delivery === 'schedule'
+      ? [
+          {
+            name: 'checkoutText',
+            label: 'Texto de la casilla en el cobro',
+            type: 'text' as const,
+            required: true,
+          },
+        ]
+      : []),
     {
       name: 'alcohol',
       label: 'Tipo de sabor',
@@ -509,16 +508,7 @@ function PromotionDialog({
         .sort((a, b) => a.name.localeCompare(b.name, 'es'))
         .map((x) => ({ value: x.id, label: `${x.name} · ${x.alcohol ? 'Con licor' : 'Sin licor'}` })),
     },
-    ...(delivery === 'coupon'
-      ? [
-          {
-            name: 'stackable',
-            label: 'Acumulable con otras cortesías y promociones en el mismo pedido (en productos distintos)',
-            type: 'checkbox' as const,
-            value: true,
-          },
-        ]
-      : []),
+    { name: 'stackable', label: 'Acumulable con otras promociones', type: 'checkbox', value: false },
     { name: 'active', label: 'Publicar activa', type: 'checkbox', value: true },
   ];
   const initial = promotion
@@ -528,14 +518,11 @@ function PromotionDialog({
         endsAt: localDateTime(new Date(promotion.endsAt)),
         days: promotion.days.map(String),
         steps: String(promotion.steps ?? 1),
-        stackable: promotion.stackable !== false,
+        stackable: promotion.stackable === true,
       }
     : {};
   return (
-    <Modal
-      title={promotion ? 'Editar promoción' : threeForTwo ? 'Crear promoción 3x2' : 'Crear promoción'}
-      onClose={onClose}
-    >
+    <Modal title={promotion ? 'Editar promoción' : 'Crear promoción'} onClose={onClose}>
       <div className="promotion-builder">
         <label className="field">
           <span>Qué cambia</span>
@@ -564,15 +551,17 @@ function PromotionDialog({
           </select>
         </label>
       </div>
-      {effect === 'nxm' && delivery === 'schedule' && (
-        <p>El 3x2 por horario requiere validación en caja y excluye las neveras.</p>
-      )}
+      <label className="check-inline">
+        <input type="checkbox" checked={limited} onChange={(event) => setLimited(event.target.checked)} />
+        Solo en ciertos días u horas
+      </label>
       <FieldsForm
-        key={`${effect}-${delivery}`}
+        key={`${effect}-${delivery}-${limited}`}
         fields={fields}
-        initial={initial}
+        initial={{ ...initial, ...draft }}
+        onValuesChange={(values) => setDraft((previous) => ({ ...previous, ...values }))}
         onCancel={onClose}
-        submit="Proponer promoción"
+        submit="Guardar promoción"
         onSubmit={async (v) => {
           await app.run('save_promotion', {
             ...promotion,
@@ -581,7 +570,10 @@ function PromotionDialog({
             effect,
             delivery,
             steps: Number(v.steps),
-            days: (v.days ?? []).map(Number),
+            limitedSchedule: limited,
+            days: limited ? (v.days ?? []).map(Number) : [],
+            startTime: limited ? v.startTime : '00:00',
+            endTime: limited ? v.endTime : '23:59',
             startsAt: utc(v.startsAt),
             endsAt: utc(v.endsAt),
             maxRedemptions: v.maxRedemptions ?? null,

@@ -6,6 +6,7 @@ import {
   currentPayments,
   paymentMethod,
   stockBalances,
+  isLegacyCoolerArticle,
 } from './engine.ts';
 import { liquidPortions } from './flavors.ts';
 import type { Count, Shift, Size, State } from './types.ts';
@@ -32,12 +33,7 @@ export function reviewCounts(state: State, shift: Shift, archived = false) {
 
 export function reviewIsPending(state: State, shift: Shift) {
   if (shift.closingArchive || rehearsalShift(state, shift)) return false;
-  if (
-    shift.closingFlow &&
-    (shift.closingReview?.status !== 'approved' ||
-      (shift.closingFlow.responseDueAt && !shift.closingFlow.response))
-  )
-    return true;
+  if (shift.closingFlow && shift.closingReview?.status !== 'approved') return true;
   if (['review', 'audit', 'authorized'].includes(shift.blindOpening?.status ?? '')) return true;
   if (legacyOpeningNeedsReview(state, shift) || closingNeedsReview(state, shift)) return true;
   const counts = reviewCounts(state, shift);
@@ -90,6 +86,24 @@ export function closingNeedsReview(state: State, shift: Shift) {
 }
 
 export function reconciledCount(state: State, shift: Shift, count: Count) {
+  const pendingClosing =
+    count.kind === 'closing' &&
+    count.visibleClosing &&
+    shift.closingCountId === count.id &&
+    shift.closingReview?.status !== 'approved';
+  const pendingOpening =
+    (count.id === shift.openingCountId || shift.blindOpening?.auditCountIds?.includes(count.id)) &&
+    ['review', 'authorized'].includes(shift.blindOpening?.status ?? '');
+  if ((pendingClosing || pendingOpening) && !inRehearsalPeriod(state, count.at)) {
+    const expected = pendingClosing ? closingPreview(state, shift.id, count) : undefined;
+    const balances = expected?.expectedItems ?? stockBalances(state);
+    const entries = Object.entries(count.items).filter(([key]) => !isLegacyCoolerArticle(key));
+    return {
+      ...count,
+      expectedItems: Object.fromEntries(entries.map(([key]) => [key, balances[key] ?? 0])),
+      differences: Object.fromEntries(entries.map(([key, amount]) => [key, amount - (balances[key] ?? 0)])),
+    };
+  }
   if (shift.blindOpening?.depth || count.kind !== 'closing' || inRehearsalPeriod(state, count.at))
     return count;
   const at = count.cutoffAt ?? count.at;

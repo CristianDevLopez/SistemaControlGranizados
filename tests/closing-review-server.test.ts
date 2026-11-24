@@ -1,12 +1,8 @@
+import { closingPreview, openingExpectedCash, visibleClosingPreview } from '../src/domain/engine.ts';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { PgBackend } from './support/backend.ts';
 import { createGateway } from '../src/server/gateway.ts';
-import {
-  blindCountArticles,
-  compensatedInventory,
-  shiftCountArticles,
-  stockBalances,
-} from '../src/domain/engine.ts';
+import { blindCountArticles, shiftCountArticles, stockBalances } from '../src/domain/engine.ts';
 import { admin, cashier, cmd, ids, NOW, other, support } from './support/fixture.ts';
 import type { Actor, Command } from '../src/domain/types.ts';
 
@@ -153,7 +149,7 @@ it('archiva avisos previos al arqueo de referencia sin eliminarlos de PostgreSQL
   expect(await store.security('notifications_claim')).toEqual([expect.objectContaining({ id: noticeId })]);
 });
 
-it('reparte efectivo, protege la recepción y compensa el sobrante contra el cierre sin reescribir conteos', async () => {
+it('agrega paquetes, confirma con traslado en camino y atribuye el arqueo al cierre anterior', async () => {
   now = '2026-11-20T17:00:00.000Z';
   const store = db.forBranch(branchId);
   const send = async (type: Command['type'], payload: Record<string, unknown>, actor: Actor = cashier) =>
@@ -166,53 +162,86 @@ it('reparte efectivo, protege la recepción y compensa el sobrante contra el cie
   const initial = (await store.load()).state;
   const size = initial.sizes.find((item) => item.name === '16 oz')!;
   const article = `cup:${size.id}`;
-  const movementId = crypto.randomUUID();
-  await db.db.query('insert into public.stock(id,branch_id,data) values($1,$2,$3)', [
-    movementId,
-    branchId,
-    {
-      id: movementId,
-      article,
-      quantity: 20,
-      reason: 'initial',
-      by: admin.id,
-      referenceId: movementId,
-      at: now,
-      eventId: movementId,
-    },
-  ]);
+  const packages = `package:${size.id}`;
+  for (const [key, count] of [
+    [article, 5],
+    [packages, 3],
+  ] as const) {
+    const id = crypto.randomUUID();
+    await db.db.query('insert into public.stock(id,branch_id,data) values($1,$2,$3)', [
+      id,
+      branchId,
+      {
+        id,
+        article: key,
+        quantity: count,
+        reason: 'initial',
+        by: admin.id,
+        referenceId: id,
+        at: now,
+        eventId: id,
+      },
+    ]);
+  }
   const opened = await accepted('request_shift', {});
-  const shiftId = opened.referenceId;
-  const state = (await store.load()).state;
-  const shift = state.shifts.find((item) => item.id === shiftId)!;
-  const balances = stockBalances(state);
-  const items = Object.fromEntries(
-    shiftCountArticles(state, shift, 'opening').map(({ id }) => [id, balances[id] ?? 0]),
+  const shiftId = opened.referenceId!;
+  let state = (await store.load()).state;
+  let shift = state.shifts.find((item) => item.id === shiftId)!;
+  expect((await request('closing-preview', { shiftId, visible: true }, cashier)).status).toBe(400);
+  const opening = Object.fromEntries(
+    shiftCountArticles(state, shift, 'opening').map(({ id }) => [id, stockBalances(state)[id] ?? 0]),
   );
-  await accepted('submit_blind_count', { shiftId, kind: 'opening', attempt: 1, items, cash: shift.base });
-  const closingItems = Object.fromEntries(
-    shiftCountArticles(state, shift, 'closing').map(({ id }) => [id, balances[id] ?? 0]),
-  );
-  closingItems[article] = 18;
+  await accepted('submit_blind_count', {
+    shiftId,
+    kind: 'opening',
+    attempt: 1,
+    items: opening,
+    cash: shift.base,
+  });
+  const before = (await store.load()).state.notifications.length;
+
+  now = '2026-11-20T17:01:00.000Z';
+  await accepted('open_package', { shiftId, quantities: { [size.id]: 3 } });
+  state = (await store.load()).state;
+  shift = state.shifts.find((item) => item.id === shiftId)!;
+  expect(stockBalances(state)).toMatchObject({ [article]: 65, [packages]: 0 });
+  expect(state.notifications).toHaveLength(before);
+  const originalPreview = visibleClosingPreview(state, shift);
+
+  now = '2026-11-20T17:02:00.000Z';
+  await accepted('expense', {
+    shiftId,
+    source: 'cash',
+    amount: 10000,
+    category: state.settings[0].expenseCategories[0],
+    supplier: 'Proveedor',
+    notes: 'Compra en caja.',
+  });
+  const previewResponse = await request('closing-preview', { shiftId, visible: true }, cashier);
+  expect(previewResponse.status).toBe(200);
+  const preview = previewResponse.body;
+  expect(preview.expectedCash).toBe(originalPreview.expectedCash - 10000);
+  expect(preview.cups[article]).toMatchObject({ initial: 5, packages: 60, sold: 0, damage: 0 });
+  expect(preview.expectedItems).toMatchObject({ [article]: 65, [packages]: 0 });
+  expect(Object.keys(preview.expectedItems).some((id) => id.startsWith('sealed_bag:'))).toBe(false);
+
+  now = '2026-11-20T17:03:00.000Z';
   const count = await accepted('submit_blind_count', {
     shiftId,
     kind: 'closing',
     attempt: 1,
-    items: closingItems,
-    cash: 20000,
+    preview,
+    items: { ...preview.expectedItems, [article]: 64 },
+    payments: preview.expectedPayments,
+    cash: preview.expectedCash,
+    notes: 'Faltó un vaso de 16 oz.',
   });
-  const recount = await accepted('submit_blind_count', {
-    shiftId,
-    kind: 'closing',
-    attempt: 2,
-    items: closingItems,
-    cash: 20000,
-  });
+  const sent = 2000;
   const distribution = {
     shiftId,
-    countId: recount.referenceId,
-    retained: 10000,
-    sent: 10000,
+    countId: count.referenceId,
+    retained: preview.expectedCash - sent,
+    sent,
     locationId: ids.location,
     verified: true,
     cashTotal: 0,
@@ -223,129 +252,112 @@ it('reparte efectivo, protege la recepción y compensa el sobrante contra el cie
   const submitted = (await store.load()).state;
   const transfer = submitted.transfers.find((item) => item.shiftId === shiftId)!;
   expect(transfer.status).toBe('in_transit');
+  expect((await send('request_shift', {}, other)).message).toMatch(/confirmar el cierre anterior/);
   expect(
-    (await send('confirm_transfer', { transferId: transfer.id, receivedAmount: 10000 }, other)).code,
+    (await send('confirm_transfer', { transferId: transfer.id, receivedAmount: sent }, other)).code,
   ).toBe('FORBIDDEN');
-  expect((await send('approve_closing', { shiftId }, other)).message).toMatch(/custodio/);
+  const added = await accepted(
+    'open_package',
+    {
+      shiftId,
+      correction: true,
+      reviewClosing: true,
+      sizeId: size.id,
+      openedAt: '2026-11-20T17:02:30.000Z',
+      notes: 'Paquete faltante del turno.',
+    },
+    other,
+  );
+  let updated = (await store.load()).state;
+  expect(stockBalances(updated)[article]).toBe(85);
+  expect(
+    closingPreview(
+      updated,
+      shiftId,
+      updated.counts.find((item) => item.id === count.referenceId),
+    ).expectedItems[article],
+  ).toBe(85);
+  await accepted(
+    'review_shift',
+    {
+      shiftId,
+      action: 'correct_opening',
+      openingId: added.referenceId,
+      openedAt: '2026-11-20T17:01:20.000Z',
+      notes: 'Se verificó la hora.',
+    },
+    other,
+  );
+  updated = (await store.load()).state;
+  expect(updated.packages.find((item) => item.id === added.referenceId)?.openedAt).toBe(
+    '2026-11-20T17:01:20.000Z',
+  );
+  expect(stockBalances(updated)[article]).toBe(85);
+  await accepted(
+    'review_shift',
+    {
+      shiftId,
+      action: 'correct_opening',
+      openingId: added.referenceId,
+      remove: true,
+      notes: 'Era un duplicado.',
+    },
+    other,
+  );
+  expect(stockBalances((await store.load()).state)[article]).toBe(65);
   const receiver = (await request('snapshot', {}, admin)).body.state;
   expect(receiver.transfers.find((item: { id: string }) => item.id === transfer.id)).toMatchObject({
     amount: 0,
     blindReceipt: true,
   });
-  expect(receiver.counts.some((item: { id: string }) => item.id === count.referenceId)).toBe(false);
-  await accepted('confirm_transfer', { transferId: transfer.id, receivedAmount: 8000 }, admin);
-  await accepted('return_closing', { shiftId, notes: 'Revisa la diferencia del turno.' }, other);
-  await accepted('submit_closing', { ...distribution, notes: 'Confirmé el conteo y los comprobantes.' });
-  const approval = await accepted('approve_closing', { shiftId }, other);
-  expect(approval.approvalPending).toBeUndefined();
-  const approved = (await store.load()).state;
-  const reviewed = approved.counts.find((item) => item.id === approval.referenceId)!;
-  expect(stockBalances(approved)[article]).toBe(18);
-  expect(reviewed.paymentDifferences).toEqual({ [`handoff:${transfer.id}`]: -2000 });
-  expect((await send('request_shift', {})).message).toMatch(/Responde/);
-  await accepted('respond_closing', { shiftId, outcome: 'accepted', notes: 'De acuerdo.' });
-  now = '2026-11-21T17:00:00.000Z';
-  const next = await accepted('request_shift', { base: 1 }, other);
-  const nextState = (await store.load()).state;
-  const nextShift = nextState.shifts.find((item) => item.id === next.referenceId)!;
-  expect(nextShift.blindOpening?.depth).toBe('deep');
-  expect(nextShift.base).toBe(10000);
-  const nextItems = Object.fromEntries(
-    shiftCountArticles(nextState, nextShift, 'opening').map(({ id }) => [
-      id,
-      stockBalances(nextState)[id] ?? 0,
-    ]),
-  );
-  expect(nextItems).toHaveProperty('nevera');
-  nextItems[article] = 20;
-  await accepted(
-    'submit_blind_count',
-    {
-      shiftId: nextShift.id,
-      kind: 'opening',
-      attempt: 1,
-      items: nextItems,
-      cash: 10000,
-    },
-    other,
-  );
-  const compensated = (await store.load()).state;
-  expect(stockBalances(compensated)[article]).toBe(20);
-  expect(compensatedInventory(compensated, reviewed, article)).toBe(2);
-  const surplus = compensated.counts.find(
-    (item) => item.shiftId === nextShift.id && item.kind === 'opening',
-  )!;
-  expect(compensatedInventory(compensated, surplus, article)).toBe(2);
-  expect(compensated.counts.find((item) => item.id === reviewed.id)).toEqual(reviewed);
+  const receiverCount = receiver.counts.find((item: { id: string }) => item.id === count.referenceId);
+  expect(receiverCount.blindHandoff).toBe(true);
+  expect(receiverCount.cash).toBeUndefined();
 
-  const nextShiftId = nextShift.id;
-  const order = await accepted(
-    'create_order',
-    { shiftId: nextShiftId, lines: [{ flavorId: ids.flavor, sizeId: size.id, quantity: 1 }] },
-    other,
+  expect((await send('approve_closing', { shiftId, cash: sent - 1 }, other)).message).toMatch(
+    /cubrir el traslado/,
   );
-  await accepted(
-    'pay',
-    {
-      shiftId: nextShiftId,
-      orderId: order.referenceId,
-      method: 'transfer',
-      accountId: ids.location,
-      deliver: true,
-    },
-    other,
-  );
-  const sold = (await store.load()).state;
-  const nextClosing = await accepted(
-    'submit_blind_count',
-    {
-      shiftId: nextShiftId,
-      kind: 'closing',
-      attempt: 1,
-      items: Object.fromEntries(
-        shiftCountArticles(sold, nextShift, 'closing').map(({ id }) => [id, stockBalances(sold)[id] ?? 0]),
-      ),
-      cash: 10000,
-    },
-    other,
-  );
-  await accepted(
-    'submit_closing',
-    {
-      shiftId: nextShiftId,
-      countId: nextClosing.referenceId,
-      retained: 10000,
-      sent: 0,
-      cashTotal: 0,
-      transferTotal: 17000,
-      verified: true,
-    },
-    other,
-  );
-  expect((await send('approve_closing', { shiftId: nextShiftId }, admin)).message).toMatch(/Verifica todas/);
-  const paymentId = sold.payments.find((item) => item.shiftId === nextShiftId)!.id;
-  await accepted(
-    'review_shift',
-    { shiftId: nextShiftId, action: 'verify_transfer', paymentId, missing: true },
-    admin,
-  );
-  const final = await accepted('approve_closing', { shiftId: nextShiftId }, admin);
+  const correctedCash = preview.expectedCash - 1500;
+  await accepted('approve_closing', { shiftId, cash: correctedCash, adjustInventory: false }, other);
+  const beforeAudit = (await store.load()).state;
+  expect(openingExpectedCash(beforeAudit)).toBe(correctedCash - sent);
+  expect(stockBalances(beforeAudit)[article]).toBe(65);
   expect(
-    (await store.load()).state.counts.find((item) => item.id === final.referenceId)?.paymentDifferences,
-  ).toEqual({ [`payment:${paymentId}`]: -17000 });
+    beforeAudit.shifts.find((item) => item.id === shiftId)?.closingReview?.inventoryVerification?.status,
+  ).toBe('pending');
+  await accepted('confirm_transfer', { transferId: transfer.id, receivedAmount: 1000 }, admin);
   expect(
-    (
-      await send(
-        'respond_closing',
-        { shiftId: nextShiftId, outcome: 'unanswered', notes: 'Sin respuesta.' },
-        admin,
-      )
-    ).message,
-  ).toMatch(/vigente el plazo/);
-  now = '2026-11-24T17:00:01.000Z';
-  await accepted(
-    'respond_closing',
-    { shiftId: nextShiftId, outcome: 'unanswered', notes: 'Sin respuesta.' },
-    admin,
+    (await store.load()).state.shifts.find((item) => item.id === shiftId)?.closingReview?.handoffDifferences,
+  ).toMatchObject({
+    [transfer.id]: -1000,
+  });
+
+  now = '2026-11-21T17:00:00.000Z';
+  const next = await accepted('request_shift', {});
+  state = (await store.load()).state;
+  shift = state.shifts.find((item) => item.id === next.referenceId)!;
+  expect(shift.base).toBe(correctedCash - sent);
+  expect(shift.reconcileClosingId).toBe(shiftId);
+  expect(shift.blindOpening?.depth).toBe('deep');
+  const items = Object.fromEntries(
+    shiftCountArticles(state, shift, 'opening').map(({ id }) => [id, stockBalances(state)[id] ?? 0]),
   );
+  expect(items).toHaveProperty('nevera');
+  const audit = await accepted('submit_blind_count', {
+    shiftId: shift.id,
+    kind: 'opening',
+    attempt: 1,
+    items: { ...items, [article]: 64 },
+    cash: shift.base,
+  });
+  expect(audit.code).toBe('COUNT_REVIEW');
+  expect(stockBalances((await store.load()).state)[article]).toBe(65);
+  await accepted('review_blind_opening', { shiftId: shift.id, action: 'approve_count' }, other);
+  const final = (await store.load()).state;
+  expect(stockBalances(final)[article]).toBe(64);
+  expect(final.shifts.find((item) => item.id === shiftId)?.closingReview).toMatchObject({
+    inventoryVerification: { status: 'verified' },
+    openingChecks: [{ differences: { [article]: -1 } }],
+  });
+  expect(final.shifts.find((item) => item.id === shift.id)?.blindOpening?.status).toBe('reviewed');
 });

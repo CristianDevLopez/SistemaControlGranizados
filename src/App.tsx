@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useRegisterSW } from 'virtual:pwa-register/react';
 import {
   ShoppingBag,
   ClipboardList,
@@ -22,6 +21,7 @@ import {
   LayoutDashboard,
 } from 'lucide-react';
 import { useApp } from './lib/store.tsx';
+import { useAppUpdate } from './lib/app-update.ts';
 import { logout, supabase } from './lib/api.ts';
 import { recoveryPath } from './lib/recovery.ts';
 import { Login } from './ui/Login.tsx';
@@ -45,8 +45,9 @@ import { branchStatusLabels } from './domain/platform.ts';
 import { adminRequests } from './domain/requests.ts';
 import { Badge, Modal, date } from './ui/components.tsx';
 import { downloadFile } from './lib/export.ts';
-import type { OutboxEntry } from './lib/db.ts';
+import { outboxBlockers, type OutboxEntry } from './lib/db.ts';
 import { roleLabels } from './domain/views.ts';
+import { isOrderAssistant } from './domain/access.ts';
 import type { Role } from './domain/types.ts';
 const pages = [
   { id: 'pos', label: 'Mostrador', icon: ShoppingBag, group: 'OPERACIÓN' },
@@ -71,14 +72,12 @@ export function App() {
     [syncOpen, setSyncOpen] = useState(false),
     [exit, setExit] = useState(false);
   const [updating, setUpdating] = useState(false),
+    [openSyncReviews, setOpenSyncReviews] = useState(false),
     [updateError, setUpdateError] = useState('');
   const [recovery, setRecovery] = useState<'request' | 'reset' | null>(() =>
     window.location.pathname === recoveryPath ? 'reset' : null,
   );
-  const {
-    needRefresh: [needRefresh],
-    updateServiceWorker,
-  } = useRegisterSW();
+  const { available: needRefresh, activate: activateUpdate } = useAppUpdate();
   useEffect(() => {
     const subscription = supabase?.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY') setRecovery('reset');
@@ -109,18 +108,23 @@ export function App() {
     );
   if (!app.data) return <Login onRecover={() => setRecovery('request')} />;
   const { state, actor } = app.data,
+    orderAssistant = !app.viewRole && isOrderAssistant(actor, state),
     nav = pages
       .filter(
         (p) =>
           (!p.admin || actor.role === 'admin') &&
+          (!orderAssistant || p.id === 'pos') &&
           (p.id !== 'locals' || app.data?.branch?.isOwner || (app.sessionActor?.superAdmin && !app.viewRole)),
       )
-      .map((item) => (item.id === 'cash' && actor.role !== 'admin' ? { ...item, label: 'Mi turno' } : item)),
+      .map((item) => {
+        if (item.id === 'cash' && actor.role !== 'admin') return { ...item, label: 'Mi turno' };
+        if (item.id === 'control' && actor.role === 'admin') return { ...item, label: 'Revisiones' };
+        return item;
+      }),
     active = nav.find((p) => p.id === page) ?? pages[0],
     pending = app.pending.filter((p) => p.status === 'pending').length + app.photosPending,
     conflicts = app.pending.filter((p) => p.status === 'conflict').length,
-    firstConflict = app.pending.find((p) => p.status === 'conflict');
-  const canUpdate = app.online && !app.syncing && !updating;
+    blockers = outboxBlockers(app.pending);
   const requestCount =
     actor.role === 'admin'
       ? adminRequests(state).filter((item) => item.pending).length
@@ -134,6 +138,7 @@ export function App() {
     }
   };
   const navigate = (id: string) => {
+    setOpenSyncReviews(false);
     setPage(id);
     setMobile(false);
   };
@@ -251,51 +256,82 @@ export function App() {
         </div>
       </aside>
       <main className="main-content">
-        <header className="topbar">
-          <div className="breadcrumb">
-            <button
-              className="icon-button mobile-menu"
-              aria-label="Abrir menú"
-              onClick={() => setMobile(true)}
-            >
-              <Menu size={23} />
-            </button>
-            <span>{app.data.branch?.name ?? 'Mi negocio'}</span>
-            <ChevronRight size={14} />
-            <strong>{active.label}</strong>
-          </div>
-          <div className="topbar-actions">
-            <span className="today">
-              {new Intl.DateTimeFormat('es-CO', {
-                timeZone: 'America/Bogota',
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric',
-              }).format(new Date())}
-            </span>
-            <button
-              className={`sync-button ${conflicts ? 'has-conflict' : ''}`}
-              onClick={() => setSyncOpen(true)}
-              aria-label="Estado de sincronización"
-            >
-              {app.syncing ? (
-                <RefreshCw size={16} className="spin" />
-              ) : app.online ? (
-                <Wifi size={16} />
-              ) : (
-                <WifiOff size={16} />
-              )}
-              <span>
-                {conflicts
-                  ? `${conflicts} por revisar`
-                  : pending
-                    ? `${pending} pendientes`
-                    : app.online
-                      ? 'Sincronizado'
-                      : 'Sin conexión'}
+        <header className="app-header">
+          <div className="topbar">
+            <div className="breadcrumb">
+              <button
+                className="icon-button mobile-menu"
+                aria-label="Abrir menú"
+                onClick={() => setMobile(true)}
+              >
+                <Menu size={23} />
+              </button>
+              <span>{app.data.branch?.name ?? 'Mi negocio'}</span>
+              <ChevronRight size={14} />
+              <strong>{active.label}</strong>
+            </div>
+            <div className="topbar-actions">
+              <span className="today">
+                {new Intl.DateTimeFormat('es-CO', {
+                  timeZone: 'America/Bogota',
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                }).format(new Date())}
               </span>
-            </button>
+              <button
+                className={`sync-button ${conflicts ? 'has-conflict' : ''}`}
+                onClick={() => setSyncOpen(true)}
+                aria-label="Estado de sincronización"
+              >
+                {app.syncing ? (
+                  <RefreshCw size={16} className="spin" />
+                ) : app.online ? (
+                  <Wifi size={16} />
+                ) : (
+                  <WifiOff size={16} />
+                )}
+                <span>
+                  {conflicts
+                    ? `${conflicts} por revisar`
+                    : pending
+                      ? `${pending} pendientes`
+                      : app.online
+                        ? 'Sincronizado'
+                        : 'Sin conexión'}
+                </span>
+              </button>
+            </div>
           </div>
+          {needRefresh && (
+            <div className="notice info app-update">
+              <span role="status">
+                Hay una actualización disponible. Tus registros guardados se conservan.
+              </span>
+              <button
+                className="button small primary"
+                disabled={updating}
+                onClick={async () => {
+                  setUpdating(true);
+                  setUpdateError('');
+                  try {
+                    await app.installUpdate(activateUpdate);
+                  } catch (error) {
+                    setUpdateError((error as Error).message);
+                  } finally {
+                    setUpdating(false);
+                  }
+                }}
+              >
+                {updating ? 'Actualizando…' : 'Actualizar app'}
+              </button>
+            </div>
+          )}
+          {updateError && (
+            <div className="notice warning app-update" role="alert">
+              {updateError}
+            </div>
+          )}
         </header>
         <div className="page-content">
           {sessionActor.superAdmin && (
@@ -382,7 +418,7 @@ export function App() {
               {app.error}
             </div>
           )}
-          {requestCount > 0 && active.id !== 'control' && (
+          {!orderAssistant && requestCount > 0 && active.id !== 'control' && (
             <button className="button secondary small" onClick={() => navigate('control')}>
               Solicitudes pendientes · {requestCount}
             </button>
@@ -390,35 +426,6 @@ export function App() {
           {!app.online && actor.role === 'apoyo' && (
             <div className="notice warning">
               La consulta sigue disponible. Las modificaciones del apoyo requieren conexión.
-            </div>
-          )}
-          {needRefresh && (
-            <div className="notice info">
-              <span>
-                Hay una actualización disponible. Puedes actualizar sin cerrar el turno. Se sincronizarán los
-                registros antes de recargar; tus pedidos guardados se conservan.
-              </span>
-              <button
-                className="button small secondary"
-                disabled={!canUpdate}
-                onClick={async () => {
-                  setUpdating(true);
-                  setUpdateError('');
-                  try {
-                    await app.installUpdate(() => updateServiceWorker(true));
-                  } catch (error) {
-                    setUpdateError((error as Error).message);
-                    setUpdating(false);
-                  }
-                }}
-              >
-                {updating ? 'Sincronizando y actualizando…' : 'Actualizar app'}
-              </button>
-            </div>
-          )}
-          {updateError && (
-            <div className="notice warning" role="alert">
-              {updateError}
             </div>
           )}
           {app.data.branch && app.data.branch.status !== 'active' && (
@@ -448,7 +455,11 @@ export function App() {
               <Promotions />
             ) : active.id === 'control' ? (
               actor.role === 'admin' ? (
-                <Control />
+                <Control
+                  key={openSyncReviews ? 'sync' : 'shifts'}
+                  initialCategory={openSyncReviews ? 'sync' : 'shifts'}
+                  onHistory={() => navigate('review')}
+                />
               ) : (
                 <EmployeeRequests onShift={() => navigate('cash')} />
               )
@@ -519,6 +530,26 @@ export function App() {
                 </button>
               )}
             </div>
+            {app.pending.some((entry) => entry.status === 'conflict' && entry.reviewRecorded) && (
+              <div className="notice warning">
+                <span>
+                  El servidor recibió las operaciones marcadas para revisión. Un administrador debe verificar
+                  el pedido, el cobro o la entrega antes de repetirlos.
+                </span>
+                {actor.role === 'admin' && (
+                  <button
+                    className="button small secondary"
+                    onClick={() => {
+                      setSyncOpen(false);
+                      navigate('control');
+                      setOpenSyncReviews(true);
+                    }}
+                  >
+                    Ir a Revisiones
+                  </button>
+                )}
+              </div>
+            )}
             {app.photosPending > 0 && (
               <div className="notice warning">
                 {app.photosPending} fotografías esperan subir. Se reintentarán al recuperar conexión.
@@ -527,7 +558,7 @@ export function App() {
             {app.pending.length ? (
               <div className="sync-list">
                 {app.pending.map((p) => (
-                  <SyncRow key={p.id} entry={p} blockedBy={firstConflict} />
+                  <SyncRow key={p.id} entry={p} blockedBy={blockers.get(p.id)} />
                 ))}
               </div>
             ) : app.photosPending === 0 ? (
@@ -604,7 +635,13 @@ function SyncRow({ entry, blockedBy }: { entry: OutboxEntry; blockedBy?: OutboxE
         <small>Referencia: {entry.id}</small>
       </div>
       <Badge tone={entry.status === 'conflict' ? 'orange' : 'neutral'}>
-        {rejected ? 'Rechazada' : entry.status === 'conflict' ? 'Por conciliar' : 'Pendiente'}
+        {rejected
+          ? 'Rechazada'
+          : entry.status === 'conflict'
+            ? entry.reviewRecorded
+              ? 'En revisión'
+              : 'Por conciliar'
+            : 'Pendiente'}
       </Badge>
     </div>
   );

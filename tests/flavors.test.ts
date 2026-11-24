@@ -164,9 +164,9 @@ describe('vasos de uno o varios sabores', () => {
     expect(eligible(promotion({ flavorIds: [ids.flavor, ids.plain] }), line, state)).toBe(true);
     expect(eligible(promotion({ alcohol: 'no' }), line, state)).toBe(false);
     state.promotions = [promotion({ alcohol: 'yes' })];
-    expect(quoteOrder(state, [line], NOW, true).total).toBe(5000);
+    expect(quoteOrder(state, [line], NOW, true, [], undefined, [state.promotions[0].id]).total).toBe(5000);
     state.promotions = [promotion({ effect: 'upgrade', steps: 1, alcohol: 'yes' })];
-    expect(quoteOrder(state, [line], NOW, true).total).toBe(14000);
+    expect(quoteOrder(state, [line], NOW, true, [], undefined, [state.promotions[0].id]).total).toBe(14000);
   });
 
   it('corrige la mezcla entregada devolviendo cada porción anterior y descontando las nuevas, sin duplicar vasos', () => {

@@ -3,6 +3,7 @@ import {
   applyCommand,
   cashExpected,
   openingExpectedCash,
+  physicalArticles,
   stockBalances,
   redactState,
 } from '../src/domain/engine.ts';
@@ -420,7 +421,9 @@ describe('Promociones y cupones', () => {
     s.promotions = [promo({ effect: 'fixed', fixedPrice: 8000, maxRedemptions: 1 })];
     const a = order(s, 1, ids.flavor, 0),
       b = order(s, 1, ids.flavor, 3);
-    const q = quoteOrder(s, [...a.order.lines, ...b.order.lines], NOW, true);
+    const q = quoteOrder(s, [...a.order.lines, ...b.order.lines], NOW, true, [], undefined, [
+      s.promotions[0].id,
+    ]);
     expect(q.total).toBe(22000);
     expect(Object.values(q.promotionUses)).toEqual([1]);
   });
@@ -499,8 +502,9 @@ describe('Promociones y cupones', () => {
       ...order(s, 1, ids.flavor, sizeIndex).order.lines[0],
       id: crypto.randomUUID(),
     }));
-    const q = quoteOrder(s, lines, NOW, true);
-    expect(q.total).toBe(23000 + 17000);
+    const q = quoteOrder(s, lines, NOW, true, [], undefined, [s.promotions[0].id]);
+    const prices = lines.map((line) => line.listPrice).sort((a, b) => b - a);
+    expect(q.total).toBe(prices.reduce((total, price) => total + price, 0) - prices[1] - prices[2]);
   });
   it('cobra el 3x2 por horario solo al confirmarlo y regala un granizado sin incluir neveras', () => {
     const s = fixture();
@@ -535,7 +539,7 @@ describe('Promociones y cupones', () => {
         undefined,
         promotion.id,
       ),
-    ).toThrow(/tres granizados/);
+    ).toThrow(/no está disponible/);
     expect(() => quoteOrder(s, pending.lines, promotion.endsAt, true, [], undefined, promotion.id)).toThrow(
       /ya no está disponible/,
     );
@@ -544,7 +548,19 @@ describe('Promociones y cupones', () => {
     const s = fixture();
     s.promotions = [promo({ effect: 'fixed', fixedPrice: 8000 }), promo({ effect: 'upgrade', steps: 1 })];
     const o = order(s, 1, ids.flavor, 1).order;
-    const q = quoteOrder(s, o.lines, NOW, true);
+    expect(() =>
+      quoteOrder(
+        s,
+        o.lines,
+        NOW,
+        true,
+        [],
+        undefined,
+        s.promotions.map(({ id }) => id),
+      ),
+    ).toThrow(/no sea acumulable/);
+    expect(quoteOrder(s, o.lines, NOW, true).total).toBe(17000);
+    const q = quoteOrder(s, o.lines, NOW, true, [], undefined, [s.promotions[0].id]);
     expect(q.total).toBe(8000);
     expect(q.lines[0].discount).toBe(9000);
   });
@@ -552,7 +568,7 @@ describe('Promociones y cupones', () => {
     let s = fixture();
     s.promotions = [promo({ effect: 'upgrade', steps: 1 })];
     let a = order(s, 1, ids.flavor, 1);
-    s = run(a.state, 'pay', { orderId: a.order.id, deliver: true }).state;
+    s = run(a.state, 'pay', { orderId: a.order.id, deliver: true, promotionIds: [s.promotions[0].id] }).state;
     expect(s.payments[0].amount).toBe(14000);
     expect(stockBalances(s)[`liquid:${ids.flavor}`]).toBe(-16);
   });
@@ -590,7 +606,10 @@ describe('Promociones y cupones', () => {
       promo({ effect: 'fixed', fixedPrice: 5000, maxRedemptions: 1, startTime: '22:00', endTime: '02:00' }),
     ];
     const a = order(s);
-    expect(quoteOrder(s, a.order.lines, '2026-10-24T04:00:00.000Z', true).total).toBe(5000);
+    expect(
+      quoteOrder(s, a.order.lines, '2026-10-24T04:00:00.000Z', true, [], undefined, [s.promotions[0].id])
+        .total,
+    ).toBe(5000);
     expect(quoteOrder(s, a.order.lines, '2026-10-24T04:00:00.000Z', false).total).toBe(14000);
     expect(quoteOrder(s, a.order.lines, NOW, true).total).toBe(14000);
   });
@@ -615,11 +634,32 @@ it('exige el checklist configurado y conserva las tareas que se presentaron', ()
 it('la nevera con licor consume dos coronitas y la de base sin licor no consume', () => {
   const state = fixture();
   const cooler = state.sizes.find((size) => size.name === 'Nevera 3 litros')!;
-  Object.assign(cooler, { active: true, ounces: 100, alcoholPrice: 70000, plainPrice: 50000 });
+  Object.assign(cooler, { active: true, cups: 1, ounces: 100, alcoholPrice: 70000, plainPrice: 50000 });
+  for (const article of ['nevera', `cup:${cooler.id}`, `package:${cooler.id}`]) {
+    const id = crypto.randomUUID();
+    state.stock.push({
+      id,
+      eventId: id,
+      referenceId: id,
+      article,
+      quantity: 10,
+      reason: 'initial',
+      by: admin.id,
+      at: NOW,
+    });
+  }
+  expect(
+    physicalArticles(state)
+      .filter((article) => /nevera/i.test(article.name))
+      .map(({ id }) => id),
+  ).toEqual(['nevera']);
+  expect(stockBalances(state).nevera).toBe(10);
   const drafted = run(state, 'create_order', {
     lines: [ids.flavor, ids.plain].map((flavorId) => ({ flavorId, sizeId: cooler.id, quantity: 1 })),
   });
   const sold = run(drafted.state, 'pay', { orderId: drafted.result.referenceId, deliver: true }).state;
+  expect(stockBalances(sold).nevera).toBe(8);
+  expect(stockBalances(sold)).not.toHaveProperty(`cup:${cooler.id}`);
   expect(
     sold.stock.filter((movement) => movement.article === 'coronita').map((movement) => movement.quantity),
   ).toEqual([-2]);

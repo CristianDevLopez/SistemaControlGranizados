@@ -20,6 +20,7 @@ import {
   date,
   localDateTime,
   money,
+  orderLabel,
   stateNames,
   utc,
   type Field,
@@ -188,6 +189,7 @@ export function Orders() {
   const app = useApp(),
     { state, actor, profiles } = app.data!,
     [filter, setFilter] = useState('pending'),
+    [promotion, setPromotion] = useState('all'),
     [period, setPeriod] = useState('all'),
     [day, setDay] = useState(businessDay()),
     [method, setMethod] = useState('all'),
@@ -206,6 +208,18 @@ export function Orders() {
   const details = state.orders.find((order) => order.id === detailsId);
   const active = operatingShift(state);
   const payments = currentPayments(state.payments);
+  const promotionOptions = new Map(state.promotions.map((item) => [item.id, item.name]));
+  for (const order of state.orders)
+    for (const line of order.lines)
+      for (const rule of line.appliedRules ?? [])
+        promotionOptions.set(rule.promotion.id, rule.promotion.name);
+  const hasPromotion = (order: Order) =>
+    order.lines.some((line) =>
+      promotion === 'any'
+        ? line.discount > 0 && (line.promotionId || line.appliedRules?.length)
+        : line.promotionId === promotion ||
+          line.appliedRules?.some((rule) => rule.promotion.id === promotion),
+    );
   const showPaymentMethod = filter !== 'pending';
   const paymentMethods = orderPaymentLabels(state);
   const paymentLabel = (x: Payment) =>
@@ -252,6 +266,7 @@ export function Orders() {
       (o) =>
         (actor.role === 'admin' || o.shiftId === active?.id) &&
         (!shiftId || o.shiftId === shiftId) &&
+        (promotion === 'all' || hasPromotion(o)) &&
         (period === 'all' ||
           periodStart(businessDay(o.originalAt ?? o.createdAt), period) === periodStart(day, period)) &&
         (method === 'all' ||
@@ -265,7 +280,7 @@ export function Orders() {
               (!['cancelled', 'tasting_only'].includes(o.status) &&
                 o.lines.some((x) => x.delivered < x.quantity)))) ||
           (filter === 'paid' && o.status === 'paid')) &&
-        `${o.number} ${profiles.find((x) => x.id === o.sellerId)?.name}`
+        `${orderLabel(o)} ${profiles.find((x) => x.id === o.sellerId)?.name}`
           .toLowerCase()
           .includes(query.toLowerCase()),
     );
@@ -307,6 +322,22 @@ export function Orders() {
           >
             Anulados
           </button>
+          <select
+            aria-label="Filtrar por promoción"
+            value={promotion}
+            onChange={(event) => {
+              setPromotion(event.target.value);
+              if (event.target.value !== 'all') setFilter('all');
+            }}
+          >
+            <option value="all">Todas las promociones</option>
+            <option value="any">Con promoción</option>
+            {[...promotionOptions].map(([key, name]) => (
+              <option value={key} key={key}>
+                {name}
+              </option>
+            ))}
+          </select>
           <label>
             Período{' '}
             <select value={period} onChange={(e) => setPeriod(e.target.value)}>
@@ -347,7 +378,7 @@ export function Orders() {
           )}
           <input
             className="search"
-            placeholder="Buscar pedido o responsable…"
+            placeholder="Buscar por número, nombre o responsable…"
             aria-label="Buscar pedido"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -371,7 +402,7 @@ export function Orders() {
                   <tr key={o.id}>
                     <td>
                       <button className="text-button strong" onClick={() => setDetailsId(o.id)}>
-                        #{o.number}
+                        {orderLabel(o)}
                       </button>
                       <small>{date(o.originalAt ?? o.createdAt)}</small>
                       <small>
@@ -400,7 +431,14 @@ export function Orders() {
                         </small>
                       ))}
                     </td>
-                    <td>{money(o.total)}</td>
+                    <td>
+                      {money(o.total)}
+                      {o.lines.some((line) => line.discount > 0) && (
+                        <small>
+                          Descuento {money(o.lines.reduce((sum, line) => sum + line.discount, 0))}
+                        </small>
+                      )}
+                    </td>
                     {showPaymentMethod && <td>{paymentMethods?.[o.id]?.join(' / ') ?? '—'}</td>}
                     <td>
                       <Badge
@@ -417,7 +455,8 @@ export function Orders() {
                     </td>
                     <td>
                       <div className="table-actions">
-                        {['open', 'paid'].includes(o.status) &&
+                        {o.cashHandoff !== 'draft' &&
+                          ['open', 'paid'].includes(o.status) &&
                           o.lines.some((x) => x.delivered < x.quantity) && (
                             <button
                               className="button small primary"
@@ -542,7 +581,7 @@ export function Orders() {
         )}
       </Panel>
       {details && (
-        <Modal title={`Pedido #${details.number}`} onClose={() => setDetailsId(null)}>
+        <Modal title={`Pedido ${orderLabel(details)}`} onClose={() => setDetailsId(null)}>
           <div className="detail-content">
             <p>
               {stateNames[details.status]} · {date(details.createdAt)}
@@ -553,7 +592,17 @@ export function Orders() {
               </div>
             )}
             <dl>
-              <dt>Total</dt>
+              {details.lines.some((line) => line.discount > 0) && (
+                <>
+                  <dt>Precio normal</dt>
+                  <dd>
+                    {money(details.total + details.lines.reduce((sum, line) => sum + line.discount, 0))}
+                  </dd>
+                  <dt>Descuento</dt>
+                  <dd>{money(details.lines.reduce((sum, line) => sum + line.discount, 0))}</dd>
+                </>
+              )}
+              <dt>Total del pedido</dt>
               <dd>{money(details.total)}</dd>
               <dt>Origen</dt>
               <dd>{details.origin === 'paper' ? `Planilla · ${details.paperFolio}` : 'App'}</dd>
@@ -584,15 +633,14 @@ export function Orders() {
                     {l.quantity} solicitados · {l.delivered} entregados
                   </small>
                   {l.discount > 0 && <small>Descuento: {money(l.discount)}</small>}
-                  {l.appliedRules
-                    ?.filter((r) => r.couponId)
-                    .map((r) => (
-                      <small key={r.couponId}>
-                        Cortesía/cupón{' '}
-                        {r.couponCode ?? state.coupons.find((c) => c.id === r.couponId)?.code ?? r.couponId} ·{' '}
-                        {r.quantity} producto(s) · {r.promotion.name} · Por producto {money(r.unitAmount)}
-                      </small>
-                    ))}
+                  {l.appliedRules?.map((rule) => (
+                    <small key={`${rule.promotion.id}:${rule.couponId ?? ''}:${rule.unitAmount}`}>
+                      {rule.promotion.name} · {rule.quantity} producto(s) · Por producto{' '}
+                      {money(rule.unitAmount)}
+                      {rule.couponId &&
+                        ` · ${rule.couponCode ?? state.coupons.find((item) => item.id === rule.couponId)?.code ?? 'Cupón'}`}
+                    </small>
+                  ))}
                 </div>
                 <strong>{money(l.listPrice * l.quantity - l.discount)}</strong>
               </div>

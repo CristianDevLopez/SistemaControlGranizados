@@ -3,10 +3,15 @@ import { businessDay, periodStart } from '../domain/business-date.ts';
 import { inRehearsalPeriod, rehearsalShift } from '../domain/closing-archive.ts';
 import {
   compensatedInventory,
+  approvedInventoryUpdatesSince,
+  isLegacyCoolerArticle,
+  stockBalances,
+  usesCupPackages,
   countHasDifferences,
   blindCountArticles,
   currentPayments,
   paymentMethod,
+  reviewedClosingCashInDrawer,
 } from '../domain/engine.ts';
 import { inventoryOpenings } from '../domain/inventory.ts';
 import {
@@ -21,9 +26,20 @@ import {
 } from '../domain/turn-review.ts';
 import type { CommandType, Count, Payment } from '../domain/types.ts';
 import { useApp } from '../lib/store.tsx';
-import { Badge, Empty, FieldsForm, Modal, Panel, date, money, type Field } from './components.tsx';
+import {
+  Badge,
+  Empty,
+  FieldsForm,
+  Modal,
+  Panel,
+  date,
+  localDateTime,
+  money,
+  stateNames,
+  type Field,
+} from './components.tsx';
 
-import { ClosingApprovalDialog } from './ClosingReview.tsx';
+import { ClosingApprovalDialog, ClosingConfirmation } from './ClosingReview.tsx';
 import { CountReviewDialog } from './CashAudit.tsx';
 import { InventoryComparison } from './Today.tsx';
 import { MermaReport } from './MermaReport.tsx';
@@ -47,7 +63,10 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
   const [reviewCount, setReviewCount] = useState<Count | null>(null);
   const cutoff = state.settings[0].rehearsalBaseline;
   const candidateAudits = state.counts.filter(
-    (count) => count.kind === 'audit' && businessDay(count.cutoffAt ?? count.at) === '2026-11-18',
+    (count) =>
+      count.kind === 'audit' &&
+      Object.keys(count.items).length > 0 &&
+      (!cutoff || (count.cutoffAt ?? count.at) > cutoff.at),
   );
   const pending = state.shifts.filter((shift) => reviewIsPending(state, shift));
   const rows = (
@@ -82,18 +101,18 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
     })
     .sort((a, b) => (b.openedAt ?? b.requestedAt).localeCompare(a.openedAt ?? a.requestedAt));
   const shift = state.shifts.find((item) => item.id === selected);
+  const approvedCash = shift && reviewedClosingCashInDrawer(state, shift);
   const archived = !!shift && (rehearsalShift(state, shift) || !!shift.closingArchive);
   const counts = shift ? reviewCounts(state, shift, archived || history === 'rehearsal') : [];
   const filteredCounts = counts.filter((count) => kind === 'all' || count.kind === kind);
-  const counted = counts.filter((count) => count.kind === 'closing' && !count.revisesId).at(-1);
+  const counted =
+    counts.find((count) => count.id === shift?.closingCountId) ??
+    counts.filter((count) => count.kind === 'closing' && !count.revisesId).at(-1);
   const explanations =
     shift && counted ? saleExplanations(state, reconciledCount(state, shift, counted)) : [];
   const sales = shift ? shiftSales(state, shift) : undefined;
   const openings = shift ? inventoryOpenings(state, shift) : [];
   const transfers = shift ? shiftTransfers(state, shift) : [];
-  const lastVersion = shift?.closingFlow?.versions.at(-1);
-  const closingHandoff = state.transfers.find((transfer) => transfer.id === lastVersion?.transferId);
-  const awaitsCustodian = !!closingHandoff && !['confirmed', 'disputed'].includes(closingHandoff.status);
   const awaitsVerification = transfers.some(
     (payment) => !shift?.operationsReview?.verifiedTransfers?.[payment.id],
   );
@@ -111,6 +130,28 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
     (item) => item.active && item.type === 'bank' && item.receivesSales,
   );
   const openingReview = shift?.blindOpening?.status;
+  const priorShift =
+    shift &&
+    state.shifts
+      .filter(
+        (item) =>
+          item.id !== shift.id &&
+          item.closedAt &&
+          item.closedAt <= shift.requestedAt &&
+          !item.closingArchive &&
+          !rehearsalShift(state, item),
+      )
+      .sort((a, b) => b.closedAt!.localeCompare(a.closedAt!))[0];
+  const priorCount = state.counts.find(
+    (item) => item.id === (priorShift?.closingReview?.countId ?? priorShift?.closingCountId),
+  );
+  const openingCount = state.counts.find(
+    (item) => item.id === (shift?.blindOpening?.auditCountIds?.at(-1) ?? shift?.openingCountId),
+  );
+  const updatedOpeningItems = openingCount
+    ? approvedInventoryUpdatesSince(state, openingCount)
+    : new Set<string>();
+  const liveBalances = openingCount && updatedOpeningItems.size ? stockBalances(state) : {};
   const requestAction = (
     title: string,
     method: string,
@@ -153,16 +194,20 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
     );
   const correction = (kind: 'open_bag' | 'open_package') =>
     setAction({
-      title: kind === 'open_bag' ? 'Proponer apertura de bolsa' : 'Proponer apertura de paquete',
+      title: kind === 'open_bag' ? 'Agregar apertura de bolsa' : 'Agregar apertura de paquete',
       command: kind,
-      payload: { shiftId: shift?.id, correction: true, confirmEmpty: true },
+      payload: {
+        shiftId: shift?.id,
+        correction: true,
+        ...(shift?.closingReview?.status === 'pending' ? { reviewClosing: true } : {}),
+      },
       fields: [
         {
           name: kind === 'open_bag' ? 'flavorId' : 'sizeId',
           label: kind === 'open_bag' ? 'Sabor' : 'Tamaño',
           type: 'select',
           required: true,
-          options: (kind === 'open_bag' ? state.flavors : state.sizes.filter((size) => size.cups > 0)).map(
+          options: (kind === 'open_bag' ? state.flavors : state.sizes.filter(usesCupPackages)).map(
             (item) => ({ value: item.id, label: item.name }),
           ),
         },
@@ -188,17 +233,17 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
               <h2>Revisar turnos</h2>
               <p>Consulta conteos, verifica transferencias y resuelve diferencias de apertura y cierre.</p>
             </div>
-            {!cutoff && candidateAudits.length > 0 && (
+            {candidateAudits.length > 0 && (
               <button
                 className="button secondary"
                 onClick={() =>
                   setAction({
                     command: 'archive_rehearsal',
-                    title: 'Archivar período de ensayo',
+                    title: 'Elegir arqueo de referencia',
                     fields: [
                       {
                         name: 'countId',
-                        label: 'Arqueo de referencia del 18 de noviembre de 2026',
+                        label: 'Arqueo de referencia',
                         type: 'select',
                         required: true,
                         options: candidateAudits.map((count) => ({
@@ -344,6 +389,19 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
                       Reconfirmar cuadre · Permite proponer ajustes de inventario
                     </button>
                   )}
+                {Object.entries(
+                  shift.operationsReview?.openingDifferences?.countId === count.id
+                    ? shift.operationsReview.openingDifferences.items
+                    : {},
+                ).map(([key, item]) => (
+                  <p key={key}>
+                    {count.itemLabels?.[key] ?? key} · {item.difference > 0 ? '+' : ''}
+                    {item.difference} ·
+                    {item.lastFullCountAt
+                      ? ` Diferencia desde el último conteo completo del ${date(item.lastFullCountAt)}`
+                      : ' Primer conteo completo registrado'}
+                  </p>
+                ))}
                 {Object.entries(count.inventoryDifferences ?? {}).map(([article, entry]) => {
                   const compensated = compensatedInventory(state, count, article);
                   return (
@@ -369,8 +427,7 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
               return (
                 <p key={version.at + index}>
                   Versión {index + 1} · {date(version.at)}
-                  {' · Base '}
-                  {money(version.retained)}
+                  {!transfer?.blindReceipt && ` · Base ${money(version.retained)}`}
                   {transfer &&
                     ` · ${state.locations.find((item) => item.id === transfer.to)?.name ?? 'Destino'} · ${transfer.status === 'in_transit' ? 'En camino' : 'Recibido'}`}
                   {transfer && !transfer.blindReceipt && ` · Enviado ${money(transfer.amount)}`}
@@ -381,6 +438,9 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
                 </p>
               );
             })}
+            {approvedCash !== undefined && (
+              <p>Base aprobada para el siguiente turno · {money(approvedCash)}</p>
+            )}
             {shift.closingFlow?.returns?.map((item) => (
               <p key={item.at}>
                 Devuelto · {date(item.at)} · {item.notes}
@@ -399,51 +459,35 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
                 · {shift.closingFlow.response.notes}
               </p>
             )}
-            {!archived && shift.closingFlow && shift.closingReview?.status === 'pending' && (
-              <div className="button-row">
-                {awaitsCustodian && <p>El custodio debe confirmar la recepción.</p>}
-                {awaitsVerification && <p>Verifica las transferencias del turno.</p>}
-                {awaitsPaymentChanges && <p>Resuelve los cambios de medio de pago.</p>}
-                <button
-                  className="button primary"
-                  disabled={awaitsCustodian || awaitsVerification || awaitsPaymentChanges || !app.online}
-                  onClick={() => void run('approve_closing', { shiftId: shift.id })}
-                >
-                  Aprobar cierre · Ajusta inventario
-                </button>
-                <button
-                  className="button secondary"
-                  onClick={() =>
-                    setAction({
-                      title: 'Devolver cierre',
-                      command: 'return_closing',
-                      payload: { shiftId: shift.id },
-                      fields: [note],
-                    })
-                  }
-                >
-                  Devolver cierre · No mueve inventario ni plata
-                </button>
-              </div>
-            )}
             {!archived &&
-              shift.closingFlow?.responseDueAt &&
-              !shift.closingFlow.response &&
-              new Date().toISOString() >= shift.closingFlow.responseDueAt && (
-                <button
-                  className="button secondary"
-                  onClick={() =>
-                    setAction({
-                      title: 'Cerrar sin respuesta',
-                      command: 'respond_closing',
-                      payload: { shiftId: shift.id, outcome: 'unanswered' },
-                      fields: [note],
-                    })
-                  }
-                >
-                  Cerrar sin respuesta · No mueve inventario ni plata
-                </button>
+              shift.closingFlow &&
+              ['pending', 'returned'].includes(shift.closingReview?.status ?? '') &&
+              counted && (
+                <>
+                  {awaitsVerification && <p>Verifica las transferencias del turno.</p>}
+                  {awaitsPaymentChanges && <p>Resuelve los cambios de medio de pago.</p>}
+                  <ClosingConfirmation
+                    key={counted.id}
+                    count={counted}
+                    blocked={awaitsVerification || awaitsPaymentChanges}
+                  />
+                </>
               )}
+            {shift.closingReview?.inventoryVerification?.status === 'pending' && (
+              <p>Inventario por verificar en el próximo arqueo de apertura.</p>
+            )}
+            {shift.closingReview?.openingChecks?.map((check) => (
+              <p key={check.countId}>
+                Arqueo de apertura aprobado ·{' '}
+                {Object.entries(check.differences)
+                  .map(
+                    ([key, amount]) =>
+                      `${counted?.itemLabels?.[key] ?? key} ${amount > 0 ? '+' : ''}${amount}`,
+                  )
+                  .join(' · ') || 'Sin diferencias de inventario'}
+                {check.cash ? ` · Efectivo ${money(check.cash)}` : ''}
+              </p>
+            ))}
             {!!explanations.length && (
               <div className="notice warning">
                 {explanations.map((text) => (
@@ -612,7 +656,122 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
                 })}
             </details>
             <details open>
+              <summary>Gastos y daños del turno</summary>
+              {state.expenses
+                .filter((item) => item.shiftId === shift.id)
+                .map((item) => (
+                  <div className="list-row" key={item.id}>
+                    <span>
+                      {item.category} · {money(item.amount)} · {stateNames[item.status]}
+                      {item.notes && ` · ${item.notes}`}
+                    </span>
+                    {!archived && item.status === 'pending' && (
+                      <div className="button-row">
+                        <button
+                          className="button small primary"
+                          onClick={() => void run('approve_expense', { expenseId: item.id, approve: true })}
+                        >
+                          Aprobar gasto
+                        </button>
+                        <button
+                          className="button small secondary"
+                          onClick={() => void run('approve_expense', { expenseId: item.id, approve: false })}
+                        >
+                          Rechazar gasto
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              {state.requests
+                .filter(
+                  (item) =>
+                    item.type === 'damage' &&
+                    (item.referenceId === shift.id ||
+                      (!item.referenceId &&
+                        !!shift.openedAt &&
+                        item.at >= shift.openedAt &&
+                        (!shift.closedAt || item.at <= shift.closedAt))),
+                )
+                .map((item) => (
+                  <div className="list-row" key={item.id}>
+                    <span>
+                      Daño · {item.notes} · {stateNames[item.status]}
+                    </span>
+                    {!archived && item.status === 'pending' && (
+                      <div className="button-row">
+                        <button
+                          className="button small primary"
+                          onClick={() =>
+                            void run('resolve_request', {
+                              requestId: item.id,
+                              approve: true,
+                              ...(shift.closingReview?.status === 'pending'
+                                ? { reviewClosing: true, shiftId: shift.id }
+                                : {}),
+                            })
+                          }
+                        >
+                          Aprobar daño
+                        </button>
+                        <button
+                          className="button small secondary"
+                          onClick={() => void run('resolve_request', { requestId: item.id, approve: false })}
+                        >
+                          Rechazar daño
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+            </details>
+            <details open>
               <summary>Inventario y ventas del turno</summary>
+              {openings.map((item) => (
+                <div className="list-row" key={item.id}>
+                  <span>
+                    {item.kind} · {item.article} · {date(item.openedAt)}
+                  </span>
+                  {!archived && shift.closingReview?.status !== 'approved' && (
+                    <div className="button-row">
+                      <button
+                        className="button small secondary"
+                        onClick={() =>
+                          requestAction(
+                            'Cambiar hora de apertura',
+                            'correct_opening',
+                            [
+                              {
+                                name: 'openedAt',
+                                label: 'Fecha y hora de apertura (Colombia)',
+                                type: 'datetime-local',
+                                required: true,
+                                value: localDateTime(new Date(item.openedAt)),
+                              },
+                              note,
+                            ],
+                            { openingId: item.id },
+                          )
+                        }
+                      >
+                        Cambiar hora
+                      </button>
+                      <button
+                        className="button small secondary"
+                        onClick={() =>
+                          requestAction('Quitar apertura', 'correct_opening', [note], {
+                            openingId: item.id,
+                            remove: true,
+                          })
+                        }
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+
               {state.flavors
                 .filter(
                   (flavor) =>
@@ -655,8 +814,56 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
               <div className="button-row">
                 {openingReview === 'review' && (
                   <>
+                    {priorCount && (
+                      <div className="notice info">
+                        <strong>Diferencias del cierre anterior</strong>
+                        <p>
+                          {Object.entries(priorCount.differences ?? {})
+                            .filter(([key, amount]) => !isLegacyCoolerArticle(key) && amount !== 0)
+                            .map(
+                              ([key, amount]) =>
+                                `${priorCount.itemLabels?.[key] ?? key} ${amount > 0 ? '+' : ''}${amount}`,
+                            )
+                            .join(' · ') || 'Inventario sin diferencias'}
+                        </p>
+                        {!!priorCount.difference && <p>Efectivo · {money(priorCount.difference)}</p>}
+                      </div>
+                    )}
+                    {openingCount && (
+                      <button
+                        className="button primary"
+                        onClick={() =>
+                          setAction({
+                            title: 'Aprobar conteo de apertura',
+                            command: 'review_blind_opening',
+                            fields: [
+                              ...Object.entries(openingCount.items)
+                                .filter(([key]) => !isLegacyCoolerArticle(key))
+                                .map(([key, value]): Field => ({
+                                  name: key,
+                                  label: openingCount.itemLabels?.[key] ?? key,
+                                  type: 'number',
+                                  value: updatedOpeningItems.has(key) ? undefined : value,
+                                  hint: updatedOpeningItems.has(key)
+                                    ? `Inventario aprobado: ${liveBalances[key] ?? 0}`
+                                    : undefined,
+                                  min: 0,
+                                  max: 1000000,
+                                  step: '1',
+                                  required: !updatedOpeningItems.has(key),
+                                })),
+                              { ...note, required: false },
+                            ],
+                            payload: { shiftId: shift.id, action: 'approve_count' },
+                          })
+                        }
+                      >
+                        Aprobar apertura y ajustar inventario
+                      </button>
+                    )}
                     <button
-                      className="button primary"
+                      className="button secondary"
+                      disabled={!!shift.reconcileClosingId}
                       onClick={() =>
                         void run('review_blind_opening', { shiftId: shift.id, action: 'authorize' })
                       }
@@ -665,6 +872,7 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
                     </button>
                     <button
                       className="button secondary"
+                      disabled={!!shift.reconcileClosingId}
                       onClick={() =>
                         setAction({
                           title: 'Pedir arqueo antes de vender',
@@ -740,10 +948,10 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
                   Pedir arqueo para el siguiente turno · No mueve inventario ni plata
                 </button>
                 <button className="button secondary" onClick={() => correction('open_bag')}>
-                  Corregir apertura de bolsa · Propone mover inventario
+                  Agregar bolsa abierta
                 </button>
                 <button className="button secondary" onClick={() => correction('open_package')}>
-                  Corregir apertura de paquete · Propone mover inventario
+                  Agregar paquete abierto
                 </button>
                 {canReviewPayments &&
                   currentPayments(state.payments).some(
@@ -845,14 +1053,16 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
 }
 
 function CountDetails({ count, original }: { count: Count; original: Count }) {
-  const rows = Object.entries(count.items).map(([key, value]) => ({
-    key,
-    label: count.itemLabels?.[key] ?? key,
-    counted: digits.format(value),
-    expected: digits.format(count.expectedItems?.[key] ?? 0),
-    delta: digits.format(count.differences?.[key] ?? 0),
-    original: digits.format(original.differences?.[key] ?? 0),
-  }));
+  const rows = Object.entries(count.items)
+    .filter(([key]) => !isLegacyCoolerArticle(key))
+    .map(([key, value]) => ({
+      key,
+      label: count.itemLabels?.[key] ?? key,
+      counted: digits.format(value),
+      expected: digits.format(count.expectedItems?.[key] ?? 0),
+      delta: digits.format(count.differences?.[key] ?? 0),
+      original: digits.format(original.differences?.[key] ?? 0),
+    }));
   for (const key of Object.keys(count.paymentDifferences ?? {})) {
     const counted = count.payments?.[key];
     const expected = count.expectedPayments?.[key];

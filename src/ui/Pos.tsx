@@ -1,3 +1,4 @@
+import { AddPackages } from './AddPackages.tsx';
 import { useEffect, useRef, useState } from 'react';
 import {
   Plus,
@@ -15,25 +16,32 @@ import {
 import { useApp } from '../lib/store.tsx';
 import { api } from '../lib/api.ts';
 import { getMeta, setMeta } from '../lib/db.ts';
-import {
-  counterThreeForTwoPromotions,
-  counterThreeForTwoQuantity,
-  isCounterThreeForTwo,
-  lineTotal,
-  quoteOrder,
-} from '../domain/pricing.ts';
+import { checkoutPromotions, lineTotal, quoteOrder } from '../domain/pricing.ts';
 import { additionsTotal, configuredAdditions, type CandyAddition } from '../domain/additions.ts';
 import { hasAlcohol, sameFlavors } from '../domain/flavors.ts';
 import { FlavorPortions, flavorName, portionLabel } from './FlavorDetails.tsx';
-import { canWork, hasPermission, isShiftCashier, shiftBlocksSales } from '../domain/access.ts';
+import {
+  canWork,
+  hasPermission,
+  isOrderAssistant,
+  isShiftCashier,
+  shiftBlocksSales,
+} from '../domain/access.ts';
 import { operatingShift } from '../domain/employee-view.ts';
 import { FlavorImage } from './FlavorImage.tsx';
-import type { MoneyLocation, Order, OrderLine, State } from '../domain/types.ts';
-import { paymentMethod, cupBalances, quotePayment } from '../domain/engine.ts';
-import { Badge, Empty, FieldsForm, Modal, MoneyInput, money, date, stateNames } from './components.tsx';
+import {
+  ORDER_NAME_MAX_LENGTH,
+  type MoneyLocation,
+  type Order,
+  type OrderLine,
+  type State,
+} from '../domain/types.ts';
+import { paymentMethod, cupBalances, quotePayment, usesCupPackages } from '../domain/engine.ts';
+import { Badge, Empty, Modal, MoneyInput, money, date, orderLabel, stateNames } from './components.tsx';
 import { parseMoney } from '../lib/money.ts';
 import { isNequiAccount, paymentNote, paymentOptionLabel, transferAccountName } from './payment-labels.ts';
 import { TastingsEditor } from './TastingsEditor.tsx';
+import { RegisterCashExpense } from './RegisterCashExpense.tsx';
 
 /** Cómo paga el cliente: en efectivo o por transferencia a una cuenta del negocio. */
 export interface PaymentChoice {
@@ -163,14 +171,14 @@ function Checkout({
   order,
   initialPayment,
   focusCoupon,
-  threeForTwoId,
+  eligiblePromotions,
   onClose,
   onDone,
 }: {
   order: Order;
   initialPayment: PaymentChoice;
   focusCoupon: boolean;
-  threeForTwoId?: string;
+  eligiblePromotions: ReturnType<typeof checkoutPromotions>;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -192,7 +200,7 @@ function Checkout({
     ),
     [code, setCode] = useState(''),
     [codes, setCodes] = useState<string[]>([]),
-    [counterPromotionId, setCounterPromotionId] = useState<string>(),
+    [promotionIds, setPromotionIds] = useState<string[]>([]),
     [unusedCodes, setUnusedCodes] = useState<string[]>([]),
     [applications, setApplications] = useState<
       { code: string; lineId: string; quantity: number; unitAmount: number }[]
@@ -205,16 +213,17 @@ function Checkout({
     [deliver, setDeliver] = useState(true),
     [tendered, setTendered] = useState(''),
     [refundPhoto, setRefundPhoto] = useState<File | null>(null);
-  const refreshQuote = async (all: string[], promotionId?: string) => {
+  const submitting = useRef(false);
+  const refreshQuote = async (all: string[], selected: string[]) => {
     setBusy(true);
     setError('');
     try {
       let quote;
       if (app.online) {
         await app.sync();
-        quote = await api('quote', { orderId: order.id, codes: all, counterPromotionId: promotionId });
+        quote = await api('quote', { orderId: order.id, codes: all, promotionIds: selected });
       } else {
-        quote = quotePayment(state, order, new Date().toISOString(), false, all, promotionId);
+        quote = quotePayment(state, order, new Date().toISOString(), false, all, selected);
       }
       setTotal(quote.total);
       setQuotedLines(quote.lines);
@@ -229,15 +238,21 @@ function Checkout({
       setBusy(false);
     }
   };
-  const toggleThreeForTwo = async (checked: boolean) => {
-    const previous = counterPromotionId;
-    const next = checked ? threeForTwoId : undefined;
-    setCounterPromotionId(next);
-    if (!(await refreshQuote(codes, next))) setCounterPromotionId(previous);
+  const togglePromotion = async (id: string, checked: boolean) => {
+    const candidate = eligiblePromotions.find((item) => item.id === id);
+    const canCombine =
+      candidate?.stackable === true &&
+      promotionIds.every((key) => eligiblePromotions.find((item) => item.id === key)?.stackable === true);
+    const next = checked
+      ? canCombine
+        ? [...promotionIds, id]
+        : [id]
+      : promotionIds.filter((key) => key !== id);
+    if (await refreshQuote(codes, next)) setPromotionIds(next);
   };
   const validate = async (value = code) => {
     const all = [...new Set([...codes, value.trim().toUpperCase()].filter(Boolean))];
-    if (await refreshQuote(all, counterPromotionId)) {
+    if (await refreshQuote(all, promotionIds)) {
       setCode('');
       app.toast('Beneficios verificados. Solo se consumen los aplicados al confirmar el cobro.');
     }
@@ -249,7 +264,7 @@ function Checkout({
     .reduce((sum, rule) => sum + rule.quantity, 0);
   const isFreeCourtesy = codes.length > 0 && due === 0 && freeCups > 0;
   return (
-    <Modal title={`Cobrar pedido #${order.number}`} onClose={onClose}>
+    <Modal title={`Cobrar pedido ${orderLabel(order)}`} onClose={onClose}>
       <div className="checkout">
         <div className="checkout-amount">
           <small>Total del pedido</small>
@@ -264,25 +279,20 @@ function Checkout({
             </span>
           )}
         </div>
-        {(threeForTwoId || counterPromotionId) && (
-          <div className="notice info">
-            <div>
-              <label className="check-inline">
-                <input
-                  type="checkbox"
-                  checked={!!counterPromotionId}
-                  disabled={busy}
-                  aria-describedby="three-for-two-confirmation"
-                  onChange={(e) => void toggleThreeForTwo(e.target.checked)}
-                />
-                Aplicar descuento 3x2
-              </label>
-              <small id="three-for-two-confirmation">
-                Confirma que la persona nos sigue, compartió la publicación y aún no ha usado la promoción.
-              </small>
-            </div>
-          </div>
-        )}
+        {eligiblePromotions.map((promotion) => (
+          <label key={promotion.id} className="check-inline">
+            <input
+              type="checkbox"
+              checked={promotionIds.includes(promotion.id)}
+              disabled={busy}
+              onChange={(event) => void togglePromotion(promotion.id, event.target.checked)}
+            />
+            <span>
+              <strong>{promotion.name}</strong>
+              {promotion.checkoutText && <small>{promotion.checkoutText}</small>}
+            </span>
+          </label>
+        ))}
         {order.paymentCredit === undefined && !order.carriedCouponFromId && (
           <div className="coupon-entry">
             <label>
@@ -413,33 +423,36 @@ function Checkout({
           className="button primary full large"
           disabled={busy || (due < 0 && !refundPhoto) || !!code || (codes.length > 0 && !app.online)}
           onClick={async () => {
+            if (submitting.current) return;
+            submitting.current = true;
             setBusy(true);
             setError('');
             try {
               const refundEvidenceId = refundPhoto ? await app.photo(refundPhoto) : undefined;
-              await app.run(
+              const result = await app.run(
                 codes.length ? 'redeem_coupon' : 'pay',
                 {
                   orderId: order.id,
                   expectedVersion: order.version,
                   expectedTotal: total,
                   codes,
-                  counterPromotionId,
+                  promotionIds,
                   deliver,
                   refundEvidenceId,
                   ...paymentPayload(payment),
                 },
-                { onlineOnly: !!counterPromotionId && app.online },
+                { onlineOnly: promotionIds.length > 0 && app.online },
               );
               app.toast(
                 isFreeCourtesy
                   ? 'Cortesía registrada · $0'
-                  : `Venta registrada · ${money(total)}${paymentNote(payment, state.locations)}`,
+                  : `${result.pendingSync ? 'Venta guardada en este equipo, pendiente de sincronizar' : 'Venta registrada'} · ${money(total)}${paymentNote(payment, state.locations)}`,
               );
               onDone();
             } catch (e) {
               setError((e as Error).message);
             } finally {
+              submitting.current = false;
               setBusy(false);
             }
           }}
@@ -466,6 +479,7 @@ export function Pos() {
     { state, actor, profiles } = app.data!;
   const [sizeId, setSizeId] = useState(state.sizes.find((x) => x.active)?.id ?? ''),
     [orderId, setOrderId] = useState<string | null>(null),
+    [nameDraft, setNameDraft] = useState<{ orderId: string | null; value: string } | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [checkout, setCheckout] = useState<'payment' | 'benefit' | null>(null),
@@ -476,36 +490,39 @@ export function Pos() {
     [flavorGroup, setFlavorGroup] = useState('all'),
     [promotionTime, setPromotionTime] = useState(() => new Date().toISOString()),
     [payment, setPayment] = useState<PaymentChoice>(CASH);
+  const actionInProgress = useRef(false);
   const active = operatingShift(state),
+    orderAssistant = !app.viewRole && isOrderAssistant(actor, state),
+    activeOrderKey = `active-order:${actor.branchId ?? 'legacy'}:${actor.id}`,
     storedOrder = state.orders.find((x) => x.id === orderId && x.status === 'open'),
     size = state.sizes.find((x) => x.id === sizeId),
     open = state.orders.filter((x) => x.status === 'open');
-  const legacyQuote = storedOrder?.lines.some((line) =>
-    line.appliedRules?.some((rule) => isCounterThreeForTwo(rule.promotion)),
-  )
-    ? quoteOrder(state, storedOrder.lines, promotionTime, app.online, [], storedOrder.additions)
-    : undefined;
+  const normalQuote =
+    storedOrder && !storedOrder.carriedCouponFromId && storedOrder.lines.some((line) => line.discount > 0)
+      ? quoteOrder(state, storedOrder.lines, promotionTime, app.online, [], storedOrder.additions)
+      : undefined;
   const order =
-    storedOrder && legacyQuote
-      ? { ...storedOrder, lines: legacyQuote.lines, total: legacyQuote.total }
+    storedOrder && normalQuote
+      ? { ...storedOrder, lines: normalQuote.lines, total: normalQuote.total }
       : storedOrder;
+  const customerName =
+    nameDraft && nameDraft.orderId === (order?.id ?? null) ? nameDraft.value : (order?.customerName ?? '');
   const canCash =
     hasPermission(actor, 'payments') &&
     !!active &&
     !shiftBlocksSales(active) &&
+    order?.cashHandoff !== 'draft' &&
     isShiftCashier({ ...actor, online: app.online }, active);
-  const canOrders = canWork(actor, state, 'orders', order?.shiftId);
-  const canDeliver = canWork(actor, state, 'deliveries', order?.shiftId);
+  const canOrders =
+    canWork(actor, state, 'orders', order?.shiftId) &&
+    (!orderAssistant || app.online) &&
+    (order?.cashHandoff !== 'sent' || canCash);
+  const canDeliver = order?.cashHandoff !== 'draft' && canWork(actor, state, 'deliveries', order?.shiftId);
   const canCancel = !!order && !order.replacesId && !order.lines.some((line) => line.delivered > 0);
-  const threeForTwoPromotions = counterThreeForTwoPromotions(state, promotionTime);
-  const threeForTwoId =
+  const eligiblePromotions =
     order && order.paymentCredit === undefined && !order.replacesId && !order.carriedCouponFromId
-      ? threeForTwoPromotions.find(
-          (p) =>
-            (app.online || p.maxRedemptions === null) &&
-            counterThreeForTwoQuantity(p, order.lines, state) >= 3,
-        )?.id
-      : undefined;
+      ? checkoutPromotions(state, order.lines, promotionTime, app.online)
+      : [];
   const mixPrice = hasAlcohol({ flavorId: mixFlavors[0], flavorIds: mixFlavors }, state.flavors)
     ? size?.alcoholPrice
     : size?.plainPrice;
@@ -514,19 +531,26 @@ export function Pos() {
     return () => clearInterval(timer);
   }, []);
   useEffect(() => {
-    void getMeta<string>(`active-order:${actor.branchId ?? 'legacy'}`).then((key) => {
-      if (key) setOrderId(key);
+    let cancelled = false;
+    void getMeta<string>(activeOrderKey).then((key) => {
+      if (!cancelled) setOrderId(key ?? null);
     });
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeOrderKey]);
   const select = (key: string | null) => {
     setOrderId(key);
-    void setMeta(`active-order:${actor.branchId ?? 'legacy'}`, key);
+    setNameDraft(null);
+    void setMeta(activeOrderKey, key);
     setShowOrders(false);
     setMixFlavors([]);
     // Cada pedido nuevo vuelve a efectivo, el medio más común.
     setPayment(CASH);
   };
   const action = async (work: () => Promise<unknown>) => {
+    if (actionInProgress.current) return;
+    actionInProgress.current = true;
     setBusy(true);
     setError('');
     try {
@@ -534,6 +558,7 @@ export function Pos() {
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      actionInProgress.current = false;
       setBusy(false);
     }
   };
@@ -579,7 +604,11 @@ export function Pos() {
       else lines.push({ id: crypto.randomUUID(), ...product, quantity: 1 });
       await app.run('update_order', { orderId: order.id, lines, expectedVersion: order.version });
     } else {
-      const result = await app.run('create_order', { lines: [{ ...product, quantity: 1 }] });
+      const result = await app.run('create_order', {
+        lines: [{ ...product, quantity: 1 }],
+        customerName: customerName.trim() || undefined,
+        ...(!canCash ? { cashDraft: true } : {}),
+      });
       select(result.referenceId!);
     }
   };
@@ -614,21 +643,16 @@ export function Pos() {
             ? profiles.find((p) => p.id === active.cashierId)?.name
             : actor.role === 'admin'
               ? 'Inicia tu caja en Turno y caja, sin autorización de otro administrador.'
-              : 'Solicita y autoriza el turno antes de vender'}
+              : orderAssistant
+                ? 'Los pedidos se habilitan cuando caja abre su turno.'
+                : 'Solicita y autoriza el turno antes de vender'}
         </span>
         <div className="strip-end">
           <Clock3 size={15} />
           {active ? date(active.openedAt) : 'Caja única'}
         </div>
+        <RegisterCashExpense key={active?.id} shift={active} />
       </div>
-      {threeForTwoPromotions.length > 0 && (
-        <div className="notice info" role="status">
-          <span>
-            <strong>Hay promoción de 3x2.</strong> Paga los dos granizados más caros. No aplica para neveras.
-            Una vez por persona.
-          </span>
-        </div>
-      )}
       {state.settings[0].auditId && (
         <div className="notice warning">
           {state.settings[0].auditRequest?.opening
@@ -644,16 +668,18 @@ export function Pos() {
       {!app.online && (
         <div className="notice warning">
           Sin conexión.{' '}
-          {actor.primary
-            ? 'Las ventas se guardan en este equipo.'
-            : 'Registra pedidos desde el equipo de caja mientras vuelve la conexión.'}
+          {orderAssistant
+            ? 'Conéctate para tomar pedidos y enviarlos a caja.'
+            : actor.primary
+              ? 'Las ventas se guardan en este equipo.'
+              : 'Registra pedidos desde el equipo de caja mientras vuelve la conexión.'}
         </div>
       )}
       {actor.role === 'admin' &&
         active &&
         !state.settings[0].auditId &&
         size &&
-        size.cups > 0 &&
+        usesCupPackages(size) &&
         (cupBalances(state)[`cup:${size.id}`] ?? 0) <= 0 && (
           <div className="notice warning" aria-live="polite">
             <span>
@@ -663,7 +689,7 @@ export function Pos() {
             </span>
             {canWork(actor, state, 'inventory') ? (
               <button className="button secondary" disabled={busy} onClick={() => setPackageSize(size.id)}>
-                Registrar apertura de paquete
+                Agregar paquetes
               </button>
             ) : (
               <span>Pide al responsable de inventario que registre la apertura.</span>
@@ -817,6 +843,7 @@ export function Pos() {
                 className="button primary full"
                 disabled={
                   busy ||
+                  !canOrders ||
                   !active ||
                   !!state.settings[0].auditId ||
                   (!app.online && !actor.primary) ||
@@ -845,7 +872,7 @@ export function Pos() {
           <div className="cart-heading">
             <div>
               <ShoppingBag size={20} />
-              <h2>{order ? `Pedido #${order.number}` : 'Nuevo pedido'}</h2>
+              <h2>{order ? `Pedido ${orderLabel(order)}` : 'Nuevo pedido'}</h2>
             </div>
             <button
               className="icon-button"
@@ -866,13 +893,48 @@ export function Pos() {
               {open.map((o) => (
                 <button key={o.id} onClick={() => select(o.id)}>
                   <span>
-                    #{o.number} · {profiles.find((p) => p.id === o.sellerId)?.name}
+                    {orderLabel(o)} · {profiles.find((p) => p.id === o.sellerId)?.name}
                   </span>
                   <strong>{money(o.total)}</strong>
                 </button>
               ))}
               {!open.length && <p>No hay pedidos abiertos.</p>}
             </div>
+          )}
+          {canOrders && (
+            <form
+              className="cart-order-name"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!order || customerName.trim() === (order.customerName ?? '')) return;
+                void action(async () => {
+                  await app.run('update_order', {
+                    orderId: order.id,
+                    expectedVersion: order.version,
+                    customerName: customerName.trim(),
+                  });
+                  setNameDraft(null);
+                });
+              }}
+            >
+              <label className="field">
+                <span>Nombre del pedido (opcional)</span>
+                <input
+                  value={customerName}
+                  maxLength={ORDER_NAME_MAX_LENGTH}
+                  placeholder="Ej. María"
+                  disabled={busy}
+                  onChange={(event) =>
+                    setNameDraft({ orderId: order?.id ?? null, value: event.target.value })
+                  }
+                />
+              </label>
+              {order && customerName.trim() !== (order.customerName ?? '') && (
+                <button className="text-button" type="submit" disabled={busy}>
+                  Guardar nombre
+                </button>
+              )}
+            </form>
           )}
           {order ? (
             <>
@@ -918,22 +980,24 @@ export function Pos() {
                           <Plus size={13} />
                         </button>
                       </div>
-                      <button
-                        className={`delivery-chip ${line.delivered === line.quantity ? 'done' : ''}`}
-                        disabled={busy || !canDeliver || !active || line.delivered === line.quantity}
-                        onClick={() =>
-                          void action(() =>
-                            app.run('deliver', {
-                              orderId: order.id,
-                              expectedVersion: order.version,
-                              quantities: { [line.id]: 1 },
-                            }),
-                          )
-                        }
-                      >
-                        <Check size={13} />
-                        {line.delivered}/{line.quantity} entregados
-                      </button>
+                      {!orderAssistant && (
+                        <button
+                          className={`delivery-chip ${line.delivered === line.quantity ? 'done' : ''}`}
+                          disabled={busy || !canDeliver || !active || line.delivered === line.quantity}
+                          onClick={() =>
+                            void action(() =>
+                              app.run('deliver', {
+                                orderId: order.id,
+                                expectedVersion: order.version,
+                                quantities: { [line.id]: 1 },
+                              }),
+                            )
+                          }
+                        >
+                          <Check size={13} />
+                          {line.delivered}/{line.quantity} entregados
+                        </button>
+                      )}
                     </div>
                     {line.discount > 0 && (
                       <small className="discount">Beneficio aplicado: −{money(line.discount)}</small>
@@ -978,16 +1042,18 @@ export function Pos() {
                     })}
                   </details>
                 )}
-                <TastingsEditor
-                  order={order}
-                  busy={busy}
-                  onBusyChange={setBusy}
-                  onEmpty={() => select(null)}
-                />
+                {!orderAssistant && (
+                  <TastingsEditor
+                    order={order}
+                    busy={busy}
+                    onBusyChange={setBusy}
+                    onEmpty={() => select(null)}
+                  />
+                )}
               </div>
               <div className="cart-footer">
                 <div className="cart-total">
-                  <span>Total a cobrar</span>
+                  <span>{orderAssistant ? 'Total del pedido' : 'Total a cobrar'}</span>
                   <strong>{money(order.total)}</strong>
                 </div>
                 {canCash && order.lines.length > 0 ? (
@@ -997,12 +1063,12 @@ export function Pos() {
                       className="button primary full large"
                       disabled={busy || !!state.settings[0].auditId}
                       onClick={() => {
-                        if (threeForTwoId) {
+                        if (eligiblePromotions.length) {
                           setCheckout('payment');
                           return;
                         }
                         void action(async () => {
-                          await app.run('pay', {
+                          const result = await app.run('pay', {
                             orderId: order.id,
                             expectedVersion: order.version,
                             expectedTotal: order.total,
@@ -1010,14 +1076,14 @@ export function Pos() {
                             ...paymentPayload(payment),
                           });
                           app.toast(
-                            `Venta registrada · ${money(order.total)}${paymentNote(payment, state.locations)}`,
+                            `${result.pendingSync ? 'Venta guardada en este equipo, pendiente de sincronizar' : 'Venta registrada'} · ${money(order.total)}${paymentNote(payment, state.locations)}`,
                           );
                           select(null);
                         });
                       }}
                     >
                       <Check size={20} />
-                      {threeForTwoId ? 'Revisar cobro' : 'Cobrar y entregar'}
+                      {eligiblePromotions.length ? 'Revisar cobro' : 'Cobrar y entregar'}
                       <ArrowRight size={18} />
                     </button>
                     {order.paymentCredit === undefined && !order.carriedCouponFromId && (
@@ -1038,16 +1104,28 @@ export function Pos() {
                       Vuelto o entregar después
                     </button>
                   </>
+                ) : order.cashHandoff === 'sent' ? (
+                  <p className="muted">Pedido enviado a caja.</p>
                 ) : order.lines.length > 0 ? (
                   <button
                     className="button primary full"
-                    disabled={busy}
-                    onClick={() => {
-                      select(null);
-                      app.toast('Pedido disponible en el equipo de caja.');
-                    }}
+                    disabled={busy || !app.online || !canOrders}
+                    onClick={() =>
+                      void action(async () => {
+                        const result = await app.run('send_order', {
+                          orderId: order.id,
+                          expectedVersion: order.version,
+                        });
+                        if (result.referenceId !== order.id)
+                          throw new Error(
+                            'El servidor no confirmó el envío. Revisa Estado de sincronización.',
+                          );
+                        select(null);
+                        app.toast('Pedido disponible en el equipo de caja.');
+                      })
+                    }
                   >
-                    Dejar en caja
+                    Enviar a caja
                     <ArrowRight size={18} />
                   </button>
                 ) : (
@@ -1070,16 +1148,18 @@ export function Pos() {
                 {canCancel && order.lines.length > 0 && (
                   <button
                     className="text-button full"
-                    disabled={busy || !!state.settings[0].auditId}
+                    disabled={busy || !canOrders || !!state.settings[0].auditId}
                     onClick={() => void action(cancelOrder)}
                   >
                     <Trash2 size={15} />
                     Cancelar pedido
                   </button>
                 )}
-                <button className="text-button full" disabled={busy} onClick={() => select(null)}>
-                  Guardar y abrir otro pedido
-                </button>
+                {!orderAssistant && (
+                  <button className="text-button full" disabled={busy} onClick={() => select(null)}>
+                    Guardar y abrir otro pedido
+                  </button>
+                )}
               </div>
             </>
           ) : (
@@ -1092,7 +1172,7 @@ export function Pos() {
               <div className="cart-steps">
                 <span>1 · Tamaño</span>
                 <span>2 · Sabor</span>
-                <span>3 · Cobrar</span>
+                <span>{orderAssistant ? '3 · Enviar a caja' : '3 · Cobrar'}</span>
               </div>
             </div>
           )}
@@ -1103,7 +1183,11 @@ export function Pos() {
           )}
           <div className="cart-bottom-note">
             <span className="status-dot green" />{' '}
-            {app.online ? 'Conectado al negocio' : 'Guardado en este equipo'}
+            {app.online
+              ? 'Conectado al negocio'
+              : orderAssistant
+                ? 'Sin conexión'
+                : 'Guardado en este equipo'}
           </div>
         </aside>
       </div>
@@ -1113,7 +1197,7 @@ export function Pos() {
           order={order}
           initialPayment={payment}
           focusCoupon={checkout === 'benefit'}
-          threeForTwoId={threeForTwoId}
+          eligiblePromotions={eligiblePromotions}
           onClose={() => setCheckout(null)}
           onDone={() => {
             setCheckout(null);
@@ -1121,35 +1205,7 @@ export function Pos() {
           }}
         />
       )}
-      {packageSize && (
-        <Modal title="Abrir paquete de vasos" onClose={() => setPackageSize(null)}>
-          <p>
-            Registra el paquete de {state.sizes.find((s) => s.id === packageSize)?.name} que estás usando.
-            Contiene {state.settings[0].cupPackageUnits} vasos.
-          </p>
-          <FieldsForm
-            fields={[
-              ...(state.packages.some((p) => p.sizeId === packageSize && !p.closedAt)
-                ? [
-                    {
-                      name: 'confirmEmpty',
-                      label: 'Confirmo que el paquete anterior está vacío',
-                      type: 'checkbox' as const,
-                      required: true,
-                    },
-                  ]
-                : []),
-            ]}
-            submit="Registrar apertura"
-            onCancel={() => setPackageSize(null)}
-            onSubmit={async (values) => {
-              await app.run('open_package', { sizeId: packageSize, ...values });
-              setPackageSize(null);
-              app.toast('Apertura registrada. Los vasos ya están disponibles en inventario.');
-            }}
-          />
-        </Modal>
-      )}
+      {packageSize && <AddPackages suggested={{ [packageSize]: 1 }} onClose={() => setPackageSize(null)} />}
     </>
   );
 }

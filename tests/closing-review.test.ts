@@ -66,6 +66,32 @@ it('un cuadre coincidente también espera aprobación y conserva su conteo origi
   expect(approved.stock).toHaveLength(0);
 });
 
+it('recupera el sobrante de un cierre aprobado antes de la corrección sin duplicar el efectivo trasladado', () => {
+  const state = close(fixture());
+  const shift = state.shifts[0];
+  const original = state.counts[0];
+  const transferId = 'traslado';
+  shift.retained = 10000;
+  shift.closingFlow = {
+    versions: [
+      {
+        at: NOW,
+        countId: original.id,
+        retained: 10000,
+        sent: 10000,
+        transferId,
+        payments: { cash: 0, transfer: 0, byAccount: {} },
+      },
+    ],
+  };
+  const reviewed = { ...original, id: 'revisado', cash: 23000, retained: 10000 };
+  state.counts.push(reviewed);
+  shift.closingReview = { status: 'approved', countId: reviewed.id };
+  expect(openingExpectedCash(state)).toBe(13000);
+  reviewed.cash = 20000;
+  expect(openingExpectedCash(state)).toBe(10000);
+});
+
 it('sugiere el mayor precio con licor por tamaño solo para vasos faltantes', () => {
   const { sizes } = fixture();
   const variant = { ...sizes[0], id: 'otra-presentacion', alcoholPrice: 15000 };
@@ -85,7 +111,7 @@ it('ajusta faltantes y sobrantes una vez, con referencia al conteo, y la siguien
   expect(stockBalances(approved)[cup]).toBe(16);
   expect(stockBalances(approved)[otherCup]).toBe(2);
   expect(approved.stock.filter((m) => m.reason === 'closing_adjustment')).toHaveLength(2);
-  expect(approved.shifts[0].closingReview?.employeeCharge).toBe(2000);
+  expect(approved.shifts[0].closingReview?.employeeCharge).toBeUndefined();
   expect(() => run(approved, 'approve_closing', approval(approved), admin)).toThrow(/ya fue aprobado/);
   expect(closingPreview(approved, ids.shift).expectedItems[cup]).toBe(16);
 });
@@ -100,9 +126,7 @@ it('la revisión solo corresponde a un administrador conectado', () => {
   expect(() => run(state, 'approve_closing', approval(state, ids.shift, { notes: '' }), admin)).toThrow(
     /obligatorio/,
   );
-  expect(() =>
-    run(state, 'approve_closing', approval(state, ids.shift, { employeeCharge: 1 }), admin),
-  ).toThrow(/No hay faltantes/);
+  expect(() => run(state, 'record_employee_recovery', { shiftId: ids.shift }, admin)).toThrow(/fue retirado/);
 });
 
 it('un cierre anterior conserva su diferencia sin duplicar el ajuste de un arqueo posterior', () => {

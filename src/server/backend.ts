@@ -1,5 +1,6 @@
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import type { Command, Device, Profile, Result, State } from '../domain/types.ts';
+import type { CounterScope, StateChanges } from './counter-state.ts';
 export interface DeviceSecret extends Device {
   tokenHash: string;
 }
@@ -20,9 +21,10 @@ export interface Backend {
   saveDevice(device: DeviceSecret): Promise<void>;
   setPrimary(id: string): Promise<void>;
   load(): Promise<{ state: State; revision: number }>;
+  loadCounter(scope: CounterScope): Promise<{ state: StateChanges; revision: number }>;
   revision(): Promise<number>;
   receipt(id: string): Promise<{ actorId: string; result: Result } | null>;
-  commit(revision: number, command: Command, state: State, result: Result): Promise<Result>;
+  commit(revision: number, command: Command, state: StateChanges, result: Result): Promise<Result>;
   security(action: string, payload?: Record<string, unknown>): Promise<any>;
   superAdmin(action: string, payload?: Record<string, unknown>): Promise<any>;
   rate(key: string, limit?: number, seconds?: number): Promise<boolean>;
@@ -160,13 +162,21 @@ export class SupabaseBackend implements Backend {
   async revision() {
     return (await this.security('revision')).revision as number;
   }
+  async loadCounter(scope: CounterScope) {
+    return checked(
+      await this.client.rpc('dexter_branch_read_counter', {
+        p_branch: this.branchId,
+        p_scope: scope,
+      }),
+    ) as { state: StateChanges; revision: number };
+  }
   async receipt(id: string) {
     let query = this.client.from('command_receipts').select('actor_id,result').eq('id', id);
     if (this.branchId) query = query.eq('branch_id', this.branchId);
     const row = checked(await query.maybeSingle());
     return row ? { actorId: row.actor_id, result: row.result as Result } : null;
   }
-  async commit(revision: number, command: Command, state: State, result: Result) {
+  async commit(revision: number, command: Command, state: StateChanges, result: Result) {
     return checked(
       await this.client.rpc(this.branchId ? 'dexter_branch_commit' : 'dexter_commit', {
         ...(this.branchId ? { p_branch: this.branchId } : {}),

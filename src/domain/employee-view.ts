@@ -1,10 +1,16 @@
-import { cashExpected, salesByMethod } from './engine.ts';
+import {
+  cashExpected,
+  closingPaymentMethods,
+  currentPayments,
+  paymentMethod,
+  salesByMethod,
+} from './engine.ts';
 import { shiftSales } from './turn-review.ts';
 import { rehearsalShift } from './closing-archive.ts';
 import { initialState } from './initial.ts';
 import { rehearsalRequest } from './closing-archive.ts';
 import { orderPaymentLabels } from './payment-methods.ts';
-import { isCounterThreeForTwo } from './pricing.ts';
+import { isOrderAssistant } from './access.ts';
 import type { Actor, Order, Promotion, Shift, State } from './types.ts';
 
 export function operatingShift(state: State): Shift | undefined {
@@ -25,7 +31,7 @@ export function operatingShift(state: State): Shift | undefined {
 function publicPromotion(promotion: Promotion): Promotion {
   // Caja necesita saber si queda un canje disponible sin exponer el cupo ni su contador.
   const maxRedemptions =
-    isCounterThreeForTwo(promotion) && promotion.maxRedemptions !== null
+    promotion.delivery === 'schedule' && promotion.maxRedemptions !== null
       ? Number(promotion.redemptions < promotion.maxRedemptions)
       : null;
   return { ...promotion, by: '', maxRedemptions, redemptions: 0 };
@@ -53,7 +59,8 @@ export function employeeView(full: State, actor: Actor): State {
   const safe = initialState();
   const settings = full.settings[0];
   const active = full.shifts.find((shift) => shift.status === 'open') ?? operatingShift(full);
-  const isCashier = active?.cashierId === actor.id;
+  const orderAssistant = isOrderAssistant(actor, full);
+  const isCashier = active?.cashierId === actor.id && !orderAssistant;
   const onShift = (record: { shiftId?: string; openedAt: string }) =>
     !!active &&
     (record.shiftId ? record.shiftId === active.id : !!active.openedAt && record.openedAt >= active.openedAt);
@@ -65,7 +72,10 @@ export function employeeView(full: State, actor: Actor): State {
       businessName: settings.businessName,
       cupPackageUnits: settings.cupPackageUnits,
       bagOunces: settings.bagOunces,
+      supplies: settings.supplies,
       candyPrices: settings.candyPrices,
+      expenseLimit: settings.expenseLimit,
+      expenseCategories: settings.expenseCategories,
       maxClosingBase: settings.maxClosingBase ?? settings.cashLimit,
       auditId: settings.auditId,
       openingChecklist:
@@ -91,8 +101,14 @@ export function employeeView(full: State, actor: Actor): State {
   ];
   safe.flavors = full.flavors;
   safe.sizes = full.sizes;
-  safe.orders = full.orders.filter((order) => order.shiftId === active?.id).map(publicOrder);
-  safe.orderPaymentMethods = orderPaymentLabels(full, safe.orders);
+  safe.orders = full.orders
+    .filter(
+      (order) =>
+        order.shiftId === active?.id &&
+        ((!orderAssistant && order.cashHandoff !== 'draft') || order.sellerId === actor.id),
+    )
+    .map(publicOrder);
+  if (!orderAssistant) safe.orderPaymentMethods = orderPaymentLabels(full, safe.orders);
   safe.shifts = full.shifts
     .filter((shift) => shift.cashierId === actor.id)
     .map(
@@ -108,11 +124,17 @@ export function employeeView(full: State, actor: Actor): State {
           openingSkipped: shift.openingSkipped,
           openingCountId: shift.openingCountId,
           closingCountMode: shift.closingCountMode,
-          closingCountId: shift.blindOpening?.depth ? shift.closingCountId : undefined,
+          reconcileClosingId: shift.reconcileClosingId,
+          closingSupplies: shift.closingSupplies,
+          visibleClosing: shift.visibleClosing,
+          closingCountId:
+            shift.blindOpening?.depth || shift.visibleClosing ? shift.closingCountId : undefined,
           closingFlow: shift.closingFlow,
           closingReview: shift.closingReview && {
             status: shift.closingReview.status,
-            ...(shift.blindOpening?.depth ? { countId: shift.closingReview.countId } : {}),
+            ...(shift.blindOpening?.depth || shift.visibleClosing
+              ? { countId: shift.closingReview.countId }
+              : {}),
           },
           blindOpening: shift.operationsReview?.openingResolution
             ? { status: 'reviewed', depth: shift.blindOpening?.depth }
@@ -131,7 +153,9 @@ export function employeeView(full: State, actor: Actor): State {
               },
           blindClosing:
             shift.blindClosing &&
-            (shift.blindOpening?.depth ? shift.blindClosing : { status: shift.blindClosing.status }),
+            (shift.blindOpening?.depth || shift.visibleClosing
+              ? shift.blindClosing
+              : { status: shift.blindClosing.status }),
         }) as Shift,
     );
   if (active && !isCashier)
@@ -143,6 +167,21 @@ export function employeeView(full: State, actor: Actor): State {
         (!!active.blindOpening &&
           !['authorized', 'matched', 'reviewed'].includes(active.blindOpening.status)),
     };
+  const syncReviews = full.requests.filter((request) => request.type === 'sync' && request.by === actor.id);
+  safe.resolvedSyncIds =
+    full.resolvedSyncIds ??
+    syncReviews
+      .filter((request) => request.status !== 'pending' || rehearsalRequest(full, request))
+      .map((request) => request.id);
+  safe.pendingSyncReviewIds =
+    full.pendingSyncReviewIds ??
+    syncReviews
+      .filter((request) => request.status === 'pending' && !rehearsalRequest(full, request))
+      .map((request) => request.id);
+  if (orderAssistant) {
+    safe.shifts = [];
+    return safe;
+  }
   safe.locations = full.locations
     .filter(
       (location) =>
@@ -184,13 +223,13 @@ export function employeeView(full: State, actor: Actor): State {
     .filter((promotion) => promotion.delivery === 'schedule')
     .map(publicPromotion);
   safe.packages = full.packages
-    .filter(onShift)
+    .filter((item) => !item.voidedAt && onShift(item))
     .map(
       ({ id, sizeId, openedAt, shiftId }) =>
         ({ id, sizeId, openedAt, shiftId: shiftId ?? active?.id }) as State['packages'][number],
     );
   safe.bags = full.bags
-    .filter(onShift)
+    .filter((item) => !item.voidedAt && onShift(item))
     .map(
       ({ id, flavorId, openedAt, shiftId }) =>
         ({ id, flavorId, openedAt, shiftId: shiftId ?? active?.id }) as State['bags'][number],
@@ -217,7 +256,7 @@ export function employeeView(full: State, actor: Actor): State {
   safe.shifts = safe.shifts.filter((shift) => visibleShifts.some((item) => item.id === shift.id));
   const closingCounts = new Set(
     visibleShifts
-      .filter((shift) => shift.blindOpening?.depth)
+      .filter((shift) => shift.blindOpening?.depth || shift.visibleClosing)
       .flatMap((shift) => [
         ...(shift.blindClosing?.countIds ?? []),
         shift.closingReview?.countId,
@@ -231,8 +270,52 @@ export function employeeView(full: State, actor: Actor): State {
       .filter((shift) => shift.status === 'open' || shift.closingFlow)
       .map((shift) => {
         const totals = salesByMethod(full, shift.id);
+        const payments = currentPayments(full.payments).filter(
+          (item) => item.shiftId === shift.id && item.amount > 0,
+        );
+        const expenses = full.expenses.filter(
+          (item) => item.shiftId === shift.id && item.status !== 'rejected',
+        );
+        const handoffs = full.transfers.filter(
+          (item) => item.from === `cash:${shift.id}` && item.status !== 'cancelled',
+        );
+        const cashPayments = payments.filter((item) => paymentMethod(item) === 'cash').length;
+        const cards = [
+          { id: 'cash', name: 'Efectivo', amount: totals.cash, count: cashPayments, confirmed: cashPayments },
+          ...closingPaymentMethods(full, shift.id).map(({ id, account }) => {
+            const items = payments.filter(
+              (item) => paymentMethod(item) === 'transfer' && item.accountId === account.id,
+            );
+            const confirmed = items.filter((item) => {
+              const mark = shift.operationsReview?.verifiedTransfers?.[item.id];
+              return mark && !mark.missing;
+            }).length;
+            return {
+              id,
+              name: account.name,
+              amount: totals.byAccount[account.id] ?? 0,
+              count: items.length,
+              confirmed,
+            };
+          }),
+          {
+            id: 'expenses',
+            name: 'Gastos',
+            amount: expenses.reduce((sum, item) => sum + item.amount, 0),
+            count: expenses.length,
+            confirmed: expenses.filter((item) => item.status === 'approved').length,
+          },
+          {
+            id: 'handoffs',
+            name: 'Traslados',
+            amount: handoffs.reduce((sum, item) => sum + item.amount, 0),
+            count: handoffs.length,
+            confirmed: handoffs.filter((item) => item.status === 'confirmed').length,
+          },
+        ];
         return {
           shiftId: shift.id,
+          cards,
           sizes: [...shiftSales(full, shift).unitsBySize].map(([id, quantity]) => ({
             name: full.sizes.find((item) => item.id === id)?.name ?? id,
             quantity,
@@ -308,15 +391,5 @@ export function employeeView(full: State, actor: Actor): State {
           !rehearsalRequest(full, request),
       )
       .map(({ id, notes, at }) => ({ id, notes, at }));
-  safe.resolvedSyncIds =
-    full.resolvedSyncIds ??
-    full.requests
-      .filter(
-        (request) =>
-          request.type === 'sync' &&
-          request.by === actor.id &&
-          (request.status !== 'pending' || rehearsalRequest(full, request)),
-      )
-      .map((request) => request.id);
   return safe;
 }

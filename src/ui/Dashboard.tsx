@@ -502,6 +502,34 @@ export function Dashboard() {
               )}
             </Panel>
           </div>
+          <Panel title="Ventas por promoción">
+            {data.promotions.length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Promoción</th>
+                      <th>Pedidos</th>
+                      <th>Vasos</th>
+                      <th>Descuento</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.promotions.map((item) => (
+                      <tr key={item.id}>
+                        <th scope="row">{item.name}</th>
+                        <td>{item.orders}</td>
+                        <td>{item.cups}</td>
+                        <td>{money(item.discount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty title="Sin promociones aplicadas en este período" />
+            )}
+          </Panel>
           <Panel title="Ventas por tamaño, sabor y licor">
             {data.tickets ? (
               <div className="dashboard-goals">

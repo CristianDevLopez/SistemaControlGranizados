@@ -16,8 +16,7 @@ export function employeeRequestCount(state: State) {
         shift.status === 'requested' ||
         shift.blindOpening?.status === 'audit' ||
         shift.closingReview?.status === 'pending' ||
-        shift.closingReview?.status === 'returned' ||
-        (!!shift.closingFlow?.responseDueAt && !shift.closingFlow.response),
+        shift.closingReview?.status === 'returned',
     ).length +
     Number(!!state.settings[0].auditRequest)
   );
@@ -36,10 +35,7 @@ export function EmployeeRequests({ onShift }: { onShift: () => void }) {
   );
   const audits = !!state.settings[0].auditRequest || opening?.blindOpening?.status === 'audit';
   const hasClosing = state.shifts.some(
-    (item) =>
-      item.closingReview?.status === 'pending' ||
-      item.closingReview?.status === 'returned' ||
-      item.closingFlow?.responseDueAt,
+    (item) => item.closingReview?.status === 'pending' || item.closingReview?.status === 'returned',
   );
   return (
     <div className="page-stack">
