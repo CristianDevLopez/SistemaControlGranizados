@@ -259,6 +259,9 @@ test('recupera el timeout que bloqueaba la cola y registra la venta una sola vez
     { ...options, sequence: 12 },
   );
   const pay = cmd('pay', { orderId, deliver: true }, cashier, { ...options, sequence: 13 });
+  const commandControl = 'http://127.0.0.1:5180/test/commands';
+  await request.post(commandControl, { data: { paused: true } });
+  await page.clock.setFixedTime(new Date());
   await seedOutbox(page, [
     {
       ...pending(outage),
@@ -274,28 +277,24 @@ test('recupera el timeout que bloqueaba la cola y registra la venta una sola vez
     pending(pay),
   ]);
 
-  let timeout = true;
-  await page.route('**/dexter/commands', async (route) => {
-    if (timeout && route.request().postDataJSON().commands[0].id === outage.id) {
-      return route.fulfill({ status: 503, json: { code: 'RETRY_SYNC', error: 'Reintento pendiente.' } });
-    }
-    await route.continue();
-  });
-  await page.reload();
-  await page.getByRole('button', { name: 'Estado de sincronización' }).click();
-  await expect(page.getByText('Operación 11')).toBeVisible();
-  await expect(page.getByText('Por conciliar', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('Reintento pendiente.')).toBeVisible();
-  expect((await snapshot(request)).state.payments).toHaveLength(0);
+  try {
+    await page.reload();
+    await page.getByRole('button', { name: 'Estado de sincronización' }).click();
+    await expect(page.getByText('Operación 11')).toBeVisible();
+    await expect(page.getByText('Por conciliar', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('Error temporal de prueba')).toBeVisible();
+    expect((await snapshot(request)).state.payments).toHaveLength(0);
 
-  const prematureRetry = page.waitForRequest('**/dexter/commands', { timeout: 700 }).then(
-    () => true,
-    () => false,
-  );
-  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  expect(await prematureRetry).toBe(false);
-
-  timeout = false;
+    const prematureRetry = page.waitForRequest('**/dexter/commands', { timeout: 700 }).then(
+      () => true,
+      () => false,
+    );
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    expect(await prematureRetry).toBe(false);
+    expect(await (await request.get(commandControl)).json()).toEqual({ pausedCommandAttempts: 1 });
+  } finally {
+    await request.post(commandControl, { data: { paused: false } });
+  }
   await page.getByRole('button', { name: 'Sincronizar ahora' }).click();
   await expect(page.getByText('Todas tus operaciones están sincronizadas.')).toBeVisible();
   const synced = (await snapshot(request)).state;
