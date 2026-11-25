@@ -240,6 +240,8 @@ test('un combinado conserva sus sabores al recargar y descuenta solo su porción
   await add.click();
   await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.locator('.cart-total')).toContainText('17.000');
+  const sync = page.getByRole('button', { name: 'Estado de sincronización' });
+  await expect(sync).toContainText('Sincronizado');
   await page.reload();
   await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.locator('.cart-line:has(.cart-line-head)')).toContainText(
@@ -253,9 +255,10 @@ test('un combinado conserva sus sabores al recargar y descuenta solo su porción
   await page.getByRole('button', { name: 'Aumentar cantidad', exact: true }).click();
   await page.getByRole('button', { name: '0/2 entregados', exact: true }).click();
   await expect(page.getByRole('button', { name: '1/2 entregados', exact: true })).toBeVisible();
+  await expect(sync).toContainText('Sincronizado');
   await page.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
-  await expect(page.getByText('Venta registrada ·')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('Sincronizado');
+  await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
+  await expect(sync).toContainText('Sincronizado');
   await nav(page, 'Pedidos');
   await page.getByRole('button', { name: 'Cobrados', exact: true }).click();
   await expect(page.locator('tbody')).toContainText('Sabor de prueba con licor + Sabor de prueba sin licor');

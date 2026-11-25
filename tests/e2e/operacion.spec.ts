@@ -1079,17 +1079,23 @@ test('comparte un QR legible y canjea dos de tres cortesías sin consumir la sob
     await nav(cash, 'Mostrador');
     await cash.locator('.flavor-card').filter({ hasText: 'Sabor de prueba con licor' }).click();
     await cash.getByRole('button', { name: 'Aumentar cantidad', exact: true }).click();
+    await expect(cash.getByRole('button', { name: 'Estado de sincronización' })).toContainText(
+      'Sincronizado',
+    );
     await cash.getByRole('button', { name: 'Redimir cupón, cortesía o promoción', exact: true }).click();
+    const checkout = cash.getByRole('dialog', { name: /^Cobrar pedido/ });
     for (const coupon of coupons) {
-      await cash.getByPlaceholder('Escribir código', { exact: true }).fill(coupon.code);
-      await cash.getByRole('button', { name: 'Validar', exact: true }).click();
-      await expect(cash.getByPlaceholder('Escribir código', { exact: true })).toHaveValue('');
+      const input = checkout.getByPlaceholder('Escribir código', { exact: true });
+      await input.fill(coupon.code);
+      await checkout.getByRole('button', { name: 'Validar', exact: true }).click();
+      await expect(checkout.locator('.coupon-tags')).toContainText(coupon.code);
+      await expect(input).toHaveValue('');
     }
-    await expect(cash.getByRole('dialog')).toContainText('Sin canjear:');
-    await expect(cash.locator('.checkout-amount')).toContainText(/\$\s*0/);
-    await expect(cash.getByLabel('Efectivo recibido', { exact: false })).toHaveCount(0);
-    await cash.getByRole('button', { name: 'Registrar cortesía y entregar', exact: true }).click();
-    await expect(cash.getByRole('dialog')).toHaveCount(0);
+    await expect(checkout).toContainText('Sin canjear:');
+    await expect(checkout.locator('.checkout-amount')).toContainText(/\$\s*0/);
+    await expect(checkout.getByLabel('Efectivo recibido', { exact: false })).toHaveCount(0);
+    await checkout.getByRole('button', { name: 'Registrar cortesía y entregar', exact: true }).click();
+    await expect(checkout).toHaveCount(0);
     const final = (await snapshot(request)).state;
     expect(final.coupons.filter((c: any) => c.status === 'redeemed')).toHaveLength(2);
     expect(final.coupons.filter((c: any) => c.status === 'issued')).toHaveLength(1);
