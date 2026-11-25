@@ -5,7 +5,8 @@ export function canCorrectTastings(actor: Actor, order: Order, activeShift?: Shi
   return actor.role === 'admin' || order.shiftId === activeShift?.id;
 }
 
-export const expenseCustodianMessage = 'El costo debe revisarlo un administrador distinto del custodio del pago.';
+export const expenseCustodianMessage =
+  'El costo debe revisarlo un administrador distinto del custodio del pago.';
 
 export function expenseCustodianId(state: State, expense: Expense): string {
   if (expense.source === 'treasury')
