@@ -51,6 +51,9 @@ for (const account of [
     await page.screenshot({ path: testInfo.outputPath('caja-admin-iniciada.png'), fullPage: true });
     await nav(page, 'Mostrador');
     await page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
+    const received = page.getByLabel('Efectivo recibido', { exact: false });
+    await received.fill('20.000');
+    await expect(page.getByText(/Vuelto: .*6.000/)).toBeVisible();
     await page.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
     await expect(page.getByText('Venta registrada ·', { exact: false })).toBeVisible();
     await nav(page, 'Turno y caja');
@@ -72,9 +75,22 @@ for (const account of [
     await supplies.getByRole('button', { name: 'Guardar', exact: true }).click();
     await expect(supplies).toHaveCount(0);
 
+    let previewRequests = 0;
+    await page.route('**/dexter/closing-preview', async (route) => {
+      previewRequests++;
+      if (previewRequests === 1) {
+        await route.fulfill({ status: 503, json: { error: 'El servidor tardó en responder.' } });
+      } else await route.continue();
+    });
     await page.getByRole('button', { name: 'Cerrar y contar caja', exact: true }).click();
     const closing = page.getByRole('dialog', { name: 'Cierre de caja' });
+    await expect(closing.getByText('El servidor tardó en responder.')).toBeVisible();
+    await closing.getByRole('button', { name: 'Reintentar consulta' }).click();
     await expect(closing).toContainText('Paquetes cerrados');
+    const refreshed = page.waitForResponse('**/dexter/snapshot?since=*');
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect((await refreshed).ok()).toBe(true);
+    expect(previewRequests).toBe(2);
     await expect(closing).not.toContainText(/Bolsas selladas|Coronitas/);
     await expect(closing.getByRole('spinbutton', { name: 'Pitillo cuchara' })).toBeVisible();
     await enterVisibleClosing(page, '26.000', { 'Cuenta de prueba': '0' }, { 'Pitillo cuchara': '3' });

@@ -47,7 +47,7 @@ import { Badge, Modal, date } from './ui/components.tsx';
 import { downloadFile } from './lib/export.ts';
 import { outboxBlockers, type OutboxEntry } from './lib/db.ts';
 import { roleLabels } from './domain/views.ts';
-import { isOrderAssistant } from './domain/access.ts';
+import { hasPermission, isOrderAssistant } from './domain/access.ts';
 import type { Role } from './domain/types.ts';
 const pages = [
   { id: 'pos', label: 'Mostrador', icon: ShoppingBag, group: 'OPERACIÓN' },
@@ -55,7 +55,7 @@ const pages = [
   { id: 'inventory', label: 'Inventario', icon: Package },
   { id: 'cash', label: 'Turno y caja', icon: Wallet },
   { id: 'control', label: 'Solicitudes', icon: ClipboardList },
-  { id: 'purchases', label: 'Compras y gastos', icon: Truck, admin: true },
+  { id: 'purchases', label: 'Compras y gastos', icon: Truck },
   { id: 'today', label: 'Hoy', icon: LayoutDashboard, admin: true, group: 'ADMINISTRACIÓN' },
   { id: 'money', label: 'Dinero', icon: Wallet, admin: true },
   { id: 'dashboard', label: 'Ventas', icon: LayoutDashboard, admin: true },
@@ -114,6 +114,11 @@ export function App() {
         (p) =>
           (!p.admin || actor.role === 'admin') &&
           (!orderAssistant || p.id === 'pos') &&
+          (p.id !== 'purchases' ||
+            actor.role === 'admin' ||
+            (actor.role === 'encargado' &&
+              state.shifts.some((shift) => shift.status === 'open') &&
+              (hasPermission(actor, 'inventory') || hasPermission(actor, 'expenses')))) &&
           (p.id !== 'locals' || app.data?.branch?.isOwner || (app.sessionActor?.superAdmin && !app.viewRole)),
       )
       .map((item) => {
@@ -161,7 +166,7 @@ export function App() {
             navigate('pos');
           }}
         >
-          <img src="/dexter.jpg" alt="Dexter’s" />
+          <img src="/LogoDexterTaraza.jpeg" alt="" />
           <span>
             <strong>
               DEXTER’S<span>GRANIZADOS</span>
@@ -284,7 +289,7 @@ export function App() {
                 onClick={() => setSyncOpen(true)}
                 aria-label="Estado de sincronización"
               >
-                {app.syncing ? (
+                {app.syncing || app.reconnecting ? (
                   <RefreshCw size={16} className="spin" />
                 ) : app.online ? (
                   <Wifi size={16} />
@@ -296,9 +301,11 @@ export function App() {
                     ? `${conflicts} por revisar`
                     : pending
                       ? `${pending} pendientes`
-                      : app.online
-                        ? 'Sincronizado'
-                        : 'Sin conexión'}
+                      : app.reconnecting
+                        ? 'Reconectando…'
+                        : app.online
+                          ? 'Sincronizado'
+                          : 'Sin conexión'}
                 </span>
               </button>
             </div>
@@ -485,9 +492,11 @@ export function App() {
         <Modal title="Estado de sincronización" onClose={() => setSyncOpen(false)}>
           <div className="detail-content">
             <p>
-              {app.online
-                ? 'Conexión disponible.'
-                : 'El servidor no está disponible. Las operaciones locales se conservan.'}
+              {app.reconnecting
+                ? 'Reintentando la conexión con el servidor. Los registros guardados se conservan.'
+                : app.online
+                  ? 'Conexión disponible.'
+                  : 'Sin conexión con el servidor. Los registros guardados se conservan.'}
             </p>
             <p>
               Último contacto con el servidor: <strong>{date(app.lastSync ?? undefined)}</strong>

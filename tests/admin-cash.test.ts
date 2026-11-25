@@ -160,7 +160,7 @@ it('el encargado abre con un conteo ciego y apoyo no puede abrir caja', async ()
   );
   const shiftId = opening.result.referenceId;
   expect((await db.load()).state.shifts[0]).toMatchObject({
-    status: 'open',
+    status: 'requested',
     cashierId: cashier.id,
     base: 0,
     blindOpening: { status: 'pending' },
@@ -171,6 +171,16 @@ it('el encargado abre con un conteo ciego y apoyo no puede abrir caja', async ()
       .result.status,
   ).toBe('conflict');
   const items = Object.fromEntries(blindCountArticles(fixture()).map((a) => [a.id, 0]));
+  expect(
+    (await send('submit_blind_count', { kind: 'opening', shiftId, cash: 0, attempt: 1, items }, cashier))
+      .result.status,
+  ).toBe('conflict');
+  await accepted('authorize_shift', { shiftId, base: 0, openingItems: [`sealed_bag:${ids.flavor}`] });
+  expect((await db.load()).state.shifts[0]).toMatchObject({
+    status: 'open',
+    authorizedBy: admin.id,
+    blindOpening: { status: 'pending', items: [`sealed_bag:${ids.flavor}`] },
+  });
   const counted = await accepted(
     'submit_blind_count',
     { kind: 'opening', shiftId, cash: 0, attempt: 1, items },
@@ -195,16 +205,46 @@ it('un retiro de Nequi reduce la cuenta al ejecutar y aumenta el efectivo al con
   });
   const from = account.result.referenceId!;
   const to = custody.result.referenceId!;
-  const requested = await accepted('request_transfer', { from, to, amount: 20000, notes: 'Retiro' });
-  const transferId = requested.result.referenceId;
+  expect(
+    (await send('execute_transfer', { from, to, amount: 20000, notes: 'Retiro ajeno' }, other)).result.status,
+  ).toBe('conflict');
+  const movement = await accepted('execute_transfer', { from, to, amount: 20000, notes: 'Retiro' });
+  const transferId = movement.result.referenceId;
+  await request('commands', { commands: [movement.command] });
   let { state } = await db.load();
-  expect([locationBalance(state, from), locationBalance(state, to)]).toEqual([85000, 0]);
-  await accepted('execute_transfer', { transferId });
-  ({ state } = await db.load());
+  expect(state.transfers).toMatchObject([{ id: transferId, status: 'in_transit', executedBy: admin.id }]);
   expect([locationBalance(state, from), locationBalance(state, to)]).toEqual([65000, 0]);
   await accepted('confirm_transfer', { transferId, receivedAmount: 20000 }, other);
   ({ state } = await db.load());
   expect([locationBalance(state, from), locationBalance(state, to)]).toEqual([65000, 20000]);
+});
+
+it('confirma al ejecutar un traslado entre cuentas del mismo custodio', async () => {
+  const origin = await accepted('save_location', {
+    name: 'Nequi',
+    type: 'bank',
+    bank: 'Nequi',
+    account: '3000000000',
+    custodianId: admin.id,
+    openingBalance: 85000,
+  });
+  const destination = await accepted('save_location', {
+    name: 'Caja propia',
+    type: 'treasury',
+    custodianId: admin.id,
+  });
+  const from = origin.result.referenceId!;
+  const to = destination.result.referenceId!;
+  const movement = await accepted('execute_transfer', { from, to, amount: 20000, notes: 'Retiro propio' });
+  const transferId = movement.result.referenceId;
+  const { state } = await db.load();
+  expect([locationBalance(state, from), locationBalance(state, to)]).toEqual([65000, 20000]);
+  expect(state.transfers.find((item) => item.id === transferId)).toMatchObject({
+    status: 'confirmed',
+    executedBy: admin.id,
+    confirmedBy: admin.id,
+    receivedAmount: 20000,
+  });
 });
 
 it('el titular retoma su caja desde su nueva sesión MFA y otro admin no puede cobrarla', async () => {

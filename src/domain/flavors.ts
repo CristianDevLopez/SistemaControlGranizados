@@ -2,6 +2,41 @@ import type { Flavor, OrderLine } from './types.ts';
 
 type FlavorSelection = Pick<OrderLine, 'flavorId' | 'flavorIds'>;
 
+const catalog = [
+  'manzana-verde',
+  'fresa-boom',
+  'mango-biche',
+  'maracumango',
+  'santorini',
+  'perla-negra',
+  'ojo-de-diablo',
+  'cool-blue',
+  'smirnoff',
+  'red-fantasy',
+];
+
+function flavorSlug(name: string) {
+  return name
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/\s+/g, '-');
+}
+
+export function catalogFlavorPhoto(name: string) {
+  const slug = flavorSlug(name);
+  return catalog.includes(slug) ? `/flavors/${slug}.webp` : undefined;
+}
+
+export function orderedFlavors<T extends Pick<Flavor, 'name'>>(flavors: T[]) {
+  const rank = (name: string) => {
+    const index = catalog.indexOf(flavorSlug(name));
+    return index === -1 ? catalog.length : index;
+  };
+  return [...flavors].sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name, 'es'));
+}
+
 export function lineFlavorIds(line: FlavorSelection): string[] {
   return line.flavorIds?.length ? line.flavorIds : [line.flavorId];
 }

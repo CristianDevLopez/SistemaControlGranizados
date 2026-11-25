@@ -1,9 +1,11 @@
-import { lineFlavorIds, liquidPortions } from '../domain/flavors.ts';
+import { lineFlavorIds, liquidPortions, orderedFlavors } from '../domain/flavors.ts';
 import type { Flavor, OrderLine, State } from '../domain/types.ts';
 
 export function flavorName(line: Pick<OrderLine, 'flavorId' | 'flavorIds'>, flavors: Flavor[]) {
-  return lineFlavorIds(line)
-    .map((id) => flavors.find((flavor) => flavor.id === id)?.name ?? 'Sabor')
+  return orderedFlavors(
+    lineFlavorIds(line).map((id) => ({ name: flavors.find((flavor) => flavor.id === id)?.name ?? 'Sabor' })),
+  )
+    .map(({ name }) => name)
     .join(' + ');
 }
 
@@ -14,11 +16,13 @@ export function FlavorPortions({ line, state }: { line: OrderLine; state: State 
   return (
     <small className="flavor-portions">
       Por vaso:{' '}
-      {liquidPortions(line, ounces)
-        .map(
-          (portion) =>
-            `${state.flavors.find((flavor) => flavor.id === portion.flavorId)?.name ?? 'Sabor'}: ${portionLabel(portion.ounces, ids.length)}`,
-        )
+      {orderedFlavors(
+        liquidPortions(line, ounces).map((portion) => ({
+          ...portion,
+          name: state.flavors.find((flavor) => flavor.id === portion.flavorId)?.name ?? 'Sabor',
+        })),
+      )
+        .map(({ name, ounces }) => `${name}: ${portionLabel(ounces, ids.length)}`)
         .join(' · ')}
     </small>
   );

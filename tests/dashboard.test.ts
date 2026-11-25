@@ -60,11 +60,20 @@ describe('dashboard administrativo', () => {
       original,
       sale({ id: 'new', replacesId: original.id, paymentCredit: 14000, total: 10000 }),
     ];
-    state.payments = [payment(), payment({ orderId: 'new', type: 'refund', amount: -4000 })];
+    state.payments = [
+      payment({ orderId: original.id, at: '2026-10-22T16:00:00Z' }),
+      payment({ orderId: 'new', type: 'refund', amount: -4000 }),
+    ];
     expect(dashboardData(state, filter)).toMatchObject({
       amount: 10000,
       tickets: 1,
-      receipts: 10000,
+      methods: [{ key: 'cash', amount: 10000 }],
+      refunds: 4000,
+    });
+    state.orders[1].status = 'voided';
+    expect(dashboardData(state, filter)).toMatchObject({
+      amount: 0,
+      methods: [{ key: 'cash', amount: 0 }],
       refunds: 4000,
     });
   });
@@ -84,12 +93,12 @@ describe('dashboard administrativo', () => {
   });
   it('registra un reembolso por su fecha efectiva, aunque la venta sea de otro periodo', () => {
     const state = fixture();
-    state.orders = [sale({ status: 'voided', paidAt: '2026-10-22T16:00:00Z' })];
+    state.orders = [sale({ id: 'order', status: 'voided', paidAt: '2026-10-22T16:00:00Z' })];
     state.payments = [payment({ at: '2026-10-22T16:00:00Z' }), payment({ type: 'refund', amount: -14000 })];
     expect(dashboardData(state, filter)).toMatchObject({
       amount: 0,
       tickets: 0,
-      receipts: -14000,
+      methods: [{ key: 'cash', amount: 0 }],
       refunds: 14000,
     });
   });
@@ -103,8 +112,13 @@ describe('dashboard administrativo', () => {
     });
     state.orders = [sale(), sale({ shiftId: 'other-shift' })];
     state.payments = [
-      payment(),
-      payment({ shiftId: 'other-shift', method: 'transfer', accountId: ids.location }),
+      payment({ orderId: state.orders[0].id }),
+      payment({
+        orderId: state.orders[1].id,
+        shiftId: 'other-shift',
+        method: 'transfer',
+        accountId: ids.location,
+      }),
     ];
     state.expenses = ['approved', 'pending', 'rejected']
       .map(
@@ -126,7 +140,7 @@ describe('dashboard administrativo', () => {
       .map((e) => ({ ...e, status: e.status as 'approved' | 'pending' | 'rejected' }));
     expect(dashboardData(state, { ...filter, shiftId: ids.shift })).toMatchObject({
       tickets: 1,
-      receipts: 14000,
+      methods: [{ key: 'cash', amount: 14000 }],
       expenses: 5000,
     });
     expect(dashboardData(state, filter).methods.map((m) => m.amount)).toEqual([14000, 14000]);

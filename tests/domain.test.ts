@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applyCommand,
   cashExpected,
+  locationBalance,
   openingExpectedCash,
   physicalArticles,
   stockBalances,
@@ -82,8 +83,10 @@ describe('Operación del mostrador', () => {
     expect(cashExpected(s, ids.shift)).toBe(15000);
   });
   it('exige tres aprobaciones distintas antes de ejecutar un reembolso', () => {
+    const waiting = fixture();
+    waiting.locations[0].custodianId = other.id;
     let s = run(
-      fixture(),
+      waiting,
       'expense',
       {
         source: 'personal',
@@ -207,7 +210,7 @@ describe('Operación del mostrador', () => {
     ).toThrow(/folio/);
   });
   it('cierra con base retenida y remanente solicitado sin descontarlo todavía', () => {
-    let s = run(fixture(), 'count', {
+    const s = run(fixture(), 'count', {
       kind: 'closing',
       payments: { [`transfer:${ids.location}`]: 0 },
       shiftId: ids.shift,
@@ -222,10 +225,10 @@ describe('Operación del mostrador', () => {
     expect(() =>
       run(s, 'execute_transfer', { transferId: s.transfers[0].id, evidenceId: ids.photo }),
     ).toThrow(/cerrado/);
-    s = run(s, 'execute_transfer', { transferId: s.transfers[0].id, evidenceId: ids.photo }, other).state;
-    expect(openingExpectedCash(s)).toBe(5000);
-    s = run(s, 'confirm_transfer', { transferId: s.transfers[0].id, receivedAmount: 16000 }, admin).state;
-    expect(s.transfers[0].status).toBe('confirmed');
+    expect(() =>
+      run(s, 'execute_transfer', { transferId: s.transfers[0].id, evidenceId: ids.photo }, other),
+    ).toThrow(/responsable del turno activo/);
+    expect(openingExpectedCash(s)).toBe(21000);
     expect(s.counts[0].cash).toBe(21000);
   });
   it('no incluye conteos, pagos ni saldos en la proyección del empleado', () => {
@@ -302,6 +305,94 @@ describe('Operación del mostrador', () => {
     );
     const { state: s, order: o } = order(fixture());
     expect(stockBalances(run(s, 'deliver', { orderId: o.id }).state)[`cup:${s.sizes[0].id}`]).toBe(-1);
+  });
+  it.each([true, false])('debita solo la cuenta de gastos administrativos (turno abierto: %s)', (open) => {
+    let s = fixture();
+    if (!open) s.shifts = [];
+    s = run(
+      s,
+      'expense',
+      {
+        source: 'treasury',
+        locationId: ids.location,
+        shiftId: ids.shift,
+        amount: 3000,
+        category: 'Insumos',
+        supplier: 'Prueba',
+        notes: 'Pagado desde la cuenta',
+      },
+      other,
+    ).state;
+    expect(s.expenses[0].shiftId).toBeUndefined();
+    s = run(
+      s,
+      'create_shipment',
+      {
+        from: 'Medellín',
+        supplier: 'Prueba',
+        items: [{ article: 'coronita', quantity: 10, unitCost: 200 }],
+        paidWith: 'treasury',
+        locationId: ids.location,
+        evidenceId: ids.photo,
+      },
+      other,
+    ).state;
+    expect(s.shipments[0].evidenceId).toBe(ids.photo);
+    expect(s.expenses[1].evidenceId).toBe(ids.photo);
+    expect(locationBalance(s, ids.location)).toBe(0);
+    for (const expense of s.expenses) {
+      const payload = { expenseId: expense.id, approve: true };
+      expect(() => run(s, 'approve_expense', payload, admin)).toThrow(/distinto del custodio/);
+      expect(() => run(s, 'approve_expense', { ...payload, approve: false }, admin)).toThrow(
+        /distinto del custodio/,
+      );
+      s = run(s, 'approve_expense', payload, other).state;
+      expect(s.expenses.find((item) => item.id === expense.id)).toMatchObject({
+        status: 'approved',
+        approvedBy: other.id,
+      });
+    }
+    expect(locationBalance(s, ids.location)).toBe(-5000);
+    if (open) expect(cashExpected(s, ids.shift)).toBe(20000);
+  });
+  it('conserva la evidencia de la compra sin medio de pago registrado', () => {
+    const { state } = run(
+      fixture(),
+      'create_shipment',
+      {
+        from: 'Medellín',
+        supplier: 'Prueba',
+        items: [{ article: 'coronita', quantity: 10, unitCost: 200 }],
+        evidenceId: ids.photo,
+      },
+      admin,
+    );
+    expect(state.shipments[0].evidenceId).toBe(ids.photo);
+    expect(state.expenses).toHaveLength(0);
+  });
+  it('reserva a otro administrador la revisión de gastos de su caja o su bolsillo', () => {
+    let s = fixture();
+    s.shifts[0].cashierId = admin.id;
+    for (const source of ['cash', 'personal']) {
+      s = run(
+        s,
+        'expense',
+        {
+          source,
+          amount: 1000,
+          category: 'Insumos',
+          supplier: 'Prueba',
+          notes: 'Pago de prueba',
+        },
+        admin,
+      ).state;
+      const expenseId = s.expenses.at(-1)!.id;
+      expect(() => run(s, 'approve_expense', { expenseId, approve: true }, admin)).toThrow(
+        /distinto del custodio/,
+      );
+      s = run(s, 'approve_expense', { expenseId, approve: true }, other).state;
+      expect(s.expenses.at(-1)?.status).toBe('approved');
+    }
   });
   it('recepciona parcialmente sin incluir dañados como mercancía utilizable', () => {
     let s = run(

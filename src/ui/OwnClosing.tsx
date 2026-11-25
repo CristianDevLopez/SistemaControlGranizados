@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { businessDay } from '../domain/business-date.ts';
 import { inRehearsalPeriod } from '../domain/closing-archive.ts';
-import { salesByMethod } from '../domain/engine.ts';
+import { closingNeedsRecount, paymentsByMethod } from '../domain/engine.ts';
 import type { Count } from '../domain/types.ts';
 import { useApp } from '../lib/store.tsx';
 import { FieldsForm, Modal, Panel, date, money, stateNames } from './components.tsx';
@@ -39,6 +39,7 @@ export function OwnClosing({ requestsOnly = false, day }: { requestsOnly?: boole
           businessDay(shift.closedAt ?? shift.openedAt ?? shift.requestedAt) === day) &&
         (shift.blindOpening?.depth || shift.visibleClosing) &&
         !!shift.blindClosing &&
+        !closingNeedsRecount(shift) &&
         (!requestsOnly ||
           shift.closingReview?.status === 'pending' ||
           shift.closingReview?.status === 'returned') &&
@@ -56,7 +57,7 @@ export function OwnClosing({ requestsOnly = false, day }: { requestsOnly?: boole
       );
       if (!count) return null;
       const summary = state.ownTurnSummary?.find((item) => item.shiftId === shift.id);
-      const recorded = actor.role === 'admin' ? salesByMethod(state, shift.id) : undefined;
+      const recorded = actor.role === 'admin' ? paymentsByMethod(state, shift.id) : undefined;
       const totals =
         actor.role === 'admin'
           ? recorded!

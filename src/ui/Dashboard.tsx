@@ -90,7 +90,6 @@ export function Dashboard() {
       ['Descuentos COP', data.discounts],
       ['Costo de promociones COP', data.promotionCost],
       ['Costo de cortesías COP', data.courtesyCost],
-      ['Recaudo neto COP', data.receipts],
       ['Devoluciones COP', data.refunds],
       ['Gastos aprobados COP', data.expenses],
       ['Anulaciones', data.voided],
@@ -129,7 +128,7 @@ export function Dashboard() {
         Unidades: p.units,
       }),
     );
-    data.methods.forEach((m) => add('Recaudo por medio', m.name, m.amount));
+    data.methods.forEach((m) => add('Ventas por medio de pago', m.name, m.amount));
     for (const [label, values] of [
       ['Tamaño', data.breakdown.sizes],
       ['Sabor', data.breakdown.flavors],
@@ -153,7 +152,7 @@ export function Dashboard() {
       <div className="page-toolbar">
         <div>
           <h2>El pulso de tu negocio</h2>
-          <p>Ventas, recaudo y avance de metas del local.</p>
+          <p>Ventas, devoluciones y avance de metas del local.</p>
         </div>
         <button className="button secondary" disabled={!data} onClick={exportData}>
           <Download size={17} /> Exportar ventas
@@ -414,11 +413,7 @@ export function Dashboard() {
             </Panel>
             <Panel title="Dinero del periodo">
               <div className="dashboard-finance">
-                <div className="dashboard-receipts">
-                  <small>Recaudo neto</small>
-                  <strong>{money(data.receipts)}</strong>
-                  <p>Cobros menos devoluciones registrados en estas fechas.</p>
-                </div>
+                <h3 className="dashboard-payment-heading">Ventas netas por medio de pago</h3>
                 {data.methods.map((m) => (
                   <div className="dashboard-finance-row" key={m.key}>
                     <span>{m.name}</span>
@@ -434,8 +429,8 @@ export function Dashboard() {
                   <strong>{money(data.expenses)}</strong>
                 </div>
                 <p className="dashboard-caption">
-                  El recaudo puede diferir de las ventas por anulaciones y correcciones. Los gastos incluyen
-                  compras y pagos desde todas las fuentes; no representan la utilidad ni el saldo de caja.
+                  Las devoluciones figuran en la fecha en que se registraron. Los gastos incluyen compras y
+                  pagos desde todas las fuentes.
                 </p>
               </div>
             </Panel>

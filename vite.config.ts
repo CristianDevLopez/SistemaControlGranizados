@@ -35,7 +35,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       injectRegister: null,
-      includeAssets: ['dexter.jpg', 'icon.svg'],
+      includeAssets: ['LogoDexterTaraza.jpeg'],
       manifest: {
         id: '/',
         name: 'Dexter’s · Mostrador',
@@ -47,12 +47,12 @@ export default defineConfig({
         start_url: '/',
         lang: 'es-CO',
         icons: [
-          { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+          { src: '/dexter-taraza-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/dexter-taraza-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,jpg,png,woff2}'],
+        globPatterns: ['**/*.{js,css,html,svg,jpg,png,webp,woff2}'],
         navigateFallback: '/index.html',
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },

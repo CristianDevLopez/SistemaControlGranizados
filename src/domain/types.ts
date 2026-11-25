@@ -189,6 +189,7 @@ export interface StockMovement {
 }
 export interface BlindOpening {
   depth?: 'simple' | 'deep';
+  items?: string[];
   status: 'pending' | 'recount' | 'review' | 'audit' | 'matched' | 'authorized' | 'reviewed';
   countIds?: ID[];
   audit?: { id: ID; cash: boolean; items: string[]; by?: ID; at?: string };
@@ -197,6 +198,7 @@ export interface BlindOpening {
 }
 export interface BlindClosing {
   status: 'recount' | 'review' | 'matched' | 'ready';
+  requiresRecount?: true;
   countIds?: ID[];
 }
 export type ClosingCountMode = 'cash' | 'simple' | 'full';
@@ -319,6 +321,16 @@ export interface ClosingPreview {
   expectedPayments: Record<string, number>;
   paymentLabels: Record<string, string>;
 }
+export interface BlindClosingPreview {
+  items: { id: string; name: string }[];
+  accounts: { id: string; name: string; amount: number }[];
+  recount?: {
+    preview: VisibleClosingPreview;
+    cash?: number;
+    items: Record<string, number>;
+    notes?: string;
+  };
+}
 export interface VisibleClosingPreview extends ClosingPreview {
   cashFlow: { base: number; sales: number; expenses: number; transfers: number };
   cups: Record<string, { initial: number; packages: number; sold: number; damage: number; other: number }>;
@@ -336,6 +348,7 @@ export interface Shipment {
   supplier: string;
   items: ShipmentLine[];
   expenseId?: ID;
+  evidenceId?: ID;
   at: string;
   status: 'in_transit' | 'partial' | 'received';
   notes: string;
@@ -395,6 +408,7 @@ export interface Transfer {
   confirmedAt?: string;
   confirmedBy?: ID;
   receivedAmount?: number;
+  receiptCorrection?: { previousAmount: number; at: string; notes: string };
   blindReceipt?: boolean;
   evidenceId?: ID;
   notes: string;

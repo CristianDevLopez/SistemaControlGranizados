@@ -1,3 +1,4 @@
+import { orderedFlavors } from '../domain/flavors.ts';
 import { useState } from 'react';
 import { FlaskConical, Trash2 } from 'lucide-react';
 import { canCorrectTastings } from '../domain/access.ts';
@@ -70,7 +71,7 @@ export function TastingsEditor({
                 disabled={disabled}
                 onChange={(event) => void correct(tasting.id, event.target.value)}
               >
-                {state.flavors
+                {orderedFlavors(state.flavors)
                   .filter((flavor) => flavor.active || flavor.id === tasting.flavorId)
                   .map((flavor) => (
                     <option key={flavor.id} value={flavor.id} disabled={!flavor.active}>

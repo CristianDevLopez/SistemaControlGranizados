@@ -66,7 +66,7 @@ test('una venta por transferencia no se espera en la caja y se ve aparte en el t
   await nav(page, 'Turno y caja');
   await expect(page.locator('.stat').filter({ hasText: 'Efectivo esperado' })).toContainText(/12\.000/);
   await nav(page, 'Dinero');
-  const transfers = page.locator('.stat').filter({ hasText: 'Cobrado por transferencia' });
+  const transfers = page.locator('.stat').filter({ hasText: 'Ventas netas por transferencia' });
   await expect(transfers).toContainText(/14\.000/);
   await expect(transfers).toContainText('Cuenta de prueba');
 
@@ -115,7 +115,7 @@ test('configura Nequi y lo identifica al cobrar, en el ticket y separado del efe
   await methods.getByRole('button', { name: 'Nequi', exact: true }).click();
   await expect(page.locator('.payment-hint')).toContainText('3000000000');
   await page.getByRole('textbox', { name: 'Comprobante de Nequi', exact: true }).fill('NEQ-4821');
-  await page.getByRole('button', { name: 'Vuelto o entregar después', exact: true }).click();
+  await page.getByRole('button', { name: 'Cobrar y entregar después', exact: true }).click();
   const checkout = page.getByRole('dialog');
   await expect(checkout.getByRole('button', { name: 'Nequi', exact: true })).toHaveAttribute(
     'aria-pressed',
@@ -140,9 +140,10 @@ test('configura Nequi y lo identifica al cobrar, en el ticket y separado del efe
   await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
   await nav(page, 'Turno y caja');
   await expect(page.locator('.stat').filter({ hasText: 'Efectivo esperado' })).toContainText('12.000');
+  await expect(page.locator('.stat').filter({ hasText: 'Ventas · Nequi' })).toContainText('28.000');
   await expect(page.getByText('Saldo en Nequi', { exact: true })).toHaveCount(0);
   await nav(page, 'Dinero');
-  const transfers = page.locator('.stat').filter({ hasText: 'Cobrado por transferencia' });
+  const transfers = page.locator('.stat').filter({ hasText: 'Ventas netas por transferencia' });
   await expect(transfers).toContainText('28.000');
   await expect(transfers).toContainText('Nequi');
   const balance = page.locator('.stat').filter({ hasText: 'Saldo en Nequi' });

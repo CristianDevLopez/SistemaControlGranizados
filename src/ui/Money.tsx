@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Plus } from 'lucide-react';
+import { isShiftCashier, shiftBlocksSales } from '../domain/access.ts';
 import { cashExpected, locationBalance, openingExpectedCash, salesByMethod } from '../domain/engine.ts';
-import type { CommandType } from '../domain/types.ts';
+import type { CommandType, Transfer } from '../domain/types.ts';
 import { useApp } from '../lib/store.tsx';
 import {
   Badge,
@@ -16,7 +17,7 @@ import {
   type Field,
 } from './components.tsx';
 import { isNequiAccount, transferAccountName } from './payment-labels.ts';
-import { EvidenceButton } from './Purchasing.tsx';
+import { EvidenceButton } from './EvidenceButton.tsx';
 
 export function Money({ transferId }: { transferId?: string } = {}) {
   const app = useApp();
@@ -29,6 +30,32 @@ export function Money({ transferId }: { transferId?: string } = {}) {
   const nequi = locations.filter((location) => location.type === 'bank' && isNequiAccount(location));
   const physical = locations.filter((location) => location.type === 'treasury');
   const options = locations.map(({ id, name }) => ({ value: id, label: name }));
+  const ownOptions = locations
+    .filter((location) => location.custodianId === actor.id)
+    .map(({ id, name }) => ({ value: id, label: name }));
+  const ownNequi = nequi.filter((location) => location.custodianId === actor.id);
+  const drawerOrigin =
+    active &&
+    isShiftCashier({ ...actor, online: app.online }, active) &&
+    !shiftBlocksSales(active) &&
+    !state.settings[0].auditId
+      ? { value: `cash:${active.id}`, label: 'Caja del turno' }
+      : undefined;
+  const origins = [...(drawerOrigin ? [drawerOrigin] : []), ...ownOptions];
+  const canExecute = (transfer: Transfer) => {
+    if (transfer.status !== 'requested') return false;
+    const ownsSource =
+      drawerOrigin?.value === transfer.from || ownOptions.some((item) => item.value === transfer.from);
+    if (transfer.type !== 'transfer')
+      return (
+        transfer.recipientId !== actor.id &&
+        (transfer.from === 'treasury' ? ownOptions.length > 0 : ownsSource)
+      );
+    return (
+      ownsSource &&
+      locations.some((item) => item.id === transfer.to && item.custodianId === transfer.recipientId)
+    );
+  };
   const byName = (id: string) => profiles.find((profile) => profile.id === id)?.name ?? 'Administrador';
   const locationName = (id: string) =>
     id.startsWith('cash:')
@@ -76,7 +103,7 @@ export function Money({ transferId }: { transferId?: string } = {}) {
         supplier: shipment.supplier,
         payer: 'Pago sin registrar',
         status: undefined,
-        evidenceId: undefined,
+        evidenceId: shipment.evidenceId,
       })),
   ].sort((a, b) => b.at.localeCompare(a.at));
   const [form, setForm] = useState<{
@@ -84,22 +111,23 @@ export function Money({ transferId }: { transferId?: string } = {}) {
     fields: Field[];
     command: CommandType;
     extra?: Record<string, unknown>;
+    newTransfer?: boolean;
   } | null>(null);
+  const [movementDestination, setMovementDestination] = useState('');
 
   const newMovement = (withdrawal: boolean) => {
+    setMovementDestination('');
     setForm({
-      title: withdrawal ? 'Registrar retiro de Nequi' : 'Solicitar movimiento de dinero',
-      command: 'request_transfer',
-      extra: { shiftId: active?.id },
+      title: withdrawal ? 'Registrar retiro de Nequi' : 'Registrar movimiento de dinero',
+      command: 'execute_transfer',
+      newTransfer: true,
       fields: [
         {
           name: 'from',
           label: 'Origen',
           type: 'select',
           required: true,
-          options: withdrawal
-            ? nequi.map(({ id, name }) => ({ value: id, label: name }))
-            : [...(active ? [{ value: `cash:${active.id}`, label: 'Caja del turno' }] : []), ...options],
+          options: withdrawal ? ownNequi.map(({ id, name }) => ({ value: id, label: name })) : origins,
         },
         {
           name: 'to',
@@ -110,20 +138,6 @@ export function Money({ transferId }: { transferId?: string } = {}) {
         },
         { name: 'amount', label: 'Monto', type: 'money', min: 1, required: true },
         { name: 'notes', label: 'Concepto', type: 'textarea', required: true },
-        ...(withdrawal
-          ? []
-          : [
-              {
-                name: 'type',
-                label: 'Tipo',
-                type: 'select' as const,
-                value: 'transfer',
-                options: [
-                  { value: 'transfer', label: 'Traslado dentro del negocio' },
-                  { value: 'profit', label: 'Salida por utilidad (requiere tres aprobaciones)' },
-                ],
-              },
-            ]),
       ],
     });
   };
@@ -157,7 +171,7 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                 ))}
                 {sales && (
                   <Stat
-                    label="Cobrado por transferencia en el turno"
+                    label="Ventas netas por transferencia en el turno"
                     value={money(sales.transfer)}
                     note={Object.entries(sales.byAccount)
                       .map(([id, amount]) => `${locationName(id)}: ${money(amount)}`)
@@ -174,23 +188,45 @@ export function Money({ transferId }: { transferId?: string } = {}) {
         action={
           !transferId && (
             <div className="button-row">
-              {!!nequi.length && !!physical.length && (
+              {!!ownNequi.length && !!physical.length && (
                 <button className="button secondary" disabled={!app.online} onClick={() => newMovement(true)}>
                   Retiro de Nequi a efectivo
                 </button>
               )}
               <button
                 className="button secondary"
-                disabled={!app.online || !locations.length}
+                disabled={!app.online || !locations.length || !origins.length}
                 onClick={() => newMovement(false)}
               >
                 <Plus size={16} />
                 Nuevo movimiento
               </button>
+              <button
+                className="button secondary"
+                disabled={!app.online || !locations.length}
+                onClick={() =>
+                  setForm({
+                    title: 'Solicitar salida por utilidad',
+                    command: 'request_transfer',
+                    extra: { type: 'profit', from: 'treasury' },
+                    fields: [
+                      { name: 'to', label: 'Destino', type: 'select', required: true, options },
+                      { name: 'amount', label: 'Monto', type: 'money', min: 1, required: true },
+                      { name: 'notes', label: 'Concepto', type: 'textarea', required: true },
+                    ],
+                  })
+                }
+              >
+                Solicitar utilidad
+              </button>
             </div>
           )
         }
       >
+        <p className="muted">
+          Entre cuentas bajo tu custodia, el traslado queda confirmado al ejecutarlo. Si el destino pertenece
+          a otro administrador, ese custodio confirma la recepción.
+        </p>
         {transfers.length ? (
           <div className="table-wrap">
             <table>
@@ -225,9 +261,22 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                       <td>
                         {locationName(transfer.from)} → {locationName(transfer.to)}
                       </td>
-                      <td>{transfer.blindReceipt ? 'Conteo a ciegas' : money(transfer.amount)}</td>
                       <td>
-                        <small>Solicitó: {byName(transfer.by)}</small>
+                        {transfer.blindReceipt
+                          ? 'Conteo a ciegas'
+                          : money(
+                              transfer.receiptCorrection
+                                ? (transfer.receivedAmount ?? transfer.amount)
+                                : transfer.amount,
+                            )}
+                        {transfer.receiptCorrection && (
+                          <small>
+                            Recepción corregida · Antes {money(transfer.receiptCorrection.previousAmount)}
+                          </small>
+                        )}
+                      </td>
+                      <td>
+                        {transfer.status === 'requested' && <small>Solicitó: {byName(transfer.by)}</small>}
                         {transfer.executedBy && (
                           <small>Registró la entrega: {byName(transfer.executedBy)}</small>
                         )}
@@ -251,8 +300,9 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                                 : 'orange'
                           }
                         >
-                          {stateNames[transfer.status]}
+                          {transfer.status === 'in_transit' ? 'Ejecutado' : stateNames[transfer.status]}
                         </Badge>
+                        {transfer.status === 'in_transit' && <small>Pendiente de recepción</small>}
                         {transfer.type !== 'transfer' && (
                           <small>{transfer.votes.length}/3 aprobaciones</small>
                         )}
@@ -287,7 +337,7 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                                 Aprobar
                               </button>
                             )}
-                          {transfer.status === 'requested' && transfer.recipientId !== actor.id && (
+                          {canExecute(transfer) && (
                             <button
                               className="button small secondary"
                               disabled={
@@ -306,7 +356,7 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                                             label: 'Cuenta o caja que paga',
                                             type: 'select' as const,
                                             required: true,
-                                            options,
+                                            options: ownOptions,
                                           },
                                         ]
                                       : []),
@@ -325,7 +375,7 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                               }
                             >
                               <ArrowUpRight size={15} />
-                              Ejecutado
+                              Registrar ejecución
                             </button>
                           )}
                           {transfer.status === 'in_transit' &&
@@ -480,11 +530,27 @@ export function Money({ transferId }: { transferId?: string } = {}) {
       {form && (
         <Modal title={form.title} onClose={() => setForm(null)}>
           <FieldsForm
-            fields={form.fields}
+            fields={
+              form.newTransfer
+                ? [
+                    ...form.fields,
+                    {
+                      name: 'evidenceId',
+                      label: 'Comprobante',
+                      type: 'photo',
+                      required: locations.some(
+                        (item) => item.id === movementDestination && item.type === 'bank',
+                      ),
+                    },
+                  ]
+                : form.fields
+            }
+            submit={form.newTransfer ? 'Registrar movimiento' : 'Guardar'}
             onCancel={() => setForm(null)}
+            onValuesChange={form.newTransfer ? (values) => setMovementDestination(values.to) : undefined}
             onSubmit={async (values) => {
-              await app.run(form.command, { ...form.extra, ...values }, { onlineOnly: true });
-              app.toast('Registro guardado.');
+              const result = await app.run(form.command, { ...form.extra, ...values }, { onlineOnly: true });
+              app.toast(form.newTransfer ? result.message : 'Registro guardado.');
               setForm(null);
             }}
           />

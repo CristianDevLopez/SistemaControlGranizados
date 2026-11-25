@@ -48,7 +48,7 @@ it('señala el saldo negativo del sabor al servir más de su bolsa en uso', () =
     expect.objectContaining({
       id: `liquid:${ids.flavor}`,
       amount: -6,
-      explanation: expect.stringMatching(/bolsa abierta sin registrar/i),
+      explanation: expect.stringMatching(/consumo supera el líquido registrado/i),
     }),
   );
 });

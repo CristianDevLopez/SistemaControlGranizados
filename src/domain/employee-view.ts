@@ -1,16 +1,10 @@
-import {
-  cashExpected,
-  closingPaymentMethods,
-  currentPayments,
-  paymentMethod,
-  salesByMethod,
-} from './engine.ts';
+import { cashExpected, closingPaymentMethods, paymentsByMethod } from './engine.ts';
 import { shiftSales } from './turn-review.ts';
 import { rehearsalShift } from './closing-archive.ts';
 import { initialState } from './initial.ts';
 import { rehearsalRequest } from './closing-archive.ts';
-import { orderPaymentLabels } from './payment-methods.ts';
-import { isOrderAssistant } from './access.ts';
+import { isSale, orderPaymentLabels, paymentMethod, paymentTotals, salePayments } from './payment-methods.ts';
+import { hasPermission, isOrderAssistant } from './access.ts';
 import type { Actor, Order, Promotion, Shift, State } from './types.ts';
 
 export function operatingShift(state: State): Shift | undefined {
@@ -52,6 +46,89 @@ function publicOrder(order: Order): Order {
         })),
     })),
   };
+}
+
+export function turnMoneyCards(state: State, shift: Shift) {
+  const sales = salePayments(
+    state,
+    state.orders.filter((order) => order.shiftId === shift.id && isSale(order)),
+  );
+  const salesTotals = paymentTotals(sales);
+  const payments = sales.filter((item) => item.amount > 0);
+  const methods = closingPaymentMethods(state, shift.id);
+  const closingAccounts = new Set(methods.map(({ account }) => account.id));
+  for (const account of state.locations)
+    if (Object.hasOwn(salesTotals.byAccount, account.id) && !closingAccounts.has(account.id))
+      methods.push({ id: `transfer:${account.id}`, account });
+  const expenses = state.expenses.filter((item) => item.shiftId === shift.id && item.status !== 'rejected');
+  const handoffs = state.transfers.filter(
+    (item) =>
+      item.status !== 'cancelled' &&
+      (item.from === `cash:${shift.id}` ||
+        item.to === `cash:${shift.id}` ||
+        item.executionShiftId === shift.id),
+  );
+  const pending = handoffs.filter((item) => item.status !== 'confirmed');
+  const approved = handoffs.filter((item) => item.status === 'confirmed');
+  const expenseCard = (id: string, name: string, items: typeof expenses, confirmed: boolean) => ({
+    id,
+    name,
+    amount: items.reduce((sum, item) => sum + item.amount, 0),
+    count: items.length,
+    confirmed: confirmed ? items.length : 0,
+  });
+  const cashPayments = payments.filter((item) => paymentMethod(item) === 'cash').length;
+  return [
+    {
+      id: 'cash',
+      name: 'Ventas netas en efectivo',
+      amount: salesTotals.cash,
+      count: cashPayments,
+      confirmed: cashPayments,
+    },
+    ...methods.map(({ id, account }) => {
+      const items = payments.filter(
+        (item) => paymentMethod(item) === 'transfer' && item.accountId === account.id,
+      );
+      const confirmed = items.filter((item) => {
+        const mark = shift.operationsReview?.verifiedTransfers?.[item.id];
+        return mark && !mark.missing;
+      }).length;
+      return {
+        id,
+        name: `Ventas · ${account.name}`,
+        amount: salesTotals.byAccount[account.id] ?? 0,
+        count: items.length,
+        confirmed,
+      };
+    }),
+    expenseCard(
+      'expenses-pending',
+      'Gastos sin aprobar',
+      expenses.filter((item) => item.status === 'pending'),
+      false,
+    ),
+    expenseCard(
+      'expenses-approved',
+      'Gastos aprobados',
+      expenses.filter((item) => item.status === 'approved'),
+      true,
+    ),
+    {
+      id: 'handoffs-pending',
+      name: 'Movimientos de efectivo sin aprobar',
+      amount: pending.reduce((sum, item) => sum + item.amount, 0),
+      count: pending.length,
+      confirmed: 0,
+    },
+    {
+      id: 'handoffs-approved',
+      name: 'Movimientos de efectivo aprobados',
+      amount: approved.reduce((sum, item) => sum + (item.receivedAmount ?? item.amount), 0),
+      count: approved.length,
+      confirmed: approved.length,
+    },
+  ];
 }
 
 /** Allowlist the operational data sent to a cashier or assistant, including the offline copy. */
@@ -141,6 +218,7 @@ export function employeeView(full: State, actor: Actor): State {
             : shift.blindOpening && {
                 status: shift.blindOpening.status,
                 depth: shift.blindOpening.depth,
+                items: shift.blindOpening.items,
                 ...(shift.id === active?.id && shift.blindOpening.audit
                   ? {
                       audit: {
@@ -201,13 +279,39 @@ export function employeeView(full: State, actor: Actor): State {
     );
   if (isCashier) {
     if (actor.role === 'encargado') {
+      if (hasPermission(actor, 'inventory')) {
+        safe.shipments = full.shipments
+          .filter((item) => item.status !== 'received')
+          .map(({ id, from, supplier, at, status }) => ({
+            id,
+            from,
+            supplier,
+            at,
+            status,
+            by: '',
+            items: [],
+            notes: '',
+          }));
+        safe.receipts = full.receipts
+          .filter((item) => item.by === actor.id && !!active.openedAt && item.at >= active.openedAt)
+          .map(({ id, shipmentId, by, at, items, damaged, evidenceId, notes }) => ({
+            id,
+            shipmentId,
+            by,
+            at,
+            items,
+            damaged,
+            evidenceId,
+            notes,
+          }));
+      }
+      if (hasPermission(actor, 'expenses'))
+        safe.expenses = full.expenses.filter((item) => item.source === 'cash' && item.shiftId === active.id);
       safe.transferDestinations = full.transferDestinations;
       safe.cashHandoffs =
         full.cashHandoffs ??
         full.transfers
-          .filter(
-            (item) => item.type === 'transfer' && item.from === `cash:${active.id}` && item.by === actor.id,
-          )
+          .filter((item) => item.type === 'transfer' && item.from === `cash:${active.id}`)
           .map(({ id, to, amount, status, notes }) => ({ id, to, amount, status, notes }));
     }
     const totals = new Map((full.transferSummary ?? []).map(({ name, amount }) => [name, amount]));
@@ -269,53 +373,10 @@ export function employeeView(full: State, actor: Actor): State {
     visibleShifts
       .filter((shift) => shift.status === 'open' || shift.closingFlow)
       .map((shift) => {
-        const totals = salesByMethod(full, shift.id);
-        const payments = currentPayments(full.payments).filter(
-          (item) => item.shiftId === shift.id && item.amount > 0,
-        );
-        const expenses = full.expenses.filter(
-          (item) => item.shiftId === shift.id && item.status !== 'rejected',
-        );
-        const handoffs = full.transfers.filter(
-          (item) => item.from === `cash:${shift.id}` && item.status !== 'cancelled',
-        );
-        const cashPayments = payments.filter((item) => paymentMethod(item) === 'cash').length;
-        const cards = [
-          { id: 'cash', name: 'Efectivo', amount: totals.cash, count: cashPayments, confirmed: cashPayments },
-          ...closingPaymentMethods(full, shift.id).map(({ id, account }) => {
-            const items = payments.filter(
-              (item) => paymentMethod(item) === 'transfer' && item.accountId === account.id,
-            );
-            const confirmed = items.filter((item) => {
-              const mark = shift.operationsReview?.verifiedTransfers?.[item.id];
-              return mark && !mark.missing;
-            }).length;
-            return {
-              id,
-              name: account.name,
-              amount: totals.byAccount[account.id] ?? 0,
-              count: items.length,
-              confirmed,
-            };
-          }),
-          {
-            id: 'expenses',
-            name: 'Gastos',
-            amount: expenses.reduce((sum, item) => sum + item.amount, 0),
-            count: expenses.length,
-            confirmed: expenses.filter((item) => item.status === 'approved').length,
-          },
-          {
-            id: 'handoffs',
-            name: 'Traslados',
-            amount: handoffs.reduce((sum, item) => sum + item.amount, 0),
-            count: handoffs.length,
-            confirmed: handoffs.filter((item) => item.status === 'confirmed').length,
-          },
-        ];
+        const totals = paymentsByMethod(full, shift.id);
         return {
           shiftId: shift.id,
-          cards,
+          cards: turnMoneyCards(full, shift),
           sizes: [...shiftSales(full, shift).unitsBySize].map(([id, quantity]) => ({
             name: full.sizes.find((item) => item.id === id)?.name ?? id,
             quantity,
@@ -342,7 +403,9 @@ export function employeeView(full: State, actor: Actor): State {
               locationId: transfer.to,
               destination:
                 full.locations.find((location) => location.id === transfer.to)?.name ?? 'Destino archivado',
-              amount: transfer.amount,
+              amount: transfer.receiptCorrection
+                ? (transfer.receivedAmount ?? transfer.amount)
+                : transfer.amount,
               status: transfer.status,
             })),
         };

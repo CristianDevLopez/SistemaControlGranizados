@@ -1,14 +1,20 @@
 import { chromium } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-const svg = await readFile('public/icon.svg', 'utf8');
+const logo = await readFile('public/LogoDexterTaraza.jpeg', 'base64');
 const browser = await chromium.launch();
 try {
   for (const size of [192, 512]) {
     const page = await browser.newPage({ viewport: { width: size, height: size }, deviceScaleFactor: 1 });
-    await page.setContent(
-      `<style>html,body{margin:0;width:100%;height:100%;background:#173b40}svg{display:block;width:100%;height:100%}</style>${svg}`,
-    );
-    await page.screenshot({ path: `public/icon-${size}.png` });
+    // El aro del icono adaptable debe caber en el círculo seguro del 80 %.
+    const logoSize = size === 512 ? '74%' : '89%';
+    await page.setContent(`
+      <style>
+        body { margin: 0; height: 100vh; display: grid; place-items: center; background: #173b40; }
+        img { width: ${logoSize}; aspect-ratio: 1; border-radius: 50%; box-shadow: 0 0 0 1.5vw #fff; }
+      </style>
+      <img src="data:image/jpeg;base64,${logo}" alt="">
+    `);
+    await page.screenshot({ path: `public/dexter-taraza-${size}.png` });
     await page.close();
   }
 } finally {

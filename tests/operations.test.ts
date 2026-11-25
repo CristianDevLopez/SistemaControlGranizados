@@ -154,9 +154,9 @@ describe('cierre definitivo y provisional', () => {
       expect(() => run(s, 'execute_transfer', { transferId }, { ...admin, online: false })).toThrow(
         /conexión/,
       );
-      expect(
-        run(s, 'execute_transfer', { transferId, evidenceId: ids.photo }, other).state.transfers[0].status,
-      ).toBe('in_transit');
+      expect(() => run(s, 'execute_transfer', { transferId, evidenceId: ids.photo }, other)).toThrow(
+        /responsable del turno activo/,
+      );
     });
   it('un turno abierto nuevo no permite modificar el anterior con identificadores manipulados', () => {
     const created = order(fixture());

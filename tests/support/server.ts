@@ -2,7 +2,7 @@
 import { createServer } from 'node:http';
 import { PgBackend } from './backend.ts';
 import { createGateway } from '../../src/server/gateway.ts';
-import { admin, cashier, support, owner, ids, NOW } from './fixture.ts';
+import { admin, cashier, other, support, owner, ids, NOW } from './fixture.ts';
 let backend = await PgBackend.create();
 let pauseCommands = false;
 let pausedCommandAttempts = 0;
@@ -78,7 +78,9 @@ createServer(async (req, res) => {
               ? support
               : input.email === 'admin@test.invalid'
                 ? admin
-                : cashier;
+                : input.email === 'other@test.invalid'
+                  ? other
+                  : cashier;
       res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({

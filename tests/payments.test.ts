@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { cashExpected, locationBalance, salesByMethod } from '../src/domain/engine.ts';
+import {
+  cashExpected,
+  locationBalance,
+  paymentsByMethod,
+  redactState,
+  salesByMethod,
+} from '../src/domain/engine.ts';
 import type { Actor, State } from '../src/domain/types.ts';
 import { ids, fixture, cashier, admin, other, run, order, countedItems } from './support/fixture.ts';
 
@@ -75,6 +81,15 @@ describe('pagos por transferencia', () => {
   it('el reembolso usa por defecto el mismo medio y la misma cuenta de la venta', () => {
     const sale = transferSale();
     let state = voidApproved(sale.state, sale.orderId);
+    expect(salesByMethod(state, ids.shift)).toMatchObject({ transfer: 0, transferCount: 0, byAccount: {} });
+    expect(paymentsByMethod(state, ids.shift).byAccount[ids.location]).toBe(sale.total);
+    expect(locationBalance(state, ids.location)).toBe(sale.total);
+    const summary = redactState(state, cashier).ownTurnSummary?.find((item) => item.shiftId === ids.shift);
+    expect(summary?.cards?.find((card) => card.id === `transfer:${ids.location}`)).toMatchObject({
+      amount: 0,
+      count: 0,
+    });
+    expect(summary?.transferAccounts).toMatchObject([{ amount: sale.total }]);
     state = run(state, 'refund_order', { orderId: sale.orderId, evidenceId: ids.photo }).state;
     expect(state.payments.find((p) => p.orderId === sale.orderId && p.amount < 0)).toMatchObject({
       type: 'refund',
@@ -84,6 +99,7 @@ describe('pagos por transferencia', () => {
     });
     expect(locationBalance(state, ids.location)).toBe(0);
     expect(cashExpected(state, ids.shift)).toBe(BASE);
+    expect(salesByMethod(state, ids.shift).transfer).toBe(0);
   });
 
   it('el reembolso de una transferencia se puede devolver en efectivo', () => {
@@ -96,6 +112,7 @@ describe('pagos por transferencia', () => {
     }).state;
     expect(cashExpected(state, ids.shift)).toBe(BASE - sale.total);
     expect(locationBalance(state, ids.location)).toBe(sale.total);
+    expect(salesByMethod(state, ids.shift)).toMatchObject({ cash: 0, transfer: 0 });
   });
 
   it('rechaza cuentas que no reciben ventas, inactivas o inexistentes', () => {
@@ -117,10 +134,13 @@ describe('pagos por transferencia', () => {
   });
 
   it('un pago anterior a las transferencias, sin medio, cuenta como efectivo', () => {
-    const state = fixture();
+    const created = order(fixture());
+    const state = created.state;
+    created.order.status = 'paid';
+    created.order.paidAt = '2026-10-23T15:00:00.000Z';
     state.payments.push({
       id: '80000000-0000-4000-8000-000000000001',
-      orderId: '80000000-0000-4000-8000-000000000002',
+      orderId: created.order.id,
       shiftId: ids.shift,
       cashierId: cashier.id,
       amount: 5000,

@@ -16,7 +16,7 @@ En **Administración → Dashboard**, el administrador consulta los resultados d
 - **Evolución:** ventas, tickets o unidades por día; por mes si el rango supera 62 días. Incluye periodos sin actividad y una tabla accesible con los valores exactos.
 - **Productos:** los diez sabores o mezclas y tamaños con más unidades, con su importe después de descuentos. El CSV incluye todos los productos.
 - **Turnos:** ventas, tickets, promedio y unidades por turno, incluidos turnos abiertos durante el periodo sin ventas.
-- **Dinero:** movimientos de cobro y devolución por fecha efectiva, separados entre efectivo y cada cuenta. El recaudo neto puede diferir de las ventas por correcciones o anulaciones de otro periodo. Los gastos son solo los aprobados, desde todas las fuentes, incluidas compras; no son un cálculo de utilidad ni de saldo disponible.
+- **Dinero:** ventas vigentes por efectivo y por cuenta. La anulación aprobada descuenta la venta de su medio de pago y el ticket sustituto cobrado incluye el crédito aplicado. Las devoluciones figuran por fecha efectiva y los gastos incluyen los aprobados desde todas las fuentes.
 - **Operación:** descuentos, anulaciones según el cobro original, pedidos abiertos e importes entregados sin pagar del periodo.
 - **Metas:** metas semanales o mensuales que se cruzan con las fechas consultadas. Muestran el avance de su periodo completo, solo con todos los turnos. Se configuran en **Configuración → Metas**.
 

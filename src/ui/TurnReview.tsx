@@ -1,3 +1,4 @@
+import { orderedFlavors } from '../domain/flavors.ts';
 import { useState } from 'react';
 import { businessDay, periodStart } from '../domain/business-date.ts';
 import { inRehearsalPeriod, rehearsalShift } from '../domain/closing-archive.ts';
@@ -43,6 +44,8 @@ import { ClosingApprovalDialog, ClosingConfirmation } from './ClosingReview.tsx'
 import { CountReviewDialog } from './CashAudit.tsx';
 import { InventoryComparison } from './Today.tsx';
 import { MermaReport } from './MermaReport.tsx';
+import { EvidenceButton } from './EvidenceButton.tsx';
+import { ExpenseApproval } from './ExpenseApproval.tsx';
 
 type Action = { title: string; command: CommandType; fields: Field[]; payload?: Record<string, unknown> };
 const note = { name: 'notes', label: 'Nota', type: 'textarea', required: true } as const;
@@ -207,9 +210,10 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
           label: kind === 'open_bag' ? 'Sabor' : 'Tamaño',
           type: 'select',
           required: true,
-          options: (kind === 'open_bag' ? state.flavors : state.sizes.filter(usesCupPackages)).map(
-            (item) => ({ value: item.id, label: item.name }),
-          ),
+          options: (kind === 'open_bag'
+            ? orderedFlavors(state.flavors)
+            : state.sizes.filter(usesCupPackages)
+          ).map((item) => ({ value: item.id, label: item.name })),
         },
         { name: 'openedAt', label: 'Fecha y hora de apertura (Colombia)', type: 'datetime-local' },
         note,
@@ -430,8 +434,11 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
                   {!transfer?.blindReceipt && ` · Base ${money(version.retained)}`}
                   {transfer &&
                     ` · ${state.locations.find((item) => item.id === transfer.to)?.name ?? 'Destino'} · ${transfer.status === 'in_transit' ? 'En camino' : 'Recibido'}`}
-                  {transfer && !transfer.blindReceipt && ` · Enviado ${money(transfer.amount)}`}
-                  {transfer?.receivedAmount !== undefined && ` · Recibido ${money(transfer.receivedAmount)}`}
+                  {transfer &&
+                    !transfer.blindReceipt &&
+                    ` · ${transfer.receiptCorrection ? 'En el cuadre' : 'Enviado'} ${money(transfer.amount)}`}
+                  {transfer?.receivedAmount !== undefined &&
+                    ` · ${transfer.receiptCorrection ? 'Recepción corregida' : 'Recibido'} ${money(transfer.receivedAmount)}`}
                   {transfer?.status === 'disputed' &&
                     ` · Diferencia ${money(transfer.receivedAmount! - transfer.amount)}`}
                   {version.notes && ` · ${version.notes}`}
@@ -665,22 +672,18 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
                       {item.category} · {money(item.amount)} · {stateNames[item.status]}
                       {item.notes && ` · ${item.notes}`}
                     </span>
-                    {!archived && item.status === 'pending' && (
-                      <div className="button-row">
-                        <button
-                          className="button small primary"
-                          onClick={() => void run('approve_expense', { expenseId: item.id, approve: true })}
-                        >
-                          Aprobar gasto
-                        </button>
-                        <button
-                          className="button small secondary"
-                          onClick={() => void run('approve_expense', { expenseId: item.id, approve: false })}
-                        >
-                          Rechazar gasto
-                        </button>
-                      </div>
-                    )}
+                    <div className="button-row">
+                      {item.evidenceId && <EvidenceButton id={item.evidenceId} />}
+                      {!archived && (
+                        <ExpenseApproval
+                          expense={item}
+                          label=" gasto"
+                          onDecision={(approve) =>
+                            void run('approve_expense', { expenseId: item.id, approve })
+                          }
+                        />
+                      )}
+                    </div>
                   </div>
                 ))}
               {state.requests
@@ -772,7 +775,7 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
                 </div>
               ))}
 
-              {state.flavors
+              {orderedFlavors(state.flavors)
                 .filter(
                   (flavor) =>
                     openings.some((item) => item.kind === 'Bolsa' && item.flavorId === flavor.id) ||

@@ -1,3 +1,4 @@
+import { orderedFlavors } from '../domain/flavors.ts';
 import { businessDay, periodStart } from '../domain/business-date.ts';
 import { Fragment, useState } from 'react';
 import { Check, Search, FilePlus2, Plus, Trash2, ArrowRightLeft } from 'lucide-react';
@@ -68,7 +69,7 @@ export function LinesEditor({
               >
                 <option value="">Seleccionar…</option>
                 <option value="__mix__">Combinado / bomba</option>
-                {state.flavors
+                {orderedFlavors(state.flavors)
                   .filter((x) => x.active)
                   .map((f) => (
                     <option key={f.id} value={f.id}>
@@ -135,7 +136,7 @@ export function LinesEditor({
           {line.flavorIds && (
             <fieldset className="mix-editor">
               <legend>Sabores del vaso {i + 1} · partes iguales</legend>
-              {state.flavors
+              {orderedFlavors(state.flavors)
                 .filter((flavor) => flavor.active)
                 .map((flavor) => (
                   <label className="check-inline" key={flavor.id}>
@@ -264,6 +265,7 @@ export function Orders() {
     .reverse()
     .filter(
       (o) =>
+        o.status !== 'cancelled' &&
         (actor.role === 'admin' || o.shiftId === active?.id) &&
         (!shiftId || o.shiftId === shiftId) &&
         (promotion === 'all' || hasPromotion(o)) &&
@@ -274,11 +276,9 @@ export function Orders() {
             method === 'cash' ? key === 'Efectivo' : key.startsWith('Transferencia'),
           )) &&
         (filter === 'all' ||
-          (filter === 'cancelled' && o.status === 'cancelled') ||
           (filter === 'pending' &&
             (['open', 'void_requested', 'unpaid_incident'].includes(o.status) ||
-              (!['cancelled', 'tasting_only'].includes(o.status) &&
-                o.lines.some((x) => x.delivered < x.quantity)))) ||
+              (o.status !== 'tasting_only' && o.lines.some((x) => x.delivered < x.quantity)))) ||
           (filter === 'paid' && o.status === 'paid')) &&
         `${orderLabel(o)} ${profiles.find((x) => x.id === o.sellerId)?.name}`
           .toLowerCase()
@@ -316,12 +316,6 @@ export function Orders() {
               {actor.role === 'admin' ? 'Historial' : 'Todos del turno'}
             </button>
           </div>
-          <button
-            className={`button small ${filter === 'cancelled' ? 'primary' : 'secondary'}`}
-            onClick={() => setFilter('cancelled')}
-          >
-            Anulados
-          </button>
           <select
             aria-label="Filtrar por promoción"
             value={promotion}

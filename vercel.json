@@ -6,7 +6,7 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/((?!assets/|sw.js|workbox-|manifest.webmanifest|icon.svg|icon-192.png|icon-512.png|dexter.jpg).*)",
+      "source": "/((?!assets/|flavors/|sw.js|workbox-|manifest.webmanifest|icon.svg|icon-192.png|icon-512.png|dexter.jpg|LogoDexterTaraza.jpeg|dexter-taraza-).*)",
       "destination": "/index.html"
     }
   ],

@@ -9,6 +9,10 @@
 
 ## Vercel
 
+El 25 de noviembre de 2026 se publicaron los gastos desde cuentas administrativas, la recepción de envíos a ciegas desde caja y el registro directo de traslados por el custodio del origen. Se verificaron la web de producción, el service worker y la función `dexter` versión 39. La publicación no requirió migraciones.
+
+El 24 de noviembre de 2026 se publicó el catálogo de sabores con las diez fotos, el cálculo de vuelto en el mostrador y el historial de promociones. El cajero solicita autorización para abrir caja y el primer conteo de cierre se hace a ciegas. Si hay diferencias, el segundo recupera los valores ingresados y muestra los esperados. Se verificaron el bundle público, las fotos precargadas por la PWA y la función `dexter` versión 36. La entrega no requirió migraciones.
+
 El 23 de noviembre de 2026 se publicó la lectura acotada de operaciones del mostrador y la escritura de los registros que cambian. La migración `20261124010827_dexter_counter_state` agregó una lectura separada para la función `dexter` versión 34. Se verificó que la API anterior conserva su contrato, que el candidato y el dominio público sirven el mismo bundle y que los reintentos automáticos se espacian ante fallos temporales.
 
 El 23 de noviembre de 2026 se publicó el reintento de operaciones interrumpidas por un timeout de base de datos. La función `dexter` versión 32 devuelve `RETRY_SYNC` y la PWA recupera conflictos antiguos de este tipo cuando el servidor no tiene una revisión registrada. Se verificó el candidato antes de promoverlo y después se comprobó el mismo bundle en el dominio público. No se aplicaron migraciones.
@@ -96,6 +100,13 @@ En **Turno y caja → Iniciar caja**, un admin con conexión indica la base inic
 Esto también funciona desde Superadministrador y desde su vista Administrador, sin registrar una caja física. El admin puede cobrar, contar y cerrar su propio turno conectado, incluso tras volver a ingresar con su cuenta. Las operaciones conservan el usuario y la sesión real que las hizo. Solo puede existir un turno abierto, solicitado o provisional a la vez **por local**; un admin no pasa a ser cajero del turno de otra persona por tener ese rol. Ver [locales y mensualidades](MULTILOCALES.md) para selección, solicitudes y gestión del desarrollador.
 
 El encargado sigue solicitando apertura desde el equipo principal para que un admin la autorice. La contingencia offline conserva el registro del equipo principal y la autorización presencial existente; abrir directamente como admin requiere conexión.
+
+## Compras, gastos y traslados de dinero
+
+- Para pagar un gasto desde una cuenta del negocio, un administrador entra a **Compras y gastos → Registrar gasto**, elige **Cuenta administrativa o caja principal** y selecciona la cuenta que pagó. Puede registrarlo con o sin turno abierto. Cuando lo aprueba un administrador distinto del custodio de la cuenta, Dexter descuenta el gasto de esa cuenta y el gasto queda fuera del cuadre de caja.
+- Para un envío de Medellín con destino a Tarazá, el administrador abre **Compras y gastos → Compra y envío** con el local de Tarazá seleccionado. Elige **Medellín · crea envío**, anota proveedor, artículos, cantidades y costos y guarda. El envío aparece en el local seleccionado y el inventario se actualiza con la recepción.
+- Cuando llega la mercancía, el responsable del turno en Tarazá, con permiso de inventario y conexión, abre **Compras y gastos → Recibir a ciegas** en el envío del proveedor. Cuenta el total físico de cada artículo, registra cuántos de ese total están dañados, adjunta una foto y confirma. Por ejemplo, de 10 unidades que llegan, con 2 dañadas, registra 10 recibidas y 2 dañadas. Dexter suma las 8 utilizables al inventario. Si faltan unidades, el envío queda parcial y la siguiente entrega se registra sobre el mismo envío. El administrador ve el cruce en **Recepciones y cruces**.
+- El encargado registra la salida desde **Mi turno → Registrar traslado** después de entregar o consignar el efectivo. El administrador usa **Dinero → Nuevo movimiento** para mover fondos de sus cuentas, o de la caja si es el responsable del turno activo. Se pide comprobante cuando el destino es bancario. El movimiento queda ejecutado al guardarlo y el custodio del destino confirma cuánto recibió. Si ambas ubicaciones están bajo la misma custodia, la confirmación es automática. Los pagos de utilidades y los reembolsos históricos conservan su proceso de autorización.
 
 ## Recuperación de contraseña
 

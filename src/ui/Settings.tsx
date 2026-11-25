@@ -1,3 +1,4 @@
+import { orderedFlavors } from '../domain/flavors.ts';
 import { supplies } from '../domain/supplies.ts';
 import { configuredAdditions } from '../domain/additions.ts';
 import { useState } from 'react';
@@ -175,44 +176,42 @@ export function Settings() {
                     </tr>
                   </thead>
                   <tbody>
-                    {[...state.flavors]
-                      .sort((a, b) => a.name.localeCompare(b.name, 'es'))
-                      .map((f) => (
-                        <tr key={f.id}>
-                          <td>
-                            <FlavorImage imageId={f.imageId} name={f.name} />
-                            <strong>{f.name}</strong>
-                          </td>
-                          <td>{f.alcohol ? 'Con licor' : 'Sin licor'}</td>
-                          <td>
-                            <Badge tone={f.active ? 'green' : 'neutral'}>
-                              {f.active ? 'Activo' : 'Inactivo'}
-                            </Badge>
-                          </td>
-                          <td>
-                            <button
-                              className="text-button"
-                              onClick={() =>
-                                businessForm(
-                                  'Editar sabor',
-                                  'save_flavor',
-                                  [
-                                    { name: 'name', label: 'Nombre', required: true },
-                                    { name: 'imageId', label: 'Reemplazar imagen (opcional)', type: 'photo' },
-                                    { name: 'removeImage', label: 'Quitar imagen actual', type: 'checkbox' },
-                                    { name: 'alcohol', label: 'Contiene licor', type: 'checkbox' },
-                                    { name: 'active', label: 'Activo', type: 'checkbox' },
-                                  ],
-                                  { ...f },
-                                  { id: f.id },
-                                )
-                              }
-                            >
-                              Editar
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                    {orderedFlavors(state.flavors).map((f) => (
+                      <tr key={f.id}>
+                        <td>
+                          <FlavorImage imageId={f.imageId} name={f.name} />
+                          <strong>{f.name}</strong>
+                        </td>
+                        <td>{f.alcohol ? 'Con licor' : 'Sin licor'}</td>
+                        <td>
+                          <Badge tone={f.active ? 'green' : 'neutral'}>
+                            {f.active ? 'Activo' : 'Inactivo'}
+                          </Badge>
+                        </td>
+                        <td>
+                          <button
+                            className="text-button"
+                            onClick={() =>
+                              businessForm(
+                                'Editar sabor',
+                                'save_flavor',
+                                [
+                                  { name: 'name', label: 'Nombre', required: true },
+                                  { name: 'imageId', label: 'Reemplazar imagen (opcional)', type: 'photo' },
+                                  { name: 'removeImage', label: 'Quitar imagen actual', type: 'checkbox' },
+                                  { name: 'alcohol', label: 'Contiene licor', type: 'checkbox' },
+                                  { name: 'active', label: 'Activo', type: 'checkbox' },
+                                ],
+                                { ...f },
+                                { id: f.id },
+                              )
+                            }
+                          >
+                            Editar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
