@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import {
   applyCommand,
+  blindClosingPreview,
   closingPreview,
   closingPaymentMethods,
   countArticles,
@@ -47,12 +48,13 @@ it('un ajuste aprobado durante la revisión del cierre sustituye el esperado sin
   const confirmed = run(state, 'approve_closing', { shiftId: ids.shift, adjustInventory: true }, admin).state;
   expect(stockBalances(confirmed)[article]).toBe(7);
 
-  const opened = applyCommand(
+  const requested = applyCommand(
     confirmed,
     cmd('request_shift', {}, cashier, { shiftId: undefined }),
     cashier,
     NOW,
   );
+  const opened = run(requested.state, 'authorize_shift', { shiftId: requested.result.referenceId }, admin);
   const shift = opened.state.shifts.at(-1)!;
   const items = Object.fromEntries(
     shiftCountArticles(opened.state, shift, 'opening').map(({ id }) => [id, id === article ? 7 : 0]),
@@ -110,13 +112,20 @@ it('conserva juntos el faltante de 12 oz del cierre y el de 16 oz de la siguient
   }).state;
   const confirmed = run(state, 'approve_closing', { shiftId: ids.shift, adjustInventory: true }, admin);
   const nextDay = '2026-10-24T16:00:00.000Z';
-  const open = applyCommand(
+  const requested = applyCommand(
     confirmed.state,
     cmd('request_shift', {}, cashier, { at: nextDay, shiftId: undefined }),
     cashier,
     nextDay,
   );
-  const shift = open.state.shifts.find((item) => item.id === open.result.referenceId)!;
+  const shiftId = requested.result.referenceId!;
+  const open = applyCommand(
+    requested.state,
+    cmd('authorize_shift', { shiftId }, admin, { at: nextDay, shiftId }),
+    admin,
+    nextDay,
+  );
+  const shift = open.state.shifts.find((item) => item.id === shiftId)!;
   const balance = stockBalances(open.state);
   const openingItems = Object.fromEntries(
     shiftCountArticles(open.state, shift, 'opening').map(({ id }) => [id, balance[id] ?? 0]),
@@ -287,4 +296,31 @@ it('permite verificar un neto negativo por devolución de una venta de otro turn
   const count = run(state, 'count', closing(state, { [key]: -5000 })).state.counts[0];
   expect(count.paymentDifferences?.[key]).toBe(0);
   expect(count.expectedCash).toBe(20000);
+});
+
+it('pide un recuento con los primeros valores sin habilitar el reparto prematuro', () => {
+  const state = fixture();
+  const shift = state.shifts[0];
+  const firstForm = blindClosingPreview(state, shift);
+  expect(firstForm).not.toHaveProperty('recount');
+  expect(firstForm).not.toHaveProperty('expectedCash');
+  const items = Object.fromEntries(firstForm.items.map(({ id }) => [id, 0]));
+  const payload = { shiftId: shift.id, kind: 'closing', blind: true, items };
+  const first = run(state, 'submit_blind_count', { ...payload, attempt: 1, cash: 19000 });
+  expect(first.result.code).toBe('COUNT_RECOUNT');
+  expect(first.state.shifts[0].closingCountId).toBeUndefined();
+  const form = blindClosingPreview(first.state, first.state.shifts[0]);
+  expect(form.recount).toMatchObject({ cash: 19000, items, preview: { expectedCash: 20000 } });
+  expect(() => run(first.state, 'submit_closing', { shiftId: shift.id })).toThrow(/segundo conteo/);
+  const second = run(first.state, 'submit_blind_count', {
+    ...payload,
+    attempt: 2,
+    cash: 20000,
+    preview: form.recount?.preview,
+  });
+  expect(second.state.shifts[0]).toMatchObject({
+    blindClosing: { status: 'ready' },
+    closingCountId: second.result.referenceId,
+  });
+  expect(second.state.counts.map(({ blindAttempt }) => blindAttempt)).toEqual([1, 2]);
 });

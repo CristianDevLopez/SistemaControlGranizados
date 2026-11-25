@@ -1,8 +1,9 @@
+import { orderedFlavors } from './flavors.ts';
 import { addDays } from './business-date.ts';
 import { fortnight } from './reconciliation.ts';
 import type { State } from './types.ts';
 export function liquidReconciliation(state: State) {
-  return state.flavors.map((flavor) => {
+  return orderedFlavors(state.flavors).map((flavor) => {
     const bags = state.bags.filter((b) => b.flavorId === flavor.id),
       closed = bags.filter((b) => b.exhaustedAt),
       open = bags.filter((b) => !b.exhaustedAt),
@@ -57,7 +58,7 @@ export function liquidFortnight(state: State, day: string, now = new Date()) {
     history.push(previous);
   }
 
-  return state.flavors.map((flavor) => {
+  return orderedFlavors(state.flavors).map((flavor) => {
     const bags = state.bags
       .filter((bag) => bag.flavorId === flavor.id)
       .map((bag) => ({

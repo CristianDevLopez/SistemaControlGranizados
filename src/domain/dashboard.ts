@@ -1,7 +1,7 @@
 import type { Order, State } from './types.ts';
-import { currentPayments } from './engine.ts';
+import { currentPayments, isSale, paymentTotals, salePayments } from './payment-methods.ts';
 import { additionsTotal } from './additions.ts';
-import { hasAlcohol, lineFlavorIds } from './flavors.ts';
+import { hasAlcohol, lineFlavorIds, orderedFlavors } from './flavors.ts';
 import { addDays, businessDay, rangeError } from './business-date.ts';
 export { addDays, businessDay, rangeError } from './business-date.ts';
 
@@ -32,7 +32,6 @@ export function periodRange(period: Exclude<DashboardPeriod, 'custom'>, today = 
     to: today,
   };
 }
-export const isSale = (o: Order) => !!o.paidAt && (o.status === 'paid' || o.status === 'void_requested');
 export interface SalesSummary {
   amount: number;
   tickets: number;
@@ -96,7 +95,9 @@ export function dashboardData(state: State, filter: DashboardFilter) {
     { key: string; name: string; size: string; units: number; amount: number }
   >();
   const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, amount: 0, tickets: 0 }));
-  const flavorNames = new Map(state.flavors.map((f) => [f.id, f.name]));
+  const catalog = orderedFlavors(state.flavors);
+  const flavorNames = new Map(catalog.map((f) => [f.id, f.name]));
+  const flavorRanks = new Map(catalog.map(({ id }, index) => [id, index]));
   const sizeNames = new Map(state.sizes.map((s) => [s.id, s.name]));
   const shifts = new Map<string, Order[]>();
   const sizes = new Map<string, { name: string; units: number; amount: number }>();
@@ -125,7 +126,10 @@ export function dashboardData(state: State, filter: DashboardFilter) {
       const productKey = JSON.stringify([flavorIds, l.sizeId]);
       const product = products.get(productKey) ?? {
         key: productKey,
-        name: flavorIds.map((id) => flavorNames.get(id) ?? 'Sabor archivado').join(' + '),
+        name: [...flavorIds]
+          .sort((a, b) => (flavorRanks.get(a) ?? Infinity) - (flavorRanks.get(b) ?? Infinity))
+          .map((id) => flavorNames.get(id) ?? 'Sabor archivado')
+          .join(' + '),
         size: sizeNames.get(l.sizeId) ?? 'Tamaño archivado',
         units: 0,
         amount: 0,
@@ -163,18 +167,17 @@ export function dashboardData(state: State, filter: DashboardFilter) {
     )
       shifts.set(s.id, []);
   }
+  const salesTotals = paymentTotals(salePayments(state, sales));
   const methods = [
     {
       key: 'cash',
       name: 'Efectivo',
-      amount: payments.filter((p) => !p.method || p.method === 'cash').reduce((n, p) => n + p.amount, 0),
+      amount: salesTotals.cash,
     },
-    ...[...new Set(payments.filter((p) => p.method === 'transfer').map((p) => p.accountId))].map((id) => ({
+    ...Object.entries(salesTotals.byAccount).map(([id, amount]) => ({
       key: `transfer:${id}`,
       name: state.locations.find((l) => l.id === id)?.name ?? 'Cuenta archivada',
-      amount: payments
-        .filter((p) => p.method === 'transfer' && p.accountId === id)
-        .reduce((n, p) => n + p.amount, 0),
+      amount,
     })),
   ];
   const issues = state.orders.filter((o) => matchesShift(o.shiftId) && inRange(o.paidAt ?? o.createdAt));
@@ -217,7 +220,11 @@ export function dashboardData(state: State, filter: DashboardFilter) {
     promotions: [...promotions.values()].map((item) => ({ ...item, orders: item.orders.size })),
     courtesyCost: Math.min(summary.discounts, courtesyCost),
     promotionCost: Math.max(0, summary.discounts - courtesyCost),
-    breakdown: { sizes: ranked(sizes), flavors: ranked(flavors), alcohol: ranked(alcohol) },
+    breakdown: {
+      sizes: ranked(sizes),
+      flavors: orderedFlavors(ranked(flavors)),
+      alcohol: ranked(alcohol),
+    },
     previous,
     previousFrom: businessDay(new Date(start - duration)),
     previousTo: addDays(filter.from, -1),
@@ -235,7 +242,6 @@ export function dashboardData(state: State, filter: DashboardFilter) {
     methods,
     refunds,
     expenses,
-    receipts: payments.reduce((n, p) => n + p.amount, 0),
     goals,
     voided: issues.filter((o) => o.status === 'voided').length,
     unpaid: issues.filter((o) => o.status === 'unpaid_incident').reduce((n, o) => n + o.total, 0),

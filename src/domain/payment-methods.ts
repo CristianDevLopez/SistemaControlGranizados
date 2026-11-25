@@ -1,4 +1,4 @@
-import type { MoneyLocation, Payment, PaymentMethod, State } from './types.ts';
+import type { ID, MoneyLocation, Order, Payment, PaymentMethod, State } from './types.ts';
 
 /** Los pagos anteriores al soporte de transferencias se registraban en efectivo. */
 export const paymentMethod = (payment: Pick<Payment, 'method'>): PaymentMethod => payment.method ?? 'cash';
@@ -6,6 +6,38 @@ export const paymentMethod = (payment: Pick<Payment, 'method'>): PaymentMethod =
 export function currentPayments(payments: Payment[]): Payment[] {
   const reversed = new Set(payments.flatMap((payment) => (payment.reversesId ? [payment.reversesId] : [])));
   return payments.filter((payment) => !payment.reversesId && !reversed.has(payment.id));
+}
+
+export const isSale = (order: Order) =>
+  !!order.paidAt && (order.status === 'paid' || order.status === 'void_requested');
+
+/** Un ticket vigente incluye los pagos que heredó de los tickets que sustituyó. */
+export function salePayments(state: State, sales: Order[]): Payment[] {
+  const orders = new Map(state.orders.map((order) => [order.id, order]));
+  const ids = new Set<ID>();
+  for (const sale of sales) {
+    let id: ID | undefined = sale.id;
+    while (id && !ids.has(id)) {
+      ids.add(id);
+      const order = orders.get(id);
+      id = order?.paymentTransferFromId ?? (order?.paymentCredit ? order.replacesId : undefined);
+    }
+  }
+  return currentPayments(state.payments).filter((payment) => ids.has(payment.orderId));
+}
+
+export function paymentTotals(payments: Payment[]) {
+  const totals = { cash: 0, transfer: 0, transferCount: 0, byAccount: {} as Record<ID, number> };
+  for (const payment of payments) {
+    if (paymentMethod(payment) === 'cash') totals.cash += payment.amount;
+    else {
+      totals.transfer += payment.amount;
+      if (payment.amount > 0) totals.transferCount++;
+      const accountId = payment.accountId!;
+      totals.byAccount[accountId] = (totals.byAccount[accountId] ?? 0) + payment.amount;
+    }
+  }
+  return totals;
 }
 
 export function isNequiAccount(account: MoneyLocation): boolean {

@@ -1,3 +1,4 @@
+import { turnMoneyCards } from '../domain/employee-view.ts';
 import { businessDay } from '../domain/business-date.ts';
 import { useRef, useState } from 'react';
 import { Plus, ClipboardCheck, ShieldCheck, Wallet } from 'lucide-react';
@@ -11,13 +12,13 @@ import {
   countPaymentMethods,
   cashExpected,
   closingSupplyOptions,
-  salesByMethod,
+  closingNeedsRecount,
 } from '../domain/engine.ts';
 import { hasPermission, isShiftCashier, shiftBlocksSales } from '../domain/access.ts';
 import { inRehearsalPeriod } from '../domain/closing-archive.ts';
 import { transferAccountName } from './payment-labels.ts';
 import type { ClosingCountMode, ClosingPreview, CommandType, Shift } from '../domain/types.ts';
-import { AuditSetupDialog } from './CashAudit.tsx';
+import { AuditSetupDialog, openingItemsField } from './CashAudit.tsx';
 import { VisibleClosing } from './VisibleClosing.tsx';
 import { OwnClosing } from './OwnClosing.tsx';
 import { RegisterCashExpense } from './RegisterCashExpense.tsx';
@@ -363,7 +364,8 @@ function OpeningCountDialog({
             : 'Conteo de apertura'
           : 'Conteo de apertura';
   const checklist =
-    kind === 'audit' && state.settings[0].auditRequest?.opening && !shift.openingCountId
+    (kind === 'opening' && shift.blindOpening?.depth) ||
+    (kind === 'audit' && state.settings[0].auditRequest?.opening && !shift.openingCountId)
       ? (state.settings[0].openingChecklist ?? [])
       : [];
   return (
@@ -493,6 +495,24 @@ function employeeShiftStatus(shift: Shift) {
   return shift.status === 'closed' || shift.status === 'provisional' ? 'En revisión' : undefined;
 }
 
+function TurnMoney({ cards }: { cards: ReturnType<typeof turnMoneyCards> | undefined }) {
+  if (!cards?.length) return null;
+  return (
+    <Panel title="Ventas y movimientos del turno">
+      <div className="stats-grid">
+        {cards.map((card) => (
+          <Stat
+            key={card.id}
+            label={card.name}
+            value={money(card.amount)}
+            note={`${card.count} ${card.id.startsWith('expenses') || card.id.startsWith('handoffs') ? 'movimientos' : 'pagos'} · ${card.confirmed} confirmados`}
+          />
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
 function EmployeeCash() {
   const app = useApp();
   const { state, actor } = app.data!;
@@ -503,16 +523,15 @@ function EmployeeCash() {
   );
   const active = shifts.find((s) => ['open', 'requested', 'provisional'].includes(s.status));
   const opening = active?.blindOpening?.status;
-  const recount =
-    active?.blindClosing?.status === 'recount' ||
-    (active?.blindClosing?.status === 'ready' && active.blindClosing.countIds?.length === 1);
+  const recount = !!active && closingNeedsRecount(active);
   const auditId = state.settings[0].auditId;
   const owns = hasPermission(actor, 'shifts') && isShiftCashier(actor, active);
   const canStart = actor.primary && actor.role !== 'apoyo' && hasPermission(actor, 'shifts');
   const [count, setCount] = useState<EmployeeCountKind | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
-  const [handoff, setHandoff] = useState<'request' | string | null>(null);
+  const [handoff, setHandoff] = useState<string | null>(null);
+  const [handoffDestination, setHandoffDestination] = useState('');
   const destinations = state.transferDestinations ?? [];
   const pendingHandoff = state.cashHandoffs?.find((item) => item.id === handoff);
   const canHandoff =
@@ -534,7 +553,7 @@ function EmployeeCash() {
               setError('');
               try {
                 await app.run('request_shift', {}, { onlineOnly: true });
-                setCount('opening');
+                app.toast('Solicitud enviada. Un administrador debe autorizar la apertura.');
               } catch (e) {
                 setError((e as Error).message);
               } finally {
@@ -543,7 +562,7 @@ function EmployeeCash() {
             }}
           >
             <Plus size={17} />
-            {starting ? 'Iniciando…' : 'Abrir turno'}
+            {starting ? 'Solicitando…' : 'Abrir turno'}
           </button>
         )}
       </div>
@@ -575,6 +594,12 @@ function EmployeeCash() {
                   : stateNames[active.status]}
             </Badge>
           </div>
+          {active.status === 'requested' && (
+            <p className="notice info">Apertura pendiente de autorización de un administrador.</p>
+          )}
+          {active.status === 'open' && opening === 'pending' && (
+            <p className="notice info">Apertura autorizada. Presenta el conteo para empezar a vender.</p>
+          )}
           {opening === 'review' && (
             <p className="notice warning">
               Las ventas están en pausa mientras un administrador revisa la apertura.
@@ -623,23 +648,9 @@ function EmployeeCash() {
           )}
         </Panel>
       )}
-      {active?.status === 'open' &&
-        state.ownTurnSummary?.find((item) => item.shiftId === active.id)?.cards && (
-          <Panel title="Movimientos de caja">
-            <div className="stats-grid">
-              {state.ownTurnSummary
-                .find((item) => item.shiftId === active.id)!
-                .cards!.map((card) => (
-                  <Stat
-                    key={card.id}
-                    label={card.name}
-                    value={money(card.amount)}
-                    note={`${card.count} ${card.id === 'expenses' || card.id === 'handoffs' ? 'movimientos' : 'pagos'} · ${card.confirmed} confirmados`}
-                  />
-                ))}
-            </div>
-          </Panel>
-        )}
+      {active?.status === 'open' && (
+        <TurnMoney cards={state.ownTurnSummary?.find((item) => item.shiftId === active.id)?.cards} />
+      )}
       {canHandoff && (destinations.length > 0 || !!state.cashHandoffs?.length) && (
         <Panel
           title="Entregas de efectivo desde caja"
@@ -648,9 +659,12 @@ function EmployeeCash() {
               <button
                 className="button small secondary"
                 disabled={!app.online}
-                onClick={() => setHandoff('request')}
+                onClick={() => {
+                  setHandoffDestination('');
+                  setHandoff('new');
+                }}
               >
-                Solicitar traslado
+                Registrar traslado
               </button>
             )
           }
@@ -659,13 +673,19 @@ function EmployeeCash() {
             <div className="notice info" key={item.id}>
               <span>
                 {destinations.find((destination) => destination.id === item.to)?.name ?? 'Destino registrado'}{' '}
-                · {money(item.amount)} · {stateNames[item.status]}
+                · {money(item.amount)} ·{' '}
+                {item.status === 'in_transit'
+                  ? 'Ejecutado · pendiente de recepción'
+                  : stateNames[item.status]}
               </span>
               {item.status === 'requested' && (
                 <button
                   className="button small secondary"
                   disabled={!app.online}
-                  onClick={() => setHandoff(item.id)}
+                  onClick={() => {
+                    setHandoffDestination(item.to);
+                    setHandoff(item.id);
+                  }}
                 >
                   Registrar entrega
                 </button>
@@ -675,14 +695,11 @@ function EmployeeCash() {
         </Panel>
       )}
       {handoff && canHandoff && (
-        <Modal
-          title={handoff === 'request' ? 'Solicitar traslado desde caja' : 'Registrar entrega de efectivo'}
-          onClose={() => setHandoff(null)}
-        >
+        <Modal title="Registrar entrega de efectivo" onClose={() => setHandoff(null)}>
           <FieldsForm
-            fields={
-              handoff === 'request'
-                ? [
+            fields={[
+              ...(handoff === 'new'
+                ? ([
                     {
                       name: 'to',
                       label: 'Destino',
@@ -692,30 +709,35 @@ function EmployeeCash() {
                     },
                     { name: 'amount', label: 'Monto', type: 'money', required: true },
                     { name: 'notes', label: 'Concepto', required: true },
-                  ]
-                : [
-                    {
-                      name: 'delivered',
-                      label: 'Confirmo que entregué el efectivo',
-                      type: 'checkbox',
-                      required: true,
-                    },
-                    {
-                      name: 'evidenceId',
-                      label: 'Comprobante',
-                      type: 'photo',
-                      required: destinations.some(
-                        (item) => item.id === pendingHandoff?.to && item.needsEvidence,
-                      ),
-                    },
-                  ]
-            }
+                  ] satisfies Field[])
+                : []),
+              {
+                name: 'delivered',
+                label: 'Confirmo que entregué el efectivo',
+                type: 'checkbox',
+                required: true,
+              },
+              {
+                name: 'evidenceId',
+                label: 'Comprobante',
+                type: 'photo',
+                required: destinations.some(
+                  (item) => item.id === (pendingHandoff?.to ?? handoffDestination) && item.needsEvidence,
+                ),
+              },
+            ]}
+            submit="Registrar entrega"
             onCancel={() => setHandoff(null)}
-            onSubmit={async (values) => {
-              const result =
-                handoff === 'request'
-                  ? await app.run('request_transfer', { ...values, shiftId: active.id })
-                  : await app.run('execute_transfer', { transferId: handoff, evidenceId: values.evidenceId });
+            onValuesChange={(values) => {
+              if (handoff === 'new') setHandoffDestination(values.to);
+            }}
+            onSubmit={async ({ delivered, ...values }) => {
+              const result = await app.run(
+                'execute_transfer',
+                handoff === 'new'
+                  ? { ...values, shiftId: active.id }
+                  : { transferId: handoff, evidenceId: values.evidenceId },
+              );
               app.toast(result.message);
               setHandoff(null);
             }}
@@ -803,15 +825,11 @@ function AdminCash() {
     directOpening = admin && app.online;
   const { auditId, auditRequest, nextOpeningAudit } = state.settings[0];
   const openingAudit = auditRequest?.opening === true;
-  const recount =
-    active?.blindClosing?.status === 'recount' ||
-    (active?.blindClosing?.status === 'ready' && active.blindClosing.countIds?.length === 1);
-  const sales =
+  const recount = !!active && closingNeedsRecount(active);
+  const showTotals =
     admin &&
     active?.status === 'open' &&
-    (!active.blindOpening || ['matched', 'authorized', 'reviewed'].includes(active.blindOpening.status))
-      ? salesByMethod(state, active.id)
-      : undefined;
+    (!active.blindOpening || ['matched', 'authorized', 'reviewed'].includes(active.blindOpening.status));
   const [count, setCount] = useState<EmployeeCountKind | null>(null),
     [auditSetup, setAuditSetup] = useState<'current' | 'next_opening' | null>(null),
     [form, setForm] = useState<{
@@ -856,6 +874,7 @@ function AdminCash() {
                         min: 0,
                         required: true,
                       },
+                      openingItemsField(state),
                     ],
                   })
                 : void act('request_shift')
@@ -916,6 +935,7 @@ function AdminCash() {
                           min: 0,
                           required: true,
                         },
+                        openingItemsField(state),
                       ],
                     })
                   }
@@ -1006,22 +1026,11 @@ function AdminCash() {
             {active.status === 'open' && !active.openingCountId && !openingAudit && (
               <div className="notice warning">Conteo de apertura pendiente.</div>
             )}
-            {sales && (
+            {showTotals && (
               <>
                 <div className="stats-grid">
                   <Stat label="Efectivo esperado" value={money(cashExpected(state, active.id))} />
-                  <Stat
-                    label="Gastos sin aprobar"
-                    value={money(
-                      state.expenses
-                        .filter(
-                          (x) => x.shiftId === active.id && x.status === 'pending' && x.source === 'cash',
-                        )
-                        .reduce((n, x) => n + x.amount, 0),
-                    )}
-                  />
                   <Stat label="Base del turno" value={money(active.base)} />
-                  <Stat label="Cobrado en efectivo" value={money(sales.cash)} />
                 </div>
               </>
             )}
@@ -1037,6 +1046,7 @@ function AdminCash() {
           />
         )}
       </Panel>
+      {admin && active?.status === 'open' && <TurnMoney cards={turnMoneyCards(state, active)} />}
       <OwnClosing />
       {count &&
         active &&

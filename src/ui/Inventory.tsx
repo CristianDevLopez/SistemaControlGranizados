@@ -1,3 +1,4 @@
+import { orderedFlavors } from '../domain/flavors.ts';
 import { supplies } from '../domain/supplies.ts';
 import { supplyDuration } from '../domain/inventory.ts';
 import { AddPackages } from './AddPackages.tsx';
@@ -140,7 +141,9 @@ function AdminInventory({ snapshot, onCorrect }: { snapshot: Snapshot; onCorrect
           {settings.liquidTolerance === null
             ? 'Configura la tolerancia para señalar diferencias positivas.'
             : `Tolerancia configurada ${amount.format(settings.liquidTolerance * 100)} %.`}{' '}
-          Las degustaciones cuentan como merma esperada. El cálculo excluye el remanente fijo de la máquina.
+          Registra cada bolsa al abrirla. La siguiente apertura del mismo sabor da por terminada la bolsa
+          anterior. Las degustaciones cuentan como merma esperada. El cálculo excluye el remanente fijo de la
+          máquina.
         </p>
         <div className="table-wrap">
           <table>
@@ -272,7 +275,7 @@ export function Inventory() {
           label: 'Sabor',
           type: 'select',
           required: true,
-          options: state.flavors.map((flavor) => ({ value: flavor.id, label: flavor.name })),
+          options: orderedFlavors(state.flavors).map((flavor) => ({ value: flavor.id, label: flavor.name })),
         },
       ],
     });

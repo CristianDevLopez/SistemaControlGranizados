@@ -1,3 +1,4 @@
+import { orderedFlavors } from '../domain/flavors.ts';
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { Plus, Ticket, Gift, Download, Share2, CalendarClock, Power, Copy } from 'lucide-react';
@@ -37,6 +38,66 @@ export function Promotions() {
     [excess, setExcess] = useState(false);
   const show = state.coupons.find((coupon) => coupon.id === showId);
   const promotions = state.promotions.filter((promotion) => !promotion.courtesyOnly);
+  const now = new Date().toISOString();
+  const current = promotions.filter((item) => item.active && item.startsAt <= now && now < item.endsAt);
+  const upcoming = promotions.filter((item) => item.active && now < item.startsAt);
+  const history = promotions.filter((item) => !item.active || item.endsAt <= now);
+  const cards = (items: Promotion[]) => (
+    <div className="promo-grid">
+      {items.map((p) => (
+        <Panel key={p.id} className="promo-card">
+          <div className="promo-card-head">
+            <span className="promo-icon">
+              {p.delivery === 'coupon' ? <Ticket size={23} /> : <CalendarClock size={23} />}
+            </span>
+            <Badge tone={p.active ? 'green' : 'neutral'}>
+              {!p.active
+                ? 'Desactivada'
+                : p.endsAt <= now
+                  ? 'Vencida'
+                  : p.startsAt > now
+                    ? 'Programada'
+                    : 'Activa'}
+            </Badge>
+          </div>
+          <h3>{p.name}</h3>
+          <strong className="promo-effect">{effect(p)}</strong>
+          <p>
+            {p.delivery === 'coupon'
+              ? 'Se aplica con código verificado online'
+              : (p.limitedSchedule ?? (p.days.length > 0 || p.startTime !== '00:00' || p.endTime !== '23:59'))
+                ? `Selección en el cobro · ${p.startTime}–${p.endTime}`
+                : 'Selección en el cobro'}
+          </p>
+          <small>
+            {date(p.startsAt)} — {date(p.endsAt)}
+          </small>
+          {p.delivery === 'schedule' && p.checkoutText && <small>{p.checkoutText}</small>}
+          <small>
+            {p.redemptions} beneficios aplicados{p.maxRedemptions !== null ? ` de ${p.maxRedemptions}` : ''}
+          </small>
+          <div className="button-row">
+            <button className="button small secondary" onClick={() => setEdit(p)}>
+              Editar
+            </button>
+            <button
+              className="text-button"
+              onClick={async () => {
+                try {
+                  await app.run('save_promotion', { ...p, active: !p.active });
+                } catch (e) {
+                  app.toast((e as Error).message);
+                }
+              }}
+            >
+              <Power size={15} />
+              {p.active ? 'Proponer desactivación' : 'Proponer activación'}
+            </button>
+          </div>
+        </Panel>
+      ))}
+    </div>
+  );
   return (
     <div className="page-stack">
       <div className="page-toolbar">
@@ -59,66 +120,33 @@ export function Promotions() {
           </button>
         </div>
       </div>
-      <div className="promo-grid">
-        {promotions.map((p) => (
-          <Panel key={p.id} className="promo-card">
-            <div className="promo-card-head">
-              <span className="promo-icon">
-                {p.delivery === 'coupon' ? <Ticket size={23} /> : <CalendarClock size={23} />}
-              </span>
-              <Badge tone={p.active ? 'green' : 'neutral'}>{p.active ? 'Activa' : 'Apagada'}</Badge>
-            </div>
-            <h3>{p.name}</h3>
-            <strong className="promo-effect">{effect(p)}</strong>
-            <p>
-              {p.delivery === 'coupon'
-                ? 'Se aplica con código verificado online'
-                : (p.limitedSchedule ??
-                    (p.days.length > 0 || p.startTime !== '00:00' || p.endTime !== '23:59'))
-                  ? `Selección en el cobro · ${p.startTime}–${p.endTime}`
-                  : 'Selección en el cobro'}
-            </p>
-            <small>
-              {date(p.startsAt)} — {date(p.endsAt)}
-            </small>
-            {p.delivery === 'schedule' && p.checkoutText && <small>{p.checkoutText}</small>}
-            <small>
-              {p.redemptions} beneficios aplicados{p.maxRedemptions !== null ? ` de ${p.maxRedemptions}` : ''}
-            </small>
-            <div className="button-row">
-              <button className="button small secondary" onClick={() => setEdit(p)}>
-                Editar
+      {current.length ? (
+        cards(current)
+      ) : (
+        <Panel>
+          <Empty
+            title="No hay promociones activas"
+            description="Las vencidas y desactivadas se pueden consultar en el historial."
+            action={
+              <button className="button primary" onClick={() => setEdit(null)}>
+                Crear promoción
               </button>
-              <button
-                className="text-button"
-                onClick={async () => {
-                  try {
-                    await app.run('save_promotion', { ...p, active: !p.active });
-                  } catch (e) {
-                    app.toast((e as Error).message);
-                  }
-                }}
-              >
-                <Power size={15} />
-                {p.active ? 'Proponer desactivación' : 'Proponer activación'}
-              </button>
-            </div>
-          </Panel>
-        ))}
-        {!promotions.length && (
-          <Panel>
-            <Empty
-              title="Crea una promoción general"
-              description="Combina producto, efecto, vigencia y forma de entrega. Cada publicación queda en el histórico."
-              action={
-                <button className="button primary" onClick={() => setEdit(null)}>
-                  Crear promoción
-                </button>
-              }
-            />
-          </Panel>
-        )}
-      </div>
+            }
+          />
+        </Panel>
+      )}
+      {upcoming.length > 0 && (
+        <details className="promotion-history">
+          <summary>Promociones programadas ({upcoming.length})</summary>
+          {cards(upcoming)}
+        </details>
+      )}
+      {history.length > 0 && (
+        <details className="promotion-history">
+          <summary>Historial de promociones ({history.length})</summary>
+          {cards(history)}
+        </details>
+      )}
       <Panel
         title="Cortesías y cupones emitidos"
         action={
@@ -321,7 +349,7 @@ function CourtesyDialog({ onClose, onIssued }: { onClose: () => void; onIssued: 
             name: 'flavorIds',
             label: 'Sabores permitidos (sin seleccionar: todos)',
             type: 'multiselect',
-            options: state.flavors
+            options: orderedFlavors(state.flavors)
               .filter((flavor) => flavor.active)
               .map((flavor) => ({ value: flavor.id, label: flavor.name })),
           },
@@ -503,9 +531,8 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
           ? 'Sabores del producto de cortesía (obligatorio)'
           : 'Sabores elegibles (sin seleccionar: todos)',
       type: 'multiselect',
-      options: state.flavors
+      options: orderedFlavors(state.flavors)
         .filter((x) => x.active)
-        .sort((a, b) => a.name.localeCompare(b.name, 'es'))
         .map((x) => ({ value: x.id, label: `${x.name} · ${x.alcohol ? 'Con licor' : 'Sin licor'}` })),
     },
     { name: 'stackable', label: 'Acumulable con otras promociones', type: 'checkbox', value: false },

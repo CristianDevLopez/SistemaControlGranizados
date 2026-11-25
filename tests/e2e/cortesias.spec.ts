@@ -83,7 +83,7 @@ test('el administrador emite y canjea la cortesía de un vaso combinado completo
   await generated.getByRole('button', { name: 'Cerrar', exact: true }).click();
   await nav(page, 'Mostrador');
   const register = page;
-  await register.getByRole('button', { name: '16 ONZAS', exact: true }).click();
+  await register.getByRole('button', { name: 'Medio 16 onzas', exact: true }).click();
   await register.getByRole('button', { name: 'Combinado / bomba', exact: true }).click();
   await register.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
   await register.getByRole('button').filter({ hasText: 'Sabor de prueba sin licor' }).click();
@@ -130,7 +130,7 @@ test('el administrador emite y canjea la cortesía de un vaso combinado completo
   await expect(register.locator('tbody')).toContainText('Cortesía aplicada al vaso completo');
   await expect(register.locator('tbody')).toContainText('1/1 entregados');
   await nav(register, 'Mostrador');
-  await register.getByRole('button', { name: '16 ONZAS', exact: true }).click();
+  await register.getByRole('button', { name: 'Medio 16 onzas', exact: true }).click();
   await register.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
   await register.getByRole('button', { name: 'Redimir cupón, cortesía o promoción', exact: true }).click();
   const reused = register.getByRole('dialog');

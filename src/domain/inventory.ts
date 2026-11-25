@@ -1,3 +1,4 @@
+import { orderedFlavors } from './flavors.ts';
 import { supplies } from './supplies.ts';
 import { stockBalances, usesCupPackages } from './engine.ts';
 import { inRehearsalPeriod } from './closing-archive.ts';
@@ -84,7 +85,7 @@ export function liquidBagInventory(state: State) {
   const damageDates = new Map(
     state.requests.filter((request) => request.type === 'damage').map((request) => [request.id, request.at]),
   );
-  return state.flavors.map((flavor) => {
+  return orderedFlavors(state.flavors).map((flavor) => {
     const movements = state.stock
       .filter((movement) => movement.article === `liquid:${flavor.id}`)
       .map((movement) =>
@@ -147,7 +148,8 @@ export function inventoryDiscrepancies(state: State, liquid = liquidBagInventory
         article: row.name,
         amount: row.remaining,
         unit: 'oz',
-        explanation: 'Posible bolsa abierta sin registrar. Verifica las bolsas selladas.',
+        explanation:
+          'El consumo supera el líquido registrado. Cuenta las bolsas selladas y verifica cuándo se abrió la bolsa en uso.',
       });
     if (row.difference < 0 || row.aboveTolerance)
       result.push({
@@ -157,7 +159,7 @@ export function inventoryDiscrepancies(state: State, liquid = liquidBagInventory
         unit: 'oz',
         explanation:
           row.difference < 0
-            ? 'Consumo superior al contenido de las bolsas terminadas. Verifica las bolsas selladas.'
+            ? 'El consumo registrado supera el volumen de las bolsas terminadas. Contrasta las aperturas con el conteo físico.'
             : 'Posible salida de líquido sin registrar o apertura registrada por error.',
       });
     if (row.consecutiveLow)

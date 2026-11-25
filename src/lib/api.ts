@@ -59,6 +59,7 @@ export async function api<T = any>(path: string, body?: unknown): Promise<T> {
     (legacyDevice && (!branchId || legacyDevice.branchId === branchId || !legacyDevice.branchId)
       ? legacyDevice
       : undefined);
+  const signal = AbortSignal.timeout(15000);
   const response = await fetch(`${testGateway ?? `${url}/functions/v1/dexter`}/${path}`, {
     method: body === undefined ? 'GET' : 'POST',
     headers: {
@@ -70,13 +71,23 @@ export async function api<T = any>(path: string, body?: unknown): Promise<T> {
       ...(branchId ? { 'X-Branch-Id': branchId } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(15000),
+    signal,
+  }).catch(() => {
+    if (signal.aborted) throw new ApiError('El servidor tardó en responder.', 'REQUEST_TIMEOUT', 408);
+    throw new ApiError('No se pudo contactar con el servidor.', 'NETWORK_ERROR', 0);
   });
-  const data = await response.json();
+  const data = await response.json().catch((error: unknown) => {
+    if (signal.aborted) throw new ApiError('El servidor tardó en responder.', 'REQUEST_TIMEOUT', 408);
+    if (error instanceof SyntaxError) {
+      if (!response.ok) return null;
+      throw new ApiError('El servidor devolvió una respuesta inesperada.', 'INVALID_RESPONSE', 502);
+    }
+    throw new ApiError('Se interrumpió la respuesta del servidor.', 'NETWORK_ERROR', 0);
+  });
   if (!response.ok)
     throw new ApiError(
-      data.error ?? 'No se pudo completar la operación.',
-      data.code ?? 'SERVER_ERROR',
+      data?.error ?? 'No se pudo completar la operación.',
+      data?.code ?? 'SERVER_ERROR',
       response.status,
     );
   return data;

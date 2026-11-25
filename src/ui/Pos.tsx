@@ -18,7 +18,7 @@ import { api } from '../lib/api.ts';
 import { getMeta, setMeta } from '../lib/db.ts';
 import { checkoutPromotions, lineTotal, quoteOrder } from '../domain/pricing.ts';
 import { additionsTotal, configuredAdditions, type CandyAddition } from '../domain/additions.ts';
-import { hasAlcohol, sameFlavors } from '../domain/flavors.ts';
+import { orderedFlavors, hasAlcohol, sameFlavors } from '../domain/flavors.ts';
 import { FlavorPortions, flavorName, portionLabel } from './FlavorDetails.tsx';
 import {
   canWork,
@@ -167,9 +167,39 @@ export function Scanner({ onCode, onClose }: { onCode: (code: string) => void; o
   );
 }
 
+function CashChange({
+  due,
+  value,
+  onChange,
+}: {
+  due: number;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const received = parseMoney(value);
+  return (
+    <label className="field">
+      <span>
+        Efectivo recibido <small>Opcional</small>
+      </span>
+      <MoneyInput value={value} onChange={onChange} placeholder={money(due)} preview={false} />
+      {received !== null &&
+        (received >= due ? (
+          <small aria-live="polite">Vuelto: {money(received - due)}</small>
+        ) : (
+          <small aria-live="polite" className="warning-text">
+            Faltan {money(due - received)}
+          </small>
+        ))}
+    </label>
+  );
+}
+
 function Checkout({
   order,
   initialPayment,
+  initialTendered,
+  deliverLater,
   focusCoupon,
   eligiblePromotions,
   onClose,
@@ -177,6 +207,8 @@ function Checkout({
 }: {
   order: Order;
   initialPayment: PaymentChoice;
+  initialTendered: string;
+  deliverLater: boolean;
   focusCoupon: boolean;
   eligiblePromotions: ReturnType<typeof checkoutPromotions>;
   onClose: () => void;
@@ -210,8 +242,8 @@ function Checkout({
     [scanner, setScanner] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
-    [deliver, setDeliver] = useState(true),
-    [tendered, setTendered] = useState(''),
+    [deliver, setDeliver] = useState(!deliverLater),
+    [tendered, setTendered] = useState(initialTendered),
     [refundPhoto, setRefundPhoto] = useState<File | null>(null);
   const submitting = useRef(false);
   const refreshQuote = async (all: string[], selected: string[]) => {
@@ -280,7 +312,7 @@ function Checkout({
           )}
         </div>
         {eligiblePromotions.map((promotion) => (
-          <label key={promotion.id} className="check-inline">
+          <label key={promotion.id} className="button secondary promotion-option">
             <input
               type="checkbox"
               checked={promotionIds.includes(promotion.id)}
@@ -380,23 +412,7 @@ function Checkout({
           <PaymentPicker value={payment} onChange={setPayment} accounts={transferAccounts(state, due < 0)} />
         )}
         {due > 0 && payment.method === 'cash' && (
-          <label className="field">
-            <span>
-              Efectivo recibido <small>Opcional</small>
-            </span>
-            <MoneyInput
-              value={tendered}
-              onChange={(text) => setTendered(text)}
-              placeholder={money(due)}
-              preview={false}
-            />
-            {parseMoney(tendered) !== null &&
-              (parseMoney(tendered)! >= due ? (
-                <small>Vuelto: {money(parseMoney(tendered)! - due)}</small>
-              ) : (
-                <small className="warning-text">Faltan {money(due - parseMoney(tendered)!)}</small>
-              ))}
-          </label>
+          <CashChange due={due} value={tendered} onChange={setTendered} />
         )}
         {due < 0 && (
           <label className="field">
@@ -474,15 +490,18 @@ function Checkout({
   );
 }
 
+const cupNames: Record<number, string> = { 12: 'Mini', 16: 'Medio', 20: 'Grande', 24: 'XL' };
+
 export function Pos() {
   const app = useApp(),
     { state, actor, profiles } = app.data!;
   const [sizeId, setSizeId] = useState(state.sizes.find((x) => x.active)?.id ?? ''),
+    [received, setReceived] = useState(''),
     [orderId, setOrderId] = useState<string | null>(null),
     [nameDraft, setNameDraft] = useState<{ orderId: string | null; value: string } | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
-    [checkout, setCheckout] = useState<'payment' | 'benefit' | null>(null),
+    [checkout, setCheckout] = useState<'payment' | 'benefit' | 'later' | null>(null),
     [packageSize, setPackageSize] = useState<string | null>(null),
     [showOrders, setShowOrders] = useState(false),
     [mixing, setMixing] = useState(false),
@@ -540,6 +559,7 @@ export function Pos() {
     };
   }, [activeOrderKey]);
   const select = (key: string | null) => {
+    setReceived('');
     setOrderId(key);
     setNameDraft(null);
     void setMeta(activeOrderKey, key);
@@ -714,8 +734,8 @@ export function Pos() {
                   onClick={() => setSizeId(s.id)}
                   aria-pressed={sizeId === s.id}
                 >
-                  <span>{s.name.replace(' oz', '')}</span>
-                  <small>{s.name.includes('oz') ? 'ONZAS' : s.name}</small>
+                  <span>{s.ounces === 101 ? 'Nevera' : (cupNames[s.ounces] ?? s.name)}</span>
+                  {s.ounces > 0 && <small>{s.ounces} onzas</small>}
                   {sizeId === s.id && (
                     <span className="selected-check">
                       <Check size={12} />
@@ -767,9 +787,8 @@ export function Pos() {
           </div>
           {state.flavors.some((x) => x.active) ? (
             <div className="flavor-grid">
-              {state.flavors
+              {orderedFlavors(state.flavors)
                 .filter((f) => f.active && (flavorGroup === 'all' || f.alcohol === (flavorGroup === 'yes')))
-                .sort((a, b) => a.name.localeCompare(b.name, 'es'))
                 .map((f, index) => {
                   const price = f.alcohol ? size?.alcoholPrice : size?.plainPrice;
                   return (
@@ -1059,6 +1078,9 @@ export function Pos() {
                 {canCash && order.lines.length > 0 ? (
                   <>
                     <PaymentPicker value={payment} onChange={setPayment} accounts={transferAccounts(state)} />
+                    {payment.method === 'cash' && order.total > 0 && (
+                      <CashChange due={order.total} value={received} onChange={setReceived} />
+                    )}
                     <button
                       className="button primary full large"
                       disabled={busy || !!state.settings[0].auditId}
@@ -1097,11 +1119,11 @@ export function Pos() {
                       </button>
                     )}
                     <button
-                      className="text-button full"
+                      className="button secondary full"
                       disabled={busy || !!state.settings[0].auditId}
-                      onClick={() => setCheckout('payment')}
+                      onClick={() => setCheckout('later')}
                     >
-                      Vuelto o entregar después
+                      Cobrar y entregar después
                     </button>
                   </>
                 ) : order.cashHandoff === 'sent' ? (
@@ -1147,7 +1169,7 @@ export function Pos() {
                 )}
                 {canCancel && order.lines.length > 0 && (
                   <button
-                    className="text-button full"
+                    className="button secondary full"
                     disabled={busy || !canOrders || !!state.settings[0].auditId}
                     onClick={() => void action(cancelOrder)}
                   >
@@ -1156,7 +1178,7 @@ export function Pos() {
                   </button>
                 )}
                 {!orderAssistant && (
-                  <button className="text-button full" disabled={busy} onClick={() => select(null)}>
+                  <button className="button secondary full" disabled={busy} onClick={() => select(null)}>
                     Guardar y abrir otro pedido
                   </button>
                 )}
@@ -1196,6 +1218,8 @@ export function Pos() {
           key={`${order.id}:${order.version}`}
           order={order}
           initialPayment={payment}
+          initialTendered={received}
+          deliverLater={checkout === 'later'}
           focusCoupon={checkout === 'benefit'}
           eligiblePromotions={eligiblePromotions}
           onClose={() => setCheckout(null)}

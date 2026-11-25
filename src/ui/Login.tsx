@@ -118,7 +118,7 @@ export function Login({ onRecover }: { onRecover: () => void }) {
     return (
       <div className="login-page">
         <div className="login-intro">
-          <img src="/dexter.jpg" alt="Dexter’s" />
+          <img src="/LogoDexterTaraza.jpeg" alt="" />
           <span className="eyebrow">DEXTER’S GRANIZADOS</span>
           <h1>
             El mostrador,
@@ -141,7 +141,7 @@ export function Login({ onRecover }: { onRecover: () => void }) {
   return (
     <div className="login-page">
       <div className="login-intro">
-        <img src="/dexter.jpg" alt="Dexter’s" />
+        <img src="/LogoDexterTaraza.jpeg" alt="" />
         <span className="eyebrow">DEXTER’S GRANIZADOS · TARAZÁ</span>
         <h1>
           Todo listo para

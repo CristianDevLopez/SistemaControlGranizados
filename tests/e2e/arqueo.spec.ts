@@ -50,7 +50,10 @@ async function enterAdmin(page: Page) {
   await expect(page.getByRole('heading', { name: 'Hagamos un gran día.' })).toBeVisible();
 }
 
-test('la apertura permanece a ciegas mientras el cierre muestra lo esperado', async ({ page, request }) => {
+test('el primer conteo es a ciegas y el recuento de cierre muestra lo esperado', async ({
+  page,
+  request,
+}) => {
   await request.post('http://127.0.0.1:5180/reset');
   const snapshot = page.waitForResponse(
     (response) => response.url().endsWith('/dexter/snapshot') && response.ok(),
@@ -62,10 +65,18 @@ test('la apertura permanece a ciegas mientras el cierre muestra lo esperado', as
   expect(data.state.shifts[0]).not.toHaveProperty('base');
   await nav(page, 'Mi turno');
   await page.getByRole('button', { name: 'Cerrar turno', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'Cierre de caja' });
-  await expect(dialog).toContainText('Debería haber');
+  const dialog = page.getByRole('dialog', { name: 'Cierre de caja', exact: true });
+  const submit = dialog.getByRole('button', { name: 'Enviar primer conteo' });
+  await expect(submit).toBeVisible();
+  await expect(dialog.getByRole('columnheader', { name: 'Debería haber' })).toHaveCount(0);
   await expect(dialog).toContainText('Paquetes cerrados');
   await expect(dialog).not.toContainText(/Bolsas selladas|Coronitas/);
+  await dialog.getByLabel('Efectivo', { exact: true }).fill('0');
+  for (const input of await dialog.getByRole('spinbutton').all()) await input.fill('0');
+  await submit.click();
+  const recount = page.getByRole('dialog', { name: 'Cierre de caja · Segundo conteo', exact: true });
+  await expect(recount.getByRole('columnheader', { name: 'Debería haber' })).toBeVisible();
+  await expect(recount.getByLabel('Efectivo', { exact: true })).toHaveValue('0');
 });
 
 test('el admin selecciona ítems, el cajero cuenta a ciegas y el admin revisa el corte original', async ({

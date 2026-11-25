@@ -5,10 +5,12 @@ import { FieldsForm, Modal } from './components.tsx';
 export function AddPackages({
   onClose,
   suggested = {},
+  closingShiftId,
   onAdded = onClose,
 }: {
   onClose: () => void;
   suggested?: Record<string, number>;
+  closingShiftId?: string;
   onAdded?: () => void;
 }) {
   const app = useApp();
@@ -33,7 +35,11 @@ export function AddPackages({
           const quantities = Object.fromEntries(
             sizes.filter((size) => Number(values[size.id]) > 0).map((size) => [size.id, values[size.id]]),
           );
-          await app.run('open_package', { quantities });
+          await app.run(
+            'open_package',
+            { quantities, ...(closingShiftId && { closingRecount: true, shiftId: closingShiftId }) },
+            { onlineOnly: !!closingShiftId },
+          );
           app.toast('Paquetes agregados.');
           onAdded();
         }}

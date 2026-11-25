@@ -67,6 +67,7 @@ interface AppContext {
   changeView: (role: Role | null) => boolean;
   switchBranch: (branchId: string) => Promise<void>;
   online: boolean;
+  reconnecting: boolean;
   pending: OutboxEntry[];
   rejected: OutboxEntry[];
   photosPending: number;
@@ -88,6 +89,7 @@ interface AppContext {
   toast: (message: string) => void;
 }
 const Context = createContext<AppContext | null>(null);
+const offlineMessage = 'Sin conexión a internet. Los registros guardados se conservan en este equipo.';
 export function useApp() {
   const value = useContext(Context);
   if (!value) throw new Error('AppProvider missing');
@@ -138,6 +140,7 @@ const ONLINE_TYPES = new Set<CommandType>([
 export function AppProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<Snapshot | null>(null),
     [online, setOnline] = useState(navigator.onLine),
+    [reconnecting, setReconnecting] = useState(false),
     [outbox, setOutbox] = useState<OutboxEntry[]>([]),
     [syncing, setSyncing] = useState(false),
     [lastSync, setLastSync] = useState<string | null>(null),
@@ -160,22 +163,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const retry = useRef({ failures: 0, after: 0 });
   const resetRetry = useCallback(() => {
     retry.current = { failures: 0, after: 0 };
+    setReconnecting(false);
   }, []);
-  const handleSyncError = useCallback((error: unknown) => {
-    if (!(error instanceof ApiError) || error.status === 408 || error.status === 429 || error.status >= 500) {
-      const failures = Math.min(retry.current.failures + 1, 5);
-      const delay = Math.min(5_000 * 2 ** (failures - 1), 60_000);
-      retry.current = { failures, after: Date.now() + delay + Math.random() * Math.min(delay / 5, 2_000) };
-    }
-    if (error instanceof ApiError) {
-      setError(error.message);
-      if (['UNAUTHORIZED', 'FORBIDDEN', 'DEVICE_REQUIRED', 'DEVICE_REVOKED'].includes(error.code))
+  const markOffline = useCallback(() => {
+    setOnline(false);
+    setReconnecting(false);
+    setError(offlineMessage);
+  }, []);
+  const handleSyncError = useCallback(
+    (error: unknown) => {
+      const temporary =
+        error instanceof ApiError &&
+        (error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500);
+      if (!navigator.onLine) {
+        markOffline();
+        return;
+      }
+      if (temporary || !(error instanceof ApiError)) {
+        const failures = Math.min(retry.current.failures + 1, 6);
+        const delay = Math.min(4_000 * 2 ** (failures - 1), 60_000);
+        retry.current = { failures, after: Date.now() + delay + Math.random() * Math.min(delay / 5, 2_000) };
+      }
+      if (temporary) {
+        setReconnecting(true);
+        if (retry.current.failures < 2) return;
         setOnline(false);
-    } else {
-      setOnline(false);
-      setError('Sin conexión con el servidor. Los registros locales se conservan.');
-    }
-  }, []);
+        setError(
+          'No se puede sincronizar con el servidor. Los registros se conservan y se reintentará automáticamente.',
+        );
+      } else if (error instanceof ApiError) {
+        resetRetry();
+        setError(error.message);
+        if (
+          error.status === 401 ||
+          ['UNAUTHORIZED', 'FORBIDDEN', 'DEVICE_REQUIRED', 'DEVICE_REVOKED'].includes(error.code)
+        )
+          setOnline(false);
+      } else {
+        setError(
+          'No se pudo actualizar la información. Los registros guardados se conservan en este equipo.',
+        );
+      }
+    },
+    [markOffline, resetRetry],
+  );
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toast = useCallback((message: string) => {
     if (noticeTimer.current !== null) clearTimeout(noticeTimer.current);
@@ -248,13 +279,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
         .length,
     );
   }, []);
+  const markContact = useCallback(() => {
+    if (navigator.onLine) {
+      setOnline(true);
+      setError(null);
+    } else markOffline();
+  }, [markOffline]);
   const load = useCallback(
     async (received?: Snapshot) => {
       if (!received) await ensureBranch();
       const result = received ?? (await snapshot());
       if ('unchanged' in result) return;
-      setOnline(true);
-      setError(null);
       const entries = (await db.outbox.toArray())
         .filter((x) => belongsToBranch(x, result))
         .sort((a, b) => a.sequence - b.sequence);
@@ -319,8 +354,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLastSync(at);
       await setMeta('lastSync', at);
       await updatePending();
+      markContact();
+      if (!received) resetRetry();
     },
-    [remember, updatePending],
+    [markContact, remember, resetRetry, updatePending],
+  );
+  const refresh = useCallback(
+    async (full: boolean) => {
+      const result = await snapshot(full ? undefined : current.current?.revision);
+      if (!('unchanged' in result)) {
+        await load(result);
+        return;
+      }
+      if (result.access && current.current) {
+        current.current = { ...current.current, access: result.access, branch: result.branch };
+        setData(current.current);
+      }
+      setLastSync(result.serverAt);
+      markContact();
+    },
+    [load, markContact],
   );
   const sync = useCallback(
     async (manual = false) => {
@@ -340,15 +393,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         finishSync = resolve;
       });
       syncLock.current = true;
-      setSyncing(true);
+      let hasPendingWork = false;
       try {
         const queued = async () =>
           (await db.outbox.toArray())
             .filter((x) => belongsToBranch(x, current.current))
             .sort((a, b) => a.sequence - b.sequence);
         let entries = await queued();
-        if (entries.some((entry) => entry.status === 'conflict' || entry.status === 'reconciled')) {
-          await load();
+        const photos = (await db.photos.toArray()).filter(
+          (x) => belongsToBranch(x, current.current) && x.status === 'pending',
+        );
+        hasPendingWork = entries.some((entry) => entry.status === 'pending') || photos.length > 0;
+        if (manual || hasPendingWork) setSyncing(true);
+        const checkingReview = entries.some((entry) => entry.status === 'conflict');
+        let full = entries.some((entry) => entry.status === 'acknowledged');
+        if (checkingReview) {
+          await refresh(full);
+          full = false;
           entries = await queued();
         }
         const unresolved: OutboxEntry[] = [];
@@ -366,9 +427,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
               }
             : entry.command;
           const response = await sendCommands([command]);
-          const result = response.results[0];
+          const result = response?.results?.[0];
           if (result?.id !== entry.id || !['accepted', 'review', 'conflict'].includes(result.status))
-            throw new Error('Respuesta incompleta del servidor.');
+            throw new ApiError('Respuesta incompleta del servidor.', 'INVALID_RESPONSE', 502);
           recentResults.current.set(entry.id, result);
           const status: OutboxEntry['status'] =
             result.finalRejection || isFinalRejection(entry, result)
@@ -383,18 +444,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
             reviewRecorded: result.syncReview === true,
           };
           await db.outbox.update(entry.id, updated);
+          full = true;
           if (result.status === 'conflict') toast(result.message);
           if (status === 'conflict') unresolved.push({ ...entry, ...updated });
         }
-        const photos = (await db.photos.toArray()).filter(
-          (x) => belongsToBranch(x, current.current) && x.status === 'pending',
-        );
         for (const photo of photos) {
           try {
             const blob = photoBlob(photo);
             const target = await api('attachments/upload', { id: photo.id });
             if (target.completed) {
               await db.photos.delete(photo.id);
+              full = true;
               continue;
             }
             if (testGateway) {
@@ -410,29 +470,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
             }
             await api('attachments/complete', { id: photo.id, path: target.path });
             await db.photos.delete(photo.id);
+            full = true;
           } catch (e) {
             await db.photos.update(photo.id, { error: (e as Error).message });
           }
         }
-        await load();
+        if (!checkingReview || full) await refresh(full);
         resetRetry();
       } catch (e) {
         if (await revokeCachedAccess(e)) return;
         handleSyncError(e);
       } finally {
-        syncLock.current = false;
         try {
           if (live.current) {
             setSyncing(false);
-            await updatePending();
+            if (hasPendingWork) await updatePending();
           }
         } finally {
+          syncLock.current = false;
           finishSync();
         }
       }
     },
-    [handleSyncError, load, resetRetry, revokeCachedAccess, toast, updatePending],
+    [handleSyncError, refresh, resetRetry, revokeCachedAccess, toast, updatePending],
   );
+  const syncNow = useCallback(() => sync(true), [sync]);
   const run = useCallback(
     (
       type: CommandType,
@@ -474,13 +536,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
             operatingShift(snapshot.state) ??
             snapshot.state.shifts.find((x) => x.status === 'requested' || x.status === 'provisional');
           const sequence = ((await getMeta<number>('sequence')) ?? 0) + 1;
+          const treasuryExpense =
+            (type === 'expense' && payload.source === 'treasury') ||
+            (type === 'create_shipment' && payload.paidWith === 'treasury');
           const command: Command = {
             id: crypto.randomUUID(),
             branchId: snapshot.actor.branchId,
             type,
             actorId: snapshot.actor.id,
             deviceId: snapshot.actor.deviceId,
-            shiftId: shift?.id,
+            shiftId: treasuryExpense ? undefined : shift?.id,
             at: options.at ?? new Date().toISOString(),
             configVersion: snapshot.state.settings[0].version,
             sequence,
@@ -561,6 +626,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             void sync();
             return { ...result, pendingSync: true };
           }
+          await updatePending();
           await sync();
           if ((await db.outbox.get(command.id))?.status === 'pending' && navigator.onLine) await sync();
           const saved = await db.outbox.get(command.id);
@@ -787,57 +853,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [online, data?.actor.id, data?.actor.branchId, run]);
   useEffect(() => {
     live.current = true;
-    const changed = () => {
-      if (navigator.onLine) void sync();
-      else setOnline(false);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void sync();
     };
-    window.addEventListener('online', changed);
-    window.addEventListener('offline', changed);
-    window.addEventListener('focus', changed);
-    const timer = setInterval(() => {
-      if (
-        document.visibilityState === 'visible' &&
-        current.current &&
-        navigator.onLine &&
-        !switchingBranch.current &&
-        !syncLock.current &&
-        Date.now() >= retry.current.after
-      ) {
-        if (pending.some((x) => x.status === 'pending') || photosPending > 0) void sync();
-        else {
-          syncLock.current = true;
-          syncDone.current = snapshot(current.current.revision)
-            .then(async (result) => {
-              if (!('unchanged' in result)) {
-                await load(result);
-                resetRetry();
-                return;
-              }
-              setOnline(true);
-              setError(null);
-              resetRetry();
-              if (result.access && current.current) {
-                current.current = { ...current.current, access: result.access, branch: result.branch };
-                setData(current.current);
-              }
-            })
-            .catch(async (error) => {
-              if (!(await revokeCachedAccess(error))) handleSyncError(error);
-            })
-            .finally(() => {
-              syncLock.current = false;
-            });
-        }
-      }
-    }, 5000);
+    const reconnected = () => {
+      retry.current.after = 0;
+      refreshWhenVisible();
+    };
+    window.addEventListener('online', reconnected);
+    window.addEventListener('offline', markOffline);
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    const timer = setInterval(refreshWhenVisible, 5000);
     return () => {
       live.current = false;
       clearInterval(timer);
-      window.removeEventListener('online', changed);
-      window.removeEventListener('offline', changed);
-      window.removeEventListener('focus', changed);
+      window.removeEventListener('online', reconnected);
+      window.removeEventListener('offline', markOffline);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
-  }, [sync, load, pending, photosPending, revokeCachedAccess, resetRetry, handleSyncError]);
+  }, [sync, markOffline]);
   return (
     <Context.Provider
       value={{
@@ -848,6 +884,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         changeView,
         switchBranch,
         online,
+        reconnecting,
         pending,
         rejected,
         photosPending,
@@ -856,7 +893,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         error,
         load,
         run,
-        sync: () => sync(true),
+        sync: syncNow,
         installUpdate,
         photo,
         unlockOffline,

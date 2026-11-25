@@ -4,19 +4,20 @@ import { admin, cashier, cmd, fixture, ids, NOW, other, run } from './support/fi
 import { applyCommand } from '../src/domain/engine.ts';
 
 it('separa la entrega de caja de la confirmación del administrador receptor', () => {
-  const pending = run(fixture(), 'request_transfer', {
+  const payload = {
     shiftId: ids.shift,
+    from: `cash:${ids.shift}`,
     to: ids.location,
     amount: 4000,
     notes: 'Entrega',
-  });
-  const transferId = pending.result.referenceId;
-  expect(cashExpected(pending.state, ids.shift)).toBe(20000);
-  expect(() => run(pending.state, 'execute_transfer', { transferId, evidenceId: ids.photo }, admin)).toThrow(
-    /distinta/,
-  );
-  const sent = run(pending.state, 'execute_transfer', { transferId, evidenceId: ids.photo }).state;
-  expect(sent.transfers[0].executedBy).toBe(cashier.id);
+    evidenceId: ids.photo,
+  };
+  const state = fixture();
+  expect(() => run(state, 'execute_transfer', payload, admin)).toThrow(/responsable del turno activo/);
+  const { state: sent, result } = run(state, 'execute_transfer', payload);
+  const transferId = result.referenceId;
+  expect(cashExpected(sent, ids.shift)).toBe(16000);
+  expect(sent.transfers).toMatchObject([{ status: 'in_transit', executedBy: cashier.id, executedAt: NOW }]);
   expect(() => run(sent, 'confirm_transfer', { transferId, receivedAmount: 4000 })).toThrow(/administrador/);
   expect(() => run(sent, 'confirm_transfer', { transferId, receivedAmount: 4000 }, other)).toThrow(
     /receptor/,

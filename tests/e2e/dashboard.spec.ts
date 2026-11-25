@@ -1,7 +1,8 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
-import { cashier, cmd, ids } from '../support/fixture.ts';
+import { admin, cashier, cmd, ids } from '../support/fixture.ts';
 import { businessDay } from '../../src/domain/dashboard.ts';
+import type { Command } from '../../src/domain/types.ts';
 
 async function login(page: Page, email = 'admin@test.invalid') {
   await page.goto('/');
@@ -18,38 +19,56 @@ async function nav(page: Page) {
   }
   await page.getByRole('navigation').getByRole('button', { name: 'Ventas', exact: true }).click();
 }
-async function seedSale(request: APIRequestContext) {
-  const headers = {
-    authorization: `Bearer ${cashier.id}`,
-    'x-device-id': cashier.deviceId,
+const api = 'http://127.0.0.1:5180/dexter';
+function deviceHeaders(actor = cashier) {
+  return {
+    authorization: `Bearer ${actor.id}`,
+    'x-device-id': actor.deviceId,
     'x-device-token': 'test-device-token',
   };
-  const snapshot = await (await request.get('http://127.0.0.1:5180/dexter/snapshot', { headers })).json();
+}
+async function send(request: APIRequestContext, command: Command, actor = cashier) {
+  const response = await request.post(`${api}/commands`, {
+    headers: deviceHeaders(actor),
+    data: { commands: [command] },
+  });
+  const body = await response.json();
+  expect(body.results?.[0]?.status, JSON.stringify(body)).toBe('accepted');
+  return body.results[0].referenceId as string;
+}
+async function seedSale(request: APIRequestContext, method: 'cash' | 'transfer' = 'cash') {
+  const snapshot = await (await request.get(`${api}/snapshot`, { headers: deviceHeaders() })).json();
   const extra = {
     at: new Date().toISOString(),
     branchId: snapshot.branch.id,
     configVersion: snapshot.state.settings[0].version,
   };
-  const created = await request.post('http://127.0.0.1:5180/dexter/commands', {
-    headers,
-    data: {
-      commands: [
-        cmd(
-          'create_order',
-          { lines: [{ flavorId: ids.flavor, sizeId: snapshot.state.sizes[0].id, quantity: 2 }] },
-          cashier,
-          extra,
-        ),
-      ],
-    },
-  });
-  const result = (await created.json()).results[0];
-  expect(result.status).toBe('accepted');
-  const paid = await request.post('http://127.0.0.1:5180/dexter/commands', {
-    headers,
-    data: { commands: [cmd('pay', { orderId: result.referenceId, deliver: true }, cashier, extra)] },
-  });
-  expect((await paid.json()).results[0].status).toBe('accepted');
+  const orderId = await send(
+    request,
+    cmd(
+      'create_order',
+      {
+        lines: [{ flavorId: ids.flavor, sizeId: snapshot.state.sizes[0].id, quantity: 2 }],
+      },
+      cashier,
+      extra,
+    ),
+  );
+  await send(
+    request,
+    cmd(
+      'pay',
+      {
+        orderId,
+        deliver: true,
+        method,
+        ...(method === 'transfer' ? { accountId: ids.location } : {}),
+      },
+      cashier,
+      extra,
+    ),
+  );
+  return { orderId, extra };
 }
 test.beforeEach(async ({ request }) => {
   await request.post('http://127.0.0.1:5180/reset');
@@ -112,4 +131,47 @@ test('los roles de operación no tienen acceso al dashboard', async ({ page }) =
   await expect(page.getByRole('navigation').getByRole('button', { name: 'Ventas', exact: true })).toHaveCount(
     0,
   );
+});
+
+test('el dashboard descuenta efectivo y transferencias cuando se aprueba la anulación', async ({
+  page,
+  request,
+}) => {
+  const cash = await seedSale(request);
+  const transfer = await seedSale(request, 'transfer');
+  const requests = [];
+  for (const sale of [cash, transfer]) {
+    requests.push(
+      await send(
+        request,
+        cmd(
+          'request_void',
+          {
+            orderId: sale.orderId,
+            notes: 'Venta digitada por error',
+            evidenceId: ids.photo,
+          },
+          cashier,
+          sale.extra,
+        ),
+      ),
+    );
+  }
+
+  await login(page);
+  await nav(page);
+  const rows = page.locator('.dashboard-finance-row');
+  const cashRow = rows.filter({ hasText: 'Efectivo' }).locator('strong');
+  const accountRow = rows.filter({ hasText: 'Cuenta de prueba' });
+  await expect(cashRow).toContainText('28.000');
+  await expect(accountRow).toContainText('28.000');
+
+  for (const requestId of requests) {
+    await send(request, cmd('resolve_request', { requestId, approve: true }, admin, cash.extra), admin);
+  }
+  await page.reload();
+  if (!(await cashRow.isVisible())) await nav(page);
+  await expect(cashRow).toHaveText(/\$\s?0/);
+  await expect(accountRow).toHaveCount(0);
+  await expect(rows.filter({ hasText: 'Devoluciones realizadas' }).locator('strong')).toHaveText(/\$\s?0/);
 });

@@ -6,6 +6,8 @@ import {
   quotePayment,
   closingPreview,
   visibleClosingPreview,
+  blindClosingPreview,
+  closingNeedsRecount,
   promotionSelection,
   syncOrderId,
 } from '../domain/engine.ts';
@@ -53,6 +55,7 @@ const staffCommands = new Set([
   'open_supply',
   'open_bag',
   'report_damage',
+  'receive_shipment',
   'expense',
   'register_attachment',
   'outage',
@@ -508,8 +511,8 @@ export function createGateway(options: GatewayOptions) {
           }
           if (
             (command.type === 'submit_closing' && Number(command.payload.sent) > 0) ||
-            (command.type === 'request_transfer' &&
-              (context.role !== 'admin' || String(command.payload.from ?? '').startsWith('cash:')))
+            command.type === 'request_transfer' ||
+            (command.type === 'execute_transfer' && command.payload.transferId === undefined)
           ) {
             const destinationId =
               command.type === 'submit_closing' ? command.payload.locationId : command.payload.to;
@@ -646,11 +649,17 @@ export function createGateway(options: GatewayOptions) {
         if (body.visible === true) {
           assert(
             !shiftBlocksSales(shift) ||
-              shift.blindClosing?.status === 'recount' ||
-              (shift.blindClosing?.status === 'ready' && shift.blindClosing.countIds?.length === 1),
+              closingNeedsRecount(shift) ||
+              (body.blind !== true &&
+                shift.blindClosing?.status === 'ready' &&
+                shift.blindClosing.countIds?.length === 1),
             'Completa el conteo de apertura.',
           );
-          return json(visibleClosingPreview(loaded.state, shift));
+          return json(
+            body.blind === true
+              ? blindClosingPreview(loaded.state, shift)
+              : visibleClosingPreview(loaded.state, shift),
+          );
         }
         admin();
         return json(closingPreview(loaded.state, shift.id));
@@ -878,6 +887,12 @@ export function createGateway(options: GatewayOptions) {
                 'Esta operación requiere un administrador.',
                 'FORBIDDEN',
               );
+              if (command.type === 'receive_shipment')
+                assert(
+                  actor.role === 'encargado' && actor.primary,
+                  'La recepción corresponde al responsable del turno y su equipo de caja.',
+                  'FORBIDDEN',
+                );
               if (command.type === 'request_shift')
                 assert(command.payload.offline !== true, 'La apertura requiere conexión.', 'ONLINE_REQUIRED');
             }

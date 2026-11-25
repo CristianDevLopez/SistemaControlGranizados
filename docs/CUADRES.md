@@ -4,12 +4,12 @@ Publicado el 14 de noviembre de 2026: migraciones de permisos y revisión de cie
 
 ## Empleado
 
-1. En **Turno y caja → Cerrar y contar caja**, cuenta el efectivo y los vasos sueltos de cada tamaño. Verifica las ventas netas de cada cuenta, incluida Nequi; no registres el saldo bancario total.
-2. Pulsa **Revisar cuadre**. La comparación muestra lo registrado, lo esperado y cuánto falta o sobra en cada concepto. Las transferencias se mantienen separadas del efectivo.
-3. Corrige los campos y vuelve a revisar. Cambiar cualquier dato invalida la comparación anterior.
-4. Si todo coincide, pulsa **Enviar cuadre a revisión**. Si persisten diferencias, confirma que revisaste el conteo y pulsa **Enviar provisional a revisión**.
+1. En **Turno y caja**, solicita la apertura y espera la autorización del administrador. Si vuelve el mismo responsable, cuenta el efectivo y los vasos sueltos. El administrador puede agregar artículos al autorizar. El cambio de responsable exige un conteo completo.
+2. Para cerrar, registra el efectivo y los artículos del turno. Debajo del efectivo se muestran las ventas de cada cuenta, incluida Nequi. Pulsa **Enviar primer conteo**.
+3. Si hay diferencias, el segundo conteo muestra los valores esperados y recupera los datos del primero. Vuelve a contar y deja una nota si sigue habiendo diferencias.
+4. Verifica los medios de pago, reparte el efectivo y envía el cierre a aprobación.
 
-Todo cierre espera aprobación administrativa, incluso si coincide. Sin conexión se permite enviar un cierre provisional, indicando que todavía no se verificaron los saldos; se compara al sincronizar. El turno queda bloqueado para el trabajador después del envío. Los arqueos sorpresa mantienen su conteo ciego.
+Los arqueos sorpresa conservan su conteo a ciegas.
 
 ## Arqueo general y próxima apertura
 
@@ -33,6 +33,8 @@ La aprobación no confirma automáticamente que el efectivo se entregó o que un
 
 En **Inventario → Merma de líquido por quincena**, selecciona una fecha para consultar la primera o segunda mitad del mes por sabor. El informe muestra bolsas abiertas, onzas servidas, mermas aprobadas y saldos al inicio y al corte. Si hay líquido pendiente de verificar, se muestra un saldo estimado y queda abierta la diferencia. El umbral configurado tiene prioridad sobre la referencia histórica. Esta última usa hasta seis quincenas previas, con al menos dos periodos medibles y excluye diferencias del tamaño de una bolsa. El aviso de bolsa se activa desde el 90 % del volumen configurado para su revisión.
 
+Si el consumo supera el volumen registrado, contrasta las existencias con un conteo físico de bolsas selladas y verifica cuándo se abrió la bolsa en uso. Registra una apertura anterior desde **Revisar turnos** cuando se pueda confirmar su fecha y sabor. Si falta esa evidencia, documenta el conteo y usa la corrección aprobada de Inventario según sea necesario. En adelante, registra cada bolsa al momento de abrirla y agrega bolsas selladas al conteo de apertura cuando quieras verificar las existencias.
+
 ## Mostrador y cortesías
 
 Cuando el saldo teórico de vasos del tamaño seleccionado llega a cero o es negativo, Mostrador ofrece **Registrar apertura de paquete**. La apertura se registra allí mismo, sin ir a Inventario. Usa las unidades configuradas (20 por defecto), pide confirmar que el paquete anterior está vacío cuando corresponde y conserva las diferencias previas. El aviso recuerda registrar una apertura ya realizada físicamente; no inventa una apertura ni bloquea por sí solo la venta.
@@ -43,7 +45,7 @@ Las cortesías entregadas ya descuentan vasos y líquido, incluidos todos los sa
 
 Aplicar las migraciones pendientes, incluida `supabase/migrations/20261114200017_closing_review.sql`, y actualizar juntos la función `dexter` y el frontend. La migración agrega la validación del rol de aprobación en los commits serializados; no modifica conteos ni ventas anteriores, no agrega tablas y mantiene las funciones limitadas a `service_role`.
 
-Los cierres históricos sin aprobación aparecen pendientes y pueden revisarse individualmente. Los clientes anteriores conservan la posibilidad de enviar su formato de cierre; la interfaz actual exige la comparación previa cuando hay conexión. El servidor siempre recalcula los importes y valida que una comparación enviada siga vigente.
+Los cierres históricos sin aprobación aparecen pendientes y pueden revisarse individualmente. El servidor recalcula los importes de cada conteo. Cuando exige un segundo conteo, valida que la comparación siga vigente antes de aceptar el cierre.
 
 ## Cierres archivados
 

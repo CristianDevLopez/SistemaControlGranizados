@@ -139,6 +139,62 @@ test('el encargado registra aperturas y solo ve las del turno, sin saldos ni dif
   await expect(page.getByText('Saldo teórico')).toHaveCount(0);
 });
 
+test('muestra los diez círculos del catálogo sobre el color de cada tarjeta', async ({ page }, testInfo) => {
+  const names = [
+    'Manzana Verde',
+    'Fresa Boom',
+    'Mango Biche',
+    'Maracumango',
+    'Santorini',
+    'Perla Negra',
+    'Ojo de Diablo',
+    'Cool Blue',
+    'Smirnoff',
+    'Red Fantasy',
+  ];
+  await page.route('**/dexter/snapshot*', async (route) => {
+    const response = await route.fetch();
+    if (!response.ok() || response.status() === 204) return route.fulfill({ response });
+    const snapshot = (await response.json()) as Snapshot;
+    if (snapshot.state)
+      snapshot.state.flavors = names.map((name, index) => ({
+        id: `flavor-${index}`,
+        name,
+        active: true,
+        alcohol: index > 2,
+      }));
+    await route.fulfill({ response, json: snapshot });
+  });
+  await enter(page);
+  const grid = page.locator('.flavor-grid');
+  const badges = grid.locator('.flavor-photo-badge');
+  await expect(badges).toHaveCount(names.length);
+  for (const badge of await badges.all()) {
+    await badge.scrollIntoViewIfNeeded();
+    await expect
+      .poll(async () =>
+        badge.evaluate((element) => {
+          const image = element.querySelector('img')!;
+          const diameter = element.getBoundingClientRect();
+          const art = element.parentElement!.getBoundingClientRect();
+          return (
+            image.complete &&
+            image.naturalWidth > 0 &&
+            Math.abs(diameter.width - diameter.height) < 1 &&
+            Math.abs(diameter.left + diameter.width / 2 - art.left - art.width / 2) < 1 &&
+            diameter.height >= art.height * 0.75 &&
+            getComputedStyle(element).borderRadius === '50%'
+          );
+        }),
+      )
+      .toBe(true);
+  }
+  await grid.screenshot({
+    path: testInfo.outputPath('circulos-sabores.png'),
+    style: 'header { visibility: hidden; }',
+  });
+});
+
 test('venta sencilla en tres acciones, conserva entregas y evita cobros repetidos al recargar', async ({
   page,
 }) => {
@@ -146,10 +202,10 @@ test('venta sencilla en tres acciones, conserva entregas y evita cobros repetido
   await expect(page.getByRole('button', { name: /degustación/i })).toHaveCount(0);
   await expect(page.getByText(/Las degustaciones descuentan/)).toHaveCount(0);
   const started = Date.now();
-  await page.getByRole('button', { name: '16 ONZAS' }).click();
+  await page.getByRole('button', { name: 'Medio 16 onzas' }).click();
   await page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
-  await expect(page.getByRole('button', { name: 'Cobrar y entregar' })).toBeVisible();
-  await page.getByRole('button', { name: 'Cobrar y entregar' }).click();
+  await expect(page.getByRole('button', { name: 'Cobrar y entregar', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
   await expect(page.getByText('Venta registrada ·')).toBeVisible();
   expect(Date.now() - started).toBeLessThan(10000);
   await nav(page, 'Pedidos');
@@ -166,7 +222,7 @@ test('un combinado conserva sus sabores al recargar y descuenta solo su porción
   request,
 }) => {
   await enter(page);
-  await page.getByRole('button', { name: '16 ONZAS' }).click();
+  await page.getByRole('button', { name: 'Medio 16 onzas' }).click();
   await page.getByRole('button', { name: 'Combinado / bomba', exact: true }).click();
   const add = page.getByRole('button', { name: 'Agregar combinado' });
   await expect(add).toBeDisabled();
@@ -184,6 +240,8 @@ test('un combinado conserva sus sabores al recargar y descuenta solo su porción
   await add.click();
   await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.locator('.cart-total')).toContainText('17.000');
+  const sync = page.getByRole('button', { name: 'Estado de sincronización' });
+  await expect(sync).toContainText('Sincronizado');
   await page.reload();
   await expect(page.locator('.cart-line:has(.cart-line-head)')).toHaveCount(1);
   await expect(page.locator('.cart-line:has(.cart-line-head)')).toContainText(
@@ -197,9 +255,10 @@ test('un combinado conserva sus sabores al recargar y descuenta solo su porción
   await page.getByRole('button', { name: 'Aumentar cantidad', exact: true }).click();
   await page.getByRole('button', { name: '0/2 entregados', exact: true }).click();
   await expect(page.getByRole('button', { name: '1/2 entregados', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Cobrar y entregar' }).click();
-  await expect(page.getByText('Venta registrada ·')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('Sincronizado');
+  await expect(sync).toContainText('Sincronizado');
+  await page.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Nuevo pedido', exact: true })).toBeVisible();
+  await expect(sync).toContainText('Sincronizado');
   await nav(page, 'Pedidos');
   await page.getByRole('button', { name: 'Cobrados', exact: true }).click();
   await expect(page.locator('tbody')).toContainText('Sabor de prueba con licor + Sabor de prueba sin licor');
@@ -278,8 +337,7 @@ test('elimina una degustación existente y deja de mostrar el pedido como pendie
   await nav(page, 'Pedidos');
   await expect(page.locator('tbody tr')).toHaveCount(0);
   await page.getByRole('button', { name: 'Todos del turno', exact: true }).click();
-  await expect(page.locator('tbody tr')).toHaveCount(1);
-  await expect(page.locator('tbody')).toContainText('Cancelado');
+  await expect(page.locator('tbody tr')).toHaveCount(0);
 });
 
 test('cambia y elimina el sabor de una degustación conservando los productos del pedido', async ({
@@ -358,8 +416,7 @@ test('corrige y elimina una degustación ya cerrada desde el detalle de pedidos 
   await expect(dialog.locator('.tasting-list')).toHaveCount(0);
   await expect(dialog).toContainText('Cancelado');
   await dialog.getByRole('button', { name: 'Cerrar', exact: true }).click();
-  await expect(page.locator('tbody')).toContainText('Cancelado');
-  await expect(page.locator('tbody')).not.toContainText('degustaciones');
+  await expect(page.locator('tbody tr')).toHaveCount(0);
 });
 
 test('cancela un pedido sin cobrar y conserva sus degustaciones fuera de los pendientes', async ({
@@ -397,8 +454,7 @@ test('quitar la última unidad cancela el pedido sin registrar una venta', async
   await page.getByRole('button', { name: 'Cobrados', exact: true }).click();
   await expect(page.locator('tbody tr')).toHaveCount(0);
   await page.getByRole('button', { name: 'Todos del turno', exact: true }).click();
-  await expect(page.locator('tbody tr')).toHaveCount(1);
-  await expect(page.locator('tbody')).toContainText('Cancelado');
+  await expect(page.locator('tbody tr')).toHaveCount(0);
 });
 
 test('un pedido con productos entregados no permite cancelarse ni quitar su última unidad', async ({
@@ -410,7 +466,7 @@ test('un pedido con productos entregados no permite cancelarse ni quitar su últ
   await expect(page.getByRole('button', { name: '1/1 entregados', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Cancelar pedido', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Disminuir cantidad', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Cobrar y entregar' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cobrar y entregar', exact: true })).toBeVisible();
 });
 
 test('la PWA sobrevive una recarga sin internet y sincroniza un combinado sin duplicados', async ({
@@ -427,7 +483,7 @@ test('la PWA sobrevive una recarga sin internet y sincroniza un combinado sin du
   await page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
   await page.getByRole('button').filter({ hasText: 'Sabor de prueba sin licor' }).click();
   await page.getByRole('button', { name: 'Agregar combinado' }).click();
-  await page.getByRole('button', { name: 'Cobrar y entregar' }).click();
+  await page.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
   await expect(page.getByText('Venta guardada en este equipo, pendiente de sincronizar')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('pendientes');
   await page.reload();
@@ -503,7 +559,7 @@ test('sube una evidencia desde la cámara o archivo y la vincula a una anulació
 }) => {
   await enter(page);
   await page.getByRole('button').filter({ hasText: 'Sabor de prueba con licor' }).click();
-  await page.getByRole('button', { name: 'Cobrar y entregar' }).click();
+  await page.getByRole('button', { name: 'Cobrar y entregar', exact: true }).click();
   await expect(page.getByText('Venta registrada ·')).toBeVisible();
   await nav(page, 'Pedidos');
   await page.getByRole('button', { name: 'Cobrados', exact: true }).click();

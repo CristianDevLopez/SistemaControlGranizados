@@ -185,6 +185,7 @@ it('agrega paquetes, confirma con traslado en camino y atribuye el arqueo al cie
   }
   const opened = await accepted('request_shift', {});
   const shiftId = opened.referenceId!;
+  await accepted('authorize_shift', { shiftId }, admin);
   let state = (await store.load()).state;
   let shift = state.shifts.find((item) => item.id === shiftId)!;
   expect((await request('closing-preview', { shiftId, visible: true }, cashier)).status).toBe(400);
@@ -334,6 +335,7 @@ it('agrega paquetes, confirma con traslado en camino y atribuye el arqueo al cie
 
   now = '2026-11-21T17:00:00.000Z';
   const next = await accepted('request_shift', {});
+  await accepted('authorize_shift', { shiftId: next.referenceId }, admin);
   state = (await store.load()).state;
   shift = state.shifts.find((item) => item.id === next.referenceId)!;
   expect(shift.base).toBe(correctedCash - sent);

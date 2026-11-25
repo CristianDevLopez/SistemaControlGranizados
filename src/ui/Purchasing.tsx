@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Plus, Truck, ReceiptText, Camera, Check, Trash2 } from 'lucide-react';
+import { Plus, Truck, ReceiptText, Check, Trash2 } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
-import { photoBlob } from '../lib/db.ts';
 import { articles } from '../domain/engine.ts';
-import { canWork } from '../domain/access.ts';
+import { canWork, hasPermission, isShiftCashier } from '../domain/access.ts';
 import type { Shipment } from '../domain/types.ts';
+import { EvidenceButton } from './EvidenceButton.tsx';
+import { ExpenseApproval } from './ExpenseApproval.tsx';
 import {
   Badge,
   Empty,
@@ -21,24 +22,54 @@ export function Purchasing() {
   const app = useApp(),
     { state, actor, profiles } = app.data!,
     admin = actor.role === 'admin';
+  const active = state.shifts.find((shift) => shift.status === 'open');
+  const canReceive = canWork(actor, state, 'inventory') && !state.settings[0].auditId;
   const [expense, setExpense] = useState(false),
+    [expenseSource, setExpenseSource] = useState('cash'),
     [shipment, setShipment] = useState(false),
     [receive, setReceive] = useState<Shipment | null>(null),
     [error, setError] = useState('');
   const locationOptions = state.locations
     .filter((x) => x.active)
     .map((x) => ({ value: x.id, label: x.name }));
+  const purchasePhotos = new Map(state.expenses.map((item) => [item.id, item.evidenceId]));
   const expenseFields: Field[] = [
-    ...(admin
+    {
+      name: 'source',
+      label: 'Pagado con',
+      type: 'select',
+      value: expenseSource,
+      required: true,
+      options: [
+        ...(admin ? [{ value: 'treasury', label: 'Cuenta administrativa o caja principal' }] : []),
+        { value: 'cash', label: 'Efectivo de la caja del turno' },
+      ],
+    },
+    ...(admin && expenseSource === 'cash'
       ? [
           {
             name: 'shiftId',
-            label: 'Turno a corregir (opcional; solo administrador)',
+            label: 'Turno a corregir',
             type: 'select' as const,
-            options: state.shifts.map((s) => ({
-              value: s.id,
-              label: `${date(s.openedAt ?? s.requestedAt)} · ${s.status}`,
-            })),
+            required: !isShiftCashier({ ...actor, online: app.online }, active),
+            hint: 'Selecciona un turno anterior para registrar una corrección de caja.',
+            options: state.shifts
+              .filter((s) => s.status === 'closed' || s.status === 'provisional')
+              .map((s) => ({
+                value: s.id,
+                label: `${date(s.openedAt ?? s.requestedAt)} · ${stateNames[s.status]}`,
+              })),
+          },
+        ]
+      : []),
+    ...(expenseSource === 'treasury'
+      ? [
+          {
+            name: 'locationId',
+            label: 'Caja o cuenta que pagó',
+            type: 'select' as const,
+            required: true,
+            options: locationOptions,
           },
         ]
       : []),
@@ -50,37 +81,13 @@ export function Purchasing() {
       options: [
         ...new Set([
           ...state.settings[0].expenseCategories,
-          'Arriendo',
-          'Servicios',
-          'Nómina',
-          'Seguridad',
-          'Publicidad',
+          ...(expenseSource === 'treasury'
+            ? ['Arriendo', 'Servicios', 'Nómina', 'Seguridad', 'Publicidad']
+            : []),
         ]),
       ].map((x) => ({ value: x, label: x })),
     },
     { name: 'amount', label: 'Monto pagado', type: 'money', min: 1, required: true },
-    {
-      name: 'source',
-      label: 'Pagado con',
-      type: 'select',
-      value: 'cash',
-      required: true,
-      options: [
-        { value: 'cash', label: 'Efectivo de la caja' },
-        ...(admin
-          ? [
-              { value: 'treasury', label: 'Caja principal o cuenta del negocio' },
-              { value: 'personal', label: 'Bolsillo del administrador' },
-            ]
-          : []),
-      ],
-    },
-    {
-      name: 'locationId',
-      label: 'Caja o cuenta que pagó (si corresponde)',
-      type: 'select',
-      options: locationOptions,
-    },
     { name: 'supplier', label: 'Proveedor', required: true },
     { name: 'evidenceId', label: 'Soporte fotográfico', type: 'photo' },
     { name: 'notes', label: 'Nota (obligatoria si no hay foto)', type: 'textarea' },
@@ -98,11 +105,21 @@ export function Purchasing() {
       <div className="page-toolbar">
         <div>
           <h2>Compras y gastos</h2>
-          <p>El costo, el pago y la recepción quedan relacionados.</p>
+          <p>
+            {admin
+              ? 'Registra compras, gastos del negocio y envíos de mercancía.'
+              : 'Cuando llegue la mercancía, selecciona el envío y cuenta lo recibido.'}
+          </p>
         </div>
         <div className="button-row">
-          {canWork(actor, state, 'expenses') && (
-            <button className="button secondary" onClick={() => setExpense(true)}>
+          {(admin || canWork(actor, state, 'expenses')) && (
+            <button
+              className="button secondary"
+              onClick={() => {
+                setExpenseSource(admin ? 'treasury' : 'cash');
+                setExpense(true);
+              }}
+            >
               <Plus size={17} />
               Registrar gasto
             </button>
@@ -120,198 +137,210 @@ export function Purchasing() {
           {error}
         </div>
       )}
-      <Panel title="Mercancía en camino y recibida">
-        {state.shipments.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Envío</th>
-                  <th>Origen</th>
-                  <th>Mercancía</th>
-                  <th>Estado</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {[...state.shipments].reverse().map((s) => (
-                  <tr key={s.id}>
-                    <td>
-                      <strong>{s.supplier}</strong>
-                      <small>{date(s.at)}</small>
-                      <small>{s.notes}</small>
-                    </td>
-                    <td>{s.from}</td>
-                    <td>
-                      {admin
-                        ? s.items.map((item, i) => (
-                            <small key={i}>
-                              {item.quantity} × {articles(state).find((x) => x.id === item.article)?.name}
-                            </small>
-                          ))
-                        : 'Se cuenta antes de ver lo enviado'}
-                    </td>
-                    <td>
-                      <Badge tone={s.status === 'received' ? 'green' : 'orange'}>
-                        {stateNames[s.status]}
-                      </Badge>
-                    </td>
-                    <td>
-                      {s.status !== 'received' && (
-                        <button
-                          className="button small secondary"
-                          disabled={!canWork(actor, state, 'inventory')}
-                          onClick={() => setReceive(s)}
-                        >
-                          Recibir a ciegas
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty
-            title="Sin envíos registrados"
-            description="El admin declara la compra y el empleado registra lo que realmente llega."
-          />
-        )}
-      </Panel>
-      <Panel title="Recepciones y cruces">
-        {state.receipts.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Recepción</th>
-                  <th>Recibido y dañado</th>
-                  {admin && <th>Diferencias contra envío</th>}
-                  <th>Soporte</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...state.receipts].reverse().map((r) => (
-                  <tr key={r.id}>
-                    <td>
-                      {date(r.at)}
-                      <small>{profiles.find((x) => x.id === r.by)?.name}</small>
-                      <small>{r.notes}</small>
-                    </td>
-                    <td>
-                      {Object.entries(r.items).map(([k, v]) => (
-                        <small key={k}>
-                          {articles(state).find((x) => x.id === k)?.name}: {v} recibidos · {r.damaged[k] ?? 0}{' '}
-                          dañados
-                        </small>
-                      ))}
-                    </td>
-                    {admin && (
-                      <td>
-                        {Object.entries(r.differences ?? {})
-                          .filter(([, v]) => v !== 0)
-                          .map(([k, v]) => (
-                            <small className="negative" key={k}>
-                              {articles(state).find((x) => x.id === k)?.name}: {v > 0 ? '+' : ''}
-                              {v}
+      {hasPermission(actor, 'inventory') && (
+        <>
+          <Panel title={admin ? 'Mercancía en camino y recibida' : 'Mercancía por recibir'}>
+            {state.shipments.length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Envío</th>
+                      <th>Origen</th>
+                      <th>Mercancía</th>
+                      <th>Estado</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...state.shipments].reverse().map((s) => {
+                      const photo = s.evidenceId ?? (s.expenseId && purchasePhotos.get(s.expenseId));
+                      return (
+                        <tr key={s.id}>
+                          <td>
+                            <strong>{s.supplier}</strong>
+                            <small>{date(s.at)}</small>
+                            <small>{s.notes}</small>
+                          </td>
+                          <td>{s.from}</td>
+                          <td>
+                            {admin
+                              ? s.items.map((item, i) => (
+                                  <small key={i}>
+                                    {item.quantity} ×{' '}
+                                    {articles(state).find((x) => x.id === item.article)?.name}
+                                  </small>
+                                ))
+                              : 'Se cuenta antes de ver lo enviado'}
+                          </td>
+                          <td>
+                            <Badge tone={s.status === 'received' ? 'green' : 'orange'}>
+                              {stateNames[s.status]}
+                            </Badge>
+                          </td>
+                          <td>
+                            {admin && photo && <EvidenceButton id={photo} />}
+                            {s.status !== 'received' && (
+                              <button
+                                className="button small secondary"
+                                disabled={!canReceive || !app.online}
+                                onClick={() => setReceive(s)}
+                              >
+                                Recibir a ciegas
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty
+                title="Sin envíos registrados"
+                description="El admin declara la compra y el empleado registra lo que realmente llega."
+              />
+            )}
+          </Panel>
+          <Panel title="Recepciones y cruces">
+            {state.receipts.length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Recepción</th>
+                      <th>Recibido y dañado</th>
+                      {admin && <th>Diferencias contra envío</th>}
+                      <th>Soporte</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...state.receipts].reverse().map((r) => (
+                      <tr key={r.id}>
+                        <td>
+                          {date(r.at)}
+                          <small>{profiles.find((x) => x.id === r.by)?.name}</small>
+                          <small>{r.notes}</small>
+                        </td>
+                        <td>
+                          {Object.entries(r.items).map(([k, v]) => (
+                            <small key={k}>
+                              {articles(state).find((x) => x.id === k)?.name}: {v} recibidos ·{' '}
+                              {r.damaged[k] ?? 0} dañados
                             </small>
                           ))}
-                        {Object.values(r.differences ?? {}).every((v) => v === 0) && (
-                          <Badge tone="green">Coincide</Badge>
+                        </td>
+                        {admin && (
+                          <td>
+                            {Object.entries(r.differences ?? {})
+                              .filter(([, v]) => v !== 0)
+                              .map(([k, v]) => (
+                                <small className="negative" key={k}>
+                                  {articles(state).find((x) => x.id === k)?.name}: {v > 0 ? '+' : ''}
+                                  {v}
+                                </small>
+                              ))}
+                            {Object.values(r.differences ?? {}).every((v) => v === 0) && (
+                              <Badge tone="green">Coincide</Badge>
+                            )}
+                          </td>
                         )}
+                        <td>
+                          <EvidenceButton id={r.evidenceId} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty title="Las recepciones aparecerán aquí" />
+            )}
+          </Panel>
+        </>
+      )}
+      {hasPermission(actor, 'expenses') && (
+        <Panel title="Gastos registrados">
+          {state.expenses.length ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Gasto</th>
+                    <th>Monto</th>
+                    <th>Pagado con</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...state.expenses].reverse().map((e) => (
+                    <tr key={e.id}>
+                      <td>
+                        <strong>
+                          {e.category} · {e.supplier}
+                        </strong>
+                        <small>
+                          {date(e.at)} · {profiles.find((x) => x.id === e.by)?.name}
+                        </small>
+                        <small>{e.notes}</small>
+                        {e.shipmentId && <small>Compra vinculada a envío</small>}
                       </td>
-                    )}
-                    <td>
-                      <EvidenceButton id={r.evidenceId} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty title="Las recepciones aparecerán aquí" />
-        )}
-      </Panel>
-      <Panel title="Gastos registrados">
-        {state.expenses.length ? (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Gasto</th>
-                  <th>Monto</th>
-                  <th>Pagado con</th>
-                  <th>Estado</th>
-                  <th>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...state.expenses].reverse().map((e) => (
-                  <tr key={e.id}>
-                    <td>
-                      <strong>
-                        {e.category} · {e.supplier}
-                      </strong>
-                      <small>
-                        {date(e.at)} · {profiles.find((x) => x.id === e.by)?.name}
-                      </small>
-                      <small>{e.notes}</small>
-                      {e.shipmentId && <small>Compra vinculada a envío</small>}
-                    </td>
-                    <td>{money(e.amount)}</td>
-                    <td>
-                      {e.source === 'cash'
-                        ? 'Caja de turno'
-                        : e.source === 'personal'
-                          ? 'Bolsillo de admin'
-                          : (state.locations.find((x) => x.id === e.locationId)?.name ?? 'Caja principal')}
-                    </td>
-                    <td>
-                      <Badge
-                        tone={e.status === 'approved' ? 'green' : e.status === 'rejected' ? 'red' : 'orange'}
-                      >
-                        {stateNames[e.status]}
-                      </Badge>
-                    </td>
-                    <td>
-                      <div className="table-actions">
-                        {e.evidenceId && <EvidenceButton id={e.evidenceId} />}{' '}
-                        {admin && e.status === 'pending' && (
-                          <>
-                            <button className="button small primary" onClick={() => void approve(e.id, true)}>
-                              Aprobar
-                            </button>
-                            <button
-                              className="button small secondary"
-                              onClick={() => void approve(e.id, false)}
-                            >
-                              Rechazar
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty
-            title="Aún no hay gastos"
-            description="Un gasto pendiente de caja sigue figurando como diferencia hasta su aprobación."
-          />
-        )}
-      </Panel>
+                      <td>{money(e.amount)}</td>
+                      <td>
+                        {e.source === 'cash'
+                          ? 'Caja de turno'
+                          : e.source === 'personal'
+                            ? 'Bolsillo de admin'
+                            : (state.locations.find((x) => x.id === e.locationId)?.name ?? 'Caja principal')}
+                      </td>
+                      <td>
+                        <Badge
+                          tone={
+                            e.status === 'approved' ? 'green' : e.status === 'rejected' ? 'red' : 'orange'
+                          }
+                        >
+                          {stateNames[e.status]}
+                        </Badge>
+                      </td>
+                      <td>
+                        <div className="table-actions">
+                          {e.evidenceId && <EvidenceButton id={e.evidenceId} />}
+                          <ExpenseApproval expense={e} onDecision={(value) => void approve(e.id, value)} />
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty
+              title="Aún no hay gastos"
+              description="Un gasto pendiente de caja sigue figurando como diferencia hasta su aprobación."
+            />
+          )}
+        </Panel>
+      )}
       {expense && (
         <Modal title="Registrar gasto pagado" onClose={() => setExpense(false)}>
+          {expenseSource === 'treasury' && (
+            <p className="modal-intro">
+              Al aprobarse, el gasto se descuenta de la cuenta seleccionada y queda fuera del cuadre del
+              turno.
+            </p>
+          )}
           <FieldsForm
             fields={expenseFields}
             onCancel={() => setExpense(false)}
-            onSubmit={async (v) => {
-              await app.run('expense', v);
+            onValuesChange={(values) => setExpenseSource(values.source)}
+            onSubmit={async ({ source, shiftId, locationId, ...values }) => {
+              await app.run('expense', {
+                ...values,
+                source,
+                ...(source === 'cash' ? { shiftId } : { locationId }),
+              });
               setExpense(false);
               app.toast('Gasto registrado, pendiente de aprobación.');
             }}
@@ -323,43 +352,19 @@ export function Purchasing() {
     </div>
   );
 }
-export function EvidenceButton({ id }: { id: string }) {
-  const app = useApp(),
-    [busy, setBusy] = useState(false);
-  return (
-    <button
-      className="text-button"
-      disabled={busy}
-      onClick={async () => {
-        setBusy(true);
-        try {
-          const { db } = await import('../lib/db.ts');
-          const local = await db.photos.get(id);
-          if (local) {
-            const url = URL.createObjectURL(photoBlob(local));
-            window.open(url, '_blank', 'noopener,noreferrer');
-            setTimeout(() => URL.revokeObjectURL(url), 300000);
-          } else {
-            const { api } = await import('../lib/api.ts');
-            const data = await api(`attachments/read?id=${encodeURIComponent(id)}`);
-            window.open(data.url, '_blank', 'noopener,noreferrer');
-          }
-        } catch (e) {
-          app.toast((e as Error).message);
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      <Camera size={15} />
-      Ver foto
-    </button>
-  );
-}
 function ShipmentDialog({ onClose }: { onClose: () => void }) {
   const app = useApp(),
     list = articles(app.data!.state),
+    [paidWith, setPaidWith] = useState(''),
     [items, setItems] = useState([{ article: '', quantity: 1, unitCost: 0 }]);
+  const { actor, state } = app.data!;
+  const cashAvailable =
+    isShiftCashier(
+      { ...actor, online: app.online },
+      state.shifts.find((shift) => shift.status === 'open'),
+    ) &&
+    canWork(actor, state, 'expenses') &&
+    !state.settings[0].auditId;
   return (
     <Modal title="Registrar compra y envío" onClose={onClose}>
       <FieldsForm
@@ -381,23 +386,28 @@ function ShipmentDialog({ onClose }: { onClose: () => void }) {
             label: 'Pagado con (opcional)',
             type: 'select',
             options: [
-              { value: 'personal', label: 'Bolsillo de admin' },
-              { value: 'treasury', label: 'Caja principal o cuenta' },
-              { value: 'cash', label: 'Caja del turno' },
+              { value: 'treasury', label: 'Cuenta administrativa o caja principal' },
+              ...(cashAvailable ? [{ value: 'cash', label: 'Caja del turno' }] : []),
             ],
           },
-          {
-            name: 'locationId',
-            label: 'Caja o cuenta que pagó',
-            type: 'select',
-            options: app
-              .data!.state.locations.filter((x) => x.active)
-              .map((x) => ({ value: x.id, label: x.name })),
-          },
+          ...(paidWith === 'treasury'
+            ? [
+                {
+                  name: 'locationId',
+                  label: 'Caja o cuenta que pagó',
+                  type: 'select' as const,
+                  required: true,
+                  options: app
+                    .data!.state.locations.filter((x) => x.active)
+                    .map((x) => ({ value: x.id, label: x.name })),
+                },
+              ]
+            : []),
           { name: 'evidenceId', label: 'Soporte de compra', type: 'photo' },
           { name: 'notes', label: 'Notas', type: 'textarea' },
         ]}
         onCancel={onClose}
+        onValuesChange={(values) => setPaidWith(values.paidWith)}
         onSubmit={async (v) => {
           await app.run('create_shipment', { ...v, items });
           onClose();
@@ -504,13 +514,11 @@ function ReceiveDialog({ shipment, onClose }: { shipment: Shipment; onClose: () 
                 damaged[item.id] = Number(form.get(`damage:${item.id}`) ?? 0);
               }
             }
-            await app.run('receive_shipment', {
-              shipmentId: shipment.id,
-              items,
-              damaged,
-              evidenceId,
-              notes: form.get('notes'),
-            });
+            await app.run(
+              'receive_shipment',
+              { shipmentId: shipment.id, items, damaged, evidenceId, notes: form.get('notes') },
+              { onlineOnly: true },
+            );
             onClose();
             app.toast('Recepción registrada y cruzada contra el envío.');
           } catch (e) {

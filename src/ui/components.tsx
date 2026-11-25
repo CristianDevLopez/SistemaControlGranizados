@@ -304,7 +304,7 @@ export function FieldsForm({
             ) : f.type === 'select' ? (
               <select
                 required={f.required}
-                value={values[f.name]}
+                value={values[f.name] ?? ''}
                 onChange={(e) => change(f, e.target.value)}
               >
                 <option value="">Seleccionar…</option>

@@ -1,8 +1,19 @@
-import type { Actor, Order, CommandType, Permission, Profile, Shift, State } from './types.ts';
+import type { Actor, Expense, Order, CommandType, Permission, Profile, Shift, State } from './types.ts';
 import { operatingShift } from './employee-view.ts';
 
 export function canCorrectTastings(actor: Actor, order: Order, activeShift?: Shift): boolean {
   return actor.role === 'admin' || order.shiftId === activeShift?.id;
+}
+
+export const expenseCustodianMessage =
+  'El costo debe revisarlo un administrador distinto del custodio del pago.';
+
+export function expenseCustodianId(state: State, expense: Expense): string {
+  if (expense.source === 'treasury')
+    return state.locations.find((account) => account.id === expense.locationId)?.custodianId ?? expense.by;
+  if (expense.source === 'cash')
+    return state.shifts.find((shift) => shift.id === expense.shiftId)?.cashierId ?? expense.by;
+  return expense.by;
 }
 
 export const permissionLabels: Record<Permission, string> = {

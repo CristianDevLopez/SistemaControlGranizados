@@ -180,6 +180,8 @@ it('confirma un canje parcial de tres códigos con la venta y preserva el no uti
   expect(approved.status, approved.message).toBe('accepted');
   const opening = await execute('request_shift', {}, cashier);
   expect(opening.status, opening.message).toBe('accepted');
+  const authorized = await execute('authorize_shift', { shiftId: opening.referenceId });
+  expect(authorized.status, authorized.message).toBe('accepted');
   const state = (await db.load()).state;
   const shift = state.shifts.find((shift) => shift.id === opening.referenceId)!;
   const items = Object.fromEntries(shiftCountArticles(state, shift, 'opening').map(({ id }) => [id, 0]));

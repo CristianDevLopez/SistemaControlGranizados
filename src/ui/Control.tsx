@@ -21,7 +21,9 @@ import { adminRequests, requestCategories, requestLabels, shiftRequestLabel } fr
 import { ChangeRequestCard } from './ChangeLog.tsx';
 import { TurnReview } from './TurnReview.tsx';
 import { Money } from './Money.tsx';
-import { EvidenceButton } from './Purchasing.tsx';
+import { EvidenceButton } from './EvidenceButton.tsx';
+import { ExpenseApproval } from './ExpenseApproval.tsx';
+import { openingItemsField } from './CashAudit.tsx';
 export function Control({
   onHistory,
   initialCategory = 'shifts',
@@ -379,6 +381,7 @@ export function Control({
                                 value: 0,
                                 required: true,
                               },
+                              openingItemsField(state),
                             ],
                           })
                         }
@@ -405,22 +408,18 @@ export function Control({
                     <p>
                       {expense.supplier} · {money(expense.amount)}
                     </p>
+                    {expense.source === 'treasury' && (
+                      <p>{state.locations.find((account) => account.id === expense.locationId)?.name}</p>
+                    )}
                     {expense.notes && <p>{expense.notes}</p>}
                     <div className="button-row">
                       {expense.evidenceId && <EvidenceButton id={expense.evidenceId} />}
-                      {entry.pending &&
-                        [false, true].map((approve) => (
-                          <button
-                            key={String(approve)}
-                            className={`button small ${approve ? 'primary' : 'secondary'}`}
-                            disabled={!app.online}
-                            onClick={() =>
-                              void perform('approve_expense', { expenseId: expense.id, approve })
-                            }
-                          >
-                            {approve ? 'Aprobar' : 'Rechazar'}
-                          </button>
-                        ))}
+                      <ExpenseApproval
+                        expense={expense}
+                        onDecision={(approve) =>
+                          void perform('approve_expense', { expenseId: expense.id, approve })
+                        }
+                      />
                     </div>
                   </RequestCard>
                 );

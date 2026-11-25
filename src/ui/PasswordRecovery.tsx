@@ -91,7 +91,7 @@ export function PasswordRecovery({
   return (
     <div className="login-page">
       <div className="login-intro">
-        <img src="/dexter.jpg" alt="Dexter’s" />
+        <img src="/LogoDexterTaraza.jpeg" alt="" />
         <span className="eyebrow">DEXTER’S GRANIZADOS · TARAZÁ</span>
         <h1>
           Recupera

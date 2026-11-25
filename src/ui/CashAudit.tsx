@@ -10,9 +10,9 @@ import {
   physicalArticles,
   stockBalances,
 } from '../domain/engine.ts';
-import type { AuditMode, Count, Shift } from '../domain/types.ts';
+import type { AuditMode, Count, Shift, State } from '../domain/types.ts';
 import { useApp } from '../lib/store.tsx';
-import { FieldsForm, Modal, date, money } from './components.tsx';
+import { FieldsForm, Modal, date, money, type Field } from './components.tsx';
 import { transferAccountName } from './payment-labels.ts';
 
 export const auditModeLabels: Record<AuditMode, string> = {
@@ -20,6 +20,17 @@ export const auditModeLabels: Record<AuditMode, string> = {
   cash: 'Solo efectivo',
   custom: 'Personalizado',
 };
+
+export function openingItemsField(state: State): Field {
+  return {
+    name: 'openingItems',
+    label: 'Artículos adicionales para contar al abrir',
+    type: 'multiselect',
+    options: physicalArticles(state)
+      .filter(({ id }) => !id.startsWith('cup:'))
+      .map(({ id, name }) => ({ value: id, label: name })),
+  };
+}
 
 export function AuditSetupDialog({ shift, onClose }: { shift?: Shift; onClose: () => void }) {
   const app = useApp(),
