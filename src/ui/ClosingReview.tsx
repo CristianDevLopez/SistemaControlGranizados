@@ -1,3 +1,4 @@
+import { V4Closing } from './V4Closing.tsx';
 import { useState } from 'react';
 import {
   adjustedClosingArticles,
@@ -16,7 +17,15 @@ export interface ClosingValues {
   payments: Record<string, number>;
 }
 
-export function ClosingConfirmation({ count, blocked }: { count: Count; blocked: boolean }) {
+export function ClosingConfirmation(props: { count: Count; blocked: boolean }) {
+  const app = useApp();
+  return app.data!.state.settings[0].v4Enabled ? (
+    <V4Closing count={props.count} />
+  ) : (
+    <LegacyClosingConfirmation {...props} />
+  );
+}
+function LegacyClosingConfirmation({ count, blocked }: { count: Count; blocked: boolean }) {
   const app = useApp();
   const { state, actor } = app.data!;
   const shift = state.shifts.find((item) => item.id === count.shiftId)!;
@@ -94,9 +103,9 @@ export function ClosingConfirmation({ count, blocked }: { count: Count; blocked:
           <thead>
             <tr>
               <th>Artículo</th>
-              <th>Contaste</th>
+              <th>Conteo del cajero</th>
               <th>Debería haber</th>
-              <th>Corrección del admin</th>
+              <th>Conteo final del administrador</th>
             </tr>
           </thead>
           <tbody>
@@ -128,6 +137,10 @@ export function ClosingConfirmation({ count, blocked }: { count: Count; blocked:
           </tbody>
         </table>
       </div>
+      <p className="muted">
+        Escribe el total que contaste físicamente, sin sumar ni restar al conteo del cajero. Si dejas un campo
+        vacío se conserva su conteo. Al confirmar y ajustar inventario se aplica el conteo final.
+      </p>
       <label className="field">
         <span>Nota de revisión</span>
         <textarea name="notes" maxLength={1500} />
@@ -224,7 +237,17 @@ export function ClosingComparison({
   );
 }
 
-export function ClosingApprovalDialog({ count, onClose }: { count: Count; onClose: () => void }) {
+export function ClosingApprovalDialog(props: { count: Count; onClose: () => void }) {
+  const app = useApp();
+  return app.data!.state.settings[0].v4Enabled ? (
+    <Modal title="Revisión del cierre" onClose={props.onClose}>
+      <V4Closing count={props.count} />
+    </Modal>
+  ) : (
+    <LegacyClosingApprovalDialog {...props} />
+  );
+}
+function LegacyClosingApprovalDialog({ count, onClose }: { count: Count; onClose: () => void }) {
   const app = useApp(),
     { state, profiles } = app.data!;
   const shift = state.shifts.find((s) => s.id === count.shiftId)!;

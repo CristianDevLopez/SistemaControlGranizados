@@ -38,6 +38,8 @@ export interface Size {
   rank: number;
 }
 export interface Settings {
+  v4Enabled?: boolean;
+  v4?: import('./v4-types.ts').V4Settings;
   supplies?: Record<string, { unit: string; initialized: boolean }>;
   id: ID;
   version: number;
@@ -89,6 +91,8 @@ export interface AuditRequest extends AuditSelection {
   expectedPayments?: Record<string, number>;
 }
 export interface OrderLine {
+  bomba?: boolean;
+  candyRecipe?: Record<string, number>;
   id: ID;
   flavorId: ID;
   /** Sabores en partes iguales. Si falta, todo el vaso corresponde a flavorId. */
@@ -120,6 +124,10 @@ export interface Tasting {
 export const ORDER_NAME_MAX_LENGTH = 60;
 
 export interface Order {
+  candyConsumption?: Record<string, number>;
+  additionConsumption?: Record<string, number>;
+  addedAtClosing?: boolean;
+  componentCosts?: Record<string, number | null>;
   cashHandoff?: 'draft' | 'sent';
   additions?: import('./additions.ts').CandyAddition[];
   id: ID;
@@ -204,6 +212,9 @@ export interface BlindClosing {
 export type ClosingCountMode = 'cash' | 'simple' | 'full';
 
 export interface Shift {
+  v4ClosingStarted?: boolean;
+  v4EmployeeAdjusted?: boolean;
+  v4Reviews?: import('./v4-types.ts').ClosingProposal[];
   closingCountMode?: ClosingCountMode;
   closingSupplies?: string[];
   visibleClosing?: boolean;
@@ -274,6 +285,7 @@ export interface Shift {
   };
 }
 export interface Count {
+  candyRecipes?: Record<string, Record<string, number>>;
   id: ID;
   kind: 'opening' | 'closing' | 'audit' | 'receipt';
   shiftId?: ID;
@@ -354,6 +366,10 @@ export interface Shipment {
   notes: string;
 }
 export interface Receipt {
+  v4?: boolean;
+  missing?: Record<string, 'later' | 'lost'>;
+  photos?: Record<string, ID[]>;
+  reviewed?: Record<string, { by: ID; at: string; good: number; notes: string }>;
   id: ID;
   shipmentId: ID;
   by: ID;
@@ -366,6 +382,8 @@ export interface Receipt {
   notes: string;
 }
 export interface Expense {
+  classification?: import('./v4-types.ts').ExpenseCategory;
+  shipmentIds?: ID[];
   id: ID;
   by: ID;
   at: string;
@@ -420,6 +438,8 @@ export interface Transfer {
 }
 export type PromoEffect = 'fixed' | 'upgrade' | 'nxm' | 'free';
 export interface Promotion {
+  versus?: { a: ID; b: ID };
+  shareText?: string;
   checkoutText?: string;
   limitedSchedule?: boolean;
   id: ID;
@@ -466,6 +486,7 @@ export interface Coupon {
   benefit?: Promotion;
 }
 export interface Request {
+  merma?: import('./v4-types.ts').Merma;
   id: ID;
   type:
     | 'sync'
@@ -556,11 +577,16 @@ export interface Audit {
   };
 }
 export interface Notification {
+  type?: string;
+  referenceId?: ID;
+  messageId?: number;
+  chatId?: string;
+  resolved?: { by: string; at: string; eventId?: string; outcome?: string };
   id: ID;
   channel: 'gastos' | 'anulaciones' | 'mermas' | 'transferencias';
   text: string;
   at: string;
-  status: 'pending' | 'sent';
+  status: 'pending' | 'sent' | 'failed';
   attempts: number;
   lastError?: string;
 }
@@ -586,13 +612,14 @@ export interface Bag {
   exhaustedAt?: string;
 }
 export interface Attachment {
+  expiredAt?: string;
   id: ID;
   by: ID;
   mime: string;
   size: number;
   name: string;
   createdAt: string;
-  status: 'pending' | 'uploaded';
+  status: 'pending' | 'uploaded' | 'expired';
   path?: string;
   sha256?: string;
 }
@@ -692,6 +719,7 @@ export const COLLECTIONS = [
 ] as const;
 export type Collection = (typeof COLLECTIONS)[number];
 export type CommandType =
+  | 'v4'
   | 'request_payment_change'
   | 'review_shift'
   | 'answer_shift_review'

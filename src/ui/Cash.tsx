@@ -633,11 +633,15 @@ function EmployeeCash() {
                       {opening === 'recount' ? 'Volver a contar la apertura' : 'Contar apertura'}
                     </button>
                   )}
-                  {(!shiftBlocksSales(active) || recount) && (
+                  {(!shiftBlocksSales(active) || recount || active.v4ClosingStarted) && (
                     <button
                       className="button primary"
                       disabled={!app.online}
-                      onClick={() => setCount('closing')}
+                      onClick={async () => {
+                        if (state.settings[0].v4Enabled)
+                          await app.run('v4', { action: 'start_closing', shiftId: active.id });
+                        setCount('closing');
+                      }}
                     >
                       {recount ? 'Volver a contar el cierre' : 'Cerrar turno'}
                     </button>
@@ -963,8 +967,15 @@ function AdminCash() {
                           : 'Contar apertura'}
                       </button>
                     )}
-                  {(!shiftBlocksSales(active) || recount) && (
-                    <button className="button primary" onClick={() => setCount('closing')}>
+                  {(!shiftBlocksSales(active) || recount || active.v4ClosingStarted) && (
+                    <button
+                      className="button primary"
+                      onClick={async () => {
+                        if (state.settings[0].v4Enabled)
+                          await app.run('v4', { action: 'start_closing', shiftId: active.id });
+                        setCount('closing');
+                      }}
+                    >
                       {recount ? 'Volver a contar el cierre' : 'Cerrar y contar caja'}
                     </button>
                   )}

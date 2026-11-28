@@ -1,4 +1,6 @@
 import { supplies } from './supplies.ts';
+import { applyV4, finishV4 } from './v4-runtime.ts';
+import { candies, expenseCategories, verificationText } from './v4-catalog.ts';
 import { COOLER_SIZE_ID, initialState } from './initial.ts';
 import { employeeView } from './employee-view.ts';
 import { currentPayments, isSale, paymentMethod, paymentTotals, salePayments } from './payment-methods.ts';
@@ -216,6 +218,7 @@ export function blindCountArticles(state: State) {
 }
 
 export function compensatedInventory(state: State, count: Count, article: string): number {
+  if (state.settings[0].v4Enabled) return 0;
   const entry = count.inventoryDifferences?.[article];
   if (!entry) return 0;
   if (entry.quantity > 0) return (entry.compensation ?? []).reduce((sum, match) => sum + match.quantity, 0);
@@ -822,7 +825,9 @@ export function applyCommand(
   receivedAt = new Date().toISOString(),
   access?: ApprovalAccess,
 ): { state: State; result: Result } {
-  return applyChangeApproval(original, command, actor, receivedAt, access, applyCommandCore);
+  const result = applyChangeApproval(original, command, actor, receivedAt, access, applyCommandCore);
+  finishV4(original, result.state, command, actor, receivedAt);
+  return result;
 }
 
 function applyCommandCore(
@@ -868,7 +873,11 @@ function applyCommandCore(
     p = command.payload as Record<string, any>;
   const permission = commandPermission(command.type);
   const orderAssistant = isOrderAssistant(actor, state);
-  if (orderAssistant) {
+  if (
+    orderAssistant &&
+    !(command.type === 'v4' && p.action === 'receive') &&
+    !(command.type === 'register_attachment' && hasPermission(actor, 'inventory'))
+  ) {
     assert(
       isCustomerOrderCommand(command.type) &&
         p.origin !== 'paper' &&
@@ -1016,7 +1025,10 @@ function applyCommandCore(
       'Artículo desconocido.',
     );
     assert(Number.isFinite(amount) && amount !== 0, 'Movimiento de inventario inválido.');
-    if (!article.startsWith('liquid:'))
+    if (
+      !article.startsWith('liquid:') &&
+      !(settings.v4Enabled && candies(state).some((c) => c.id === article))
+    )
       assert(Number.isInteger(amount), 'Este artículo se registra en unidades enteras.');
     state.stock.push({
       id: makeId(`stock:${tag}`),
@@ -1044,7 +1056,10 @@ function applyCommandCore(
     const differences: Record<string, number> = {};
     for (const { id: key, name } of list) {
       const counted = quantity(p.items?.[key], name, 1_000_000, true);
-      assert(Number.isInteger(counted), 'Los conteos físicos deben ser enteros.');
+      assert(
+        Number.isInteger(counted) || (settings.v4Enabled && candies(state).some((c) => c.id === key)),
+        'Los conteos físicos deben ser enteros.',
+      );
       items[key] = counted;
       expectedItems[key] = balances[key] ?? 0;
       differences[key] = counted - expectedItems[key];
@@ -1154,7 +1169,14 @@ function applyCommandCore(
       state.shifts.find((x) => x.status === 'open'),
       'Turno abierto',
     );
-    assert(!shiftBlocksSales(shift), 'Las ventas están en pausa hasta completar el conteo.', 'SHIFT_COUNT');
+    assert(
+      !shiftBlocksSales(shift) ||
+        (settings.v4Enabled &&
+          (!!shift.blindClosing || shift.v4ClosingStarted) &&
+          ['open_package', 'open_bag', 'open_supply', 'report_damage', 'expense'].includes(command.type)),
+      'Las ventas están en pausa hasta completar el conteo.',
+      'SHIFT_COUNT',
+    );
     return shift;
   };
   /**
@@ -1397,6 +1419,12 @@ function applyCommandCore(
   };
 
   switch (command.type) {
+    case 'v4': {
+      const result = applyV4({ state, command, actor, at: receivedAt });
+      ref = result.referenceId;
+      message = result.message;
+      break;
+    }
     case 'change_access':
     case 'resolve_change': {
       admin(actor);
@@ -1518,11 +1546,23 @@ function applyCommandCore(
       const article = text(p.article, 'Artículo', 100);
       assert(!article.startsWith('supply:'), 'Ajusta este insumo mediante un conteo.');
       const notes = text(p.notes, 'Motivo', 1500);
-      assert(typeof p.quantity === 'number', 'Cantidad inválida.');
-      quantity(Math.abs(p.quantity), 'Cantidad', 1_000_000);
+      assert(
+        articles(state).some((item) => item.id === article),
+        'Artículo desconocido.',
+      );
+      // quantity conserva el contrato de las versiones anteriores y sus operaciones pendientes.
+      const final =
+        p.finalQuantity === undefined
+          ? undefined
+          : quantity(p.finalQuantity, 'Cantidad final', 1_000_000, true);
+      if (final === undefined) {
+        assert(typeof p.quantity === 'number', 'Cantidad inválida.');
+        quantity(Math.abs(p.quantity), 'Cantidad', 1_000_000);
+      }
+      const delta = final === undefined ? p.quantity : final - (stockBalances(state)[article] ?? 0);
       ref = makeId('inventory-correction');
-      movement(article, p.quantity, 'inventory_correction', ref, article, receivedAt);
-      message = `Corrección de inventario · ${article} · ${p.quantity} · ${notes}`;
+      movement(article, delta, 'inventory_correction', ref, article, receivedAt);
+      message = `Corrección de inventario · ${article} · ${final === undefined ? delta : `Saldo final ${final}`} · ${notes}`;
       break;
     }
     case 'request_shift': {
@@ -1674,7 +1714,7 @@ function applyCommandCore(
         assert(
           (!shift.closingCountId || recount) &&
             (!current || recount) &&
-            (!shiftBlocksSales(shift) || recount),
+            (!shiftBlocksSales(shift) || recount || shift.v4ClosingStarted),
           'Completa el conteo de apertura antes de cerrar.',
         );
       }
@@ -1708,7 +1748,11 @@ function applyCommandCore(
         const differs = countHasDifferences(count);
         count.notes =
           differs && (p.blind !== true || attempt === 2)
-            ? text(p.notes, 'Nota sobre la diferencia', 1500)
+            ? text(
+                p.notes || (settings.v4Enabled ? 'Segundo conteo con diferencias.' : ''),
+                'Nota sobre la diferencia',
+                1500,
+              )
             : String(p.notes ?? '').slice(0, 1500);
         count.checklist = (settings.closingChecklist ?? []).map((task, index) => ({
           task,
@@ -1795,10 +1839,12 @@ function applyCommandCore(
           finishOrders(shift);
         }
       }
-      if (status === 'review')
+      if (kind === 'closing' || status === 'review')
         notify(
           'mermas',
-          `El turno de ${actor.name} requiere revisión de ${kind === 'opening' ? 'apertura' : 'cierre'}.`,
+          kind === 'closing'
+            ? `Cierre enviado · ${actor.name} · ${outstanding ? 'con diferencias' : 'sin diferencias'} · conteo ${attempt}.`
+            : `El turno de ${actor.name} requiere revisión de apertura.`,
         );
       break;
     }
@@ -1860,7 +1906,10 @@ function applyCommandCore(
           const value = p.items?.[key] ?? p[key];
           const corrected =
             value == null ? actual : quantity(value, count.itemLabels?.[key] ?? key, 1000000, true);
-          assert(Number.isInteger(corrected), 'Los conteos físicos deben ser enteros.');
+          assert(
+            Number.isInteger(corrected) || (settings.v4Enabled && candies(state).some((c) => c.id === key)),
+            'Los conteos físicos deben ser enteros.',
+          );
           const adjustment =
             (inventoryUpdated.has(key) && value == null ? (balances[key] ?? 0) : corrected) -
             (balances[key] ?? 0);
@@ -2011,7 +2060,11 @@ function applyCommandCore(
         const value = (p.items ?? {})[article.id];
         assert(value !== undefined, `Falta contar ${article.name}.`);
         items[article.id] = quantity(value, article.name, 1000000, true);
-        assert(Number.isInteger(items[article.id]), 'Los conteos físicos deben ser enteros.');
+        assert(
+          Number.isInteger(items[article.id]) ||
+            (settings.v4Enabled && candies(state).some((c) => c.id === article.id)),
+          'Los conteos físicos deben ser enteros.',
+        );
       }
       const legacyPaymentOnly =
         actor.role !== 'admin' && !!auditRequest && !auditRequest.cash && !list.length;
@@ -2147,7 +2200,13 @@ function applyCommandCore(
         }
         finishOrders(shift);
       }
-      if (countHasDifferences(count)) notify('mermas', `Diferencias registradas en conteo de ${kind}.`);
+      if (kind === 'closing' || countHasDifferences(count))
+        notify(
+          'mermas',
+          kind === 'closing'
+            ? `Cierre enviado · ${actor.name} · ${countHasDifferences(count) ? 'con diferencias' : 'sin diferencias'}.`
+            : `Diferencias registradas en conteo de ${kind}.`,
+        );
       break;
     }
     case 'adjust_count_inventory': {
@@ -2171,7 +2230,10 @@ function applyCommandCore(
           'El inventario cambió. Abre de nuevo el conteo y verifica las existencias.',
         );
         const counted = quantity(p.items?.[key], name, 1000000, true);
-        assert(Number.isInteger(counted), 'Los conteos físicos deben ser enteros.');
+        assert(
+          Number.isInteger(counted) || (settings.v4Enabled && candies(state).some((c) => c.id === key)),
+          'Los conteos físicos deben ser enteros.',
+        );
         items[key] = counted;
         if (counted !== expected)
           movement(key, counted - expected, 'audit_adjustment', count.id, key, receivedAt);
@@ -2335,6 +2397,7 @@ function applyCommandCore(
     }
     case 'approve_closing': {
       admin(actor);
+      assert(!settings.v4Enabled, 'Usa la revisión v4 para conservar la propuesta y su segunda aprobación.');
       const shift = required(
         state.shifts.find((s) => s.id === p.shiftId),
         'Turno',
@@ -2396,7 +2459,11 @@ function applyCommandCore(
                 p.items?.[key] == null
                   ? amount
                   : quantity(p.items[key], original.itemLabels?.[key] ?? key, 1000000, true);
-              assert(Number.isInteger(corrected), 'Los conteos físicos deben ser enteros.');
+              assert(
+                Number.isInteger(corrected) ||
+                  (settings.v4Enabled && candies(state).some((c) => c.id === key)),
+                'Los conteos físicos deben ser enteros.',
+              );
               return [key, corrected];
             }),
         );
@@ -2668,7 +2735,7 @@ function applyCommandCore(
       const additions =
         p.additions === undefined
           ? order.additions
-          : priceAdditions(p.additions, sourcePricing().settings[0].candyPrices);
+          : priceAdditions(p.additions, sourcePricing().settings[0].candyPrices, settings.v4Enabled);
       const quote = quoteOrder(sourcePricing(), inputs, command.at, actor.online, [], additions);
       order.lines = quote.lines;
       if (additions?.length) order.additions = additions;
@@ -2897,6 +2964,13 @@ function applyCommandCore(
         codes,
         selectedPromotions,
       );
+      if (settings.v4Enabled)
+        for (const rule of quote.lines.flatMap((l) => l.appliedRules ?? []))
+          if (rule.couponId && rule.promotion.checkoutText?.trim())
+            assert(
+              Array.isArray(p.verifiedCodes) && p.verifiedCodes.includes(rule.couponCode),
+              'Confirma la verificación de la promoción antes de cobrar.',
+            );
       if (p.expectedTotal !== undefined)
         assert(
           quote.total === p.expectedTotal,
@@ -3659,7 +3733,12 @@ function applyCommandCore(
           articles(state).some((x) => x.id === article),
           'Artículo desconocido.',
         );
-        return { article, quantity: quantity(v.quantity), unitCost: money(v.unitCost, 'Costo', true) };
+        const count = quantity(v.quantity);
+        assert(
+          !settings.v4Enabled || article.startsWith('liquid:') || Number.isInteger(count),
+          'Las unidades y bolsas del envío deben ser enteras.',
+        );
+        return { article, quantity: count, unitCost: money(v.unitCost, 'Costo', true) };
       });
       assert(new Set(items.map((x) => x.article)).size === items.length, 'No repitas artículos en el envío.');
       const photo = p.evidenceId ? evidence(p.evidenceId) : undefined;
@@ -3793,6 +3872,10 @@ function applyCommandCore(
     }
     case 'open_supply': {
       const shift = operating();
+      assert(
+        !settings.v4Enabled || !candies(state).some((c) => c.id === p.article),
+        'Los dulces se descuentan automáticamente con las ventas.',
+      );
       const supply = required(
         supplies(state).find((item) => item.id === p.article && item.initialized),
         'Insumo con saldo inicial',
@@ -3901,7 +3984,12 @@ function applyCommandCore(
       else admin(actor);
       const category = text(p.category, 'Categoría', 60);
       if (source === 'cash') {
-        assert(settings.expenseCategories.includes(category), 'Esta categoría no se paga de caja.');
+        assert(
+          settings.v4Enabled
+            ? expenseCategories(state).some((c) => c.name === category && !c.adminOnly)
+            : settings.expenseCategories.includes(category),
+          'Esta categoría no se paga de caja.',
+        );
         assert(amount <= settings.expenseLimit, 'El gasto supera el tope de caja.');
       }
       if (source === 'treasury')
@@ -4116,8 +4204,8 @@ function applyCommandCore(
     case 'confirm_transfer': {
       admin(actor);
       const transfer = required(
-        state.transfers.find((x) => x.id === p.transferId && x.status === 'in_transit'),
-        'Movimiento en tránsito',
+        state.transfers.find((x) => x.id === p.transferId && ['in_transit', 'disputed'].includes(x.status)),
+        'Movimiento pendiente de recepción o en disputa',
       );
       assert(
         transfer.recipientId === actor.id && transfer.by !== actor.id && transfer.executedBy !== actor.id,
@@ -4125,14 +4213,23 @@ function applyCommandCore(
         'FORBIDDEN',
       );
       const received = money(p.receivedAmount, 'Monto recibido', true);
+      if (transfer.status === 'disputed')
+        transfer.receiptCorrection = {
+          previousAmount: transfer.receivedAmount ?? 0,
+          at: command.at,
+          notes: text(p.notes, 'Motivo de la corrección', 1500),
+        };
       transfer.receivedAmount = received;
       transfer.confirmedBy = actor.id;
       transfer.confirmedAt = command.at;
       transfer.status = received === transfer.amount ? 'confirmed' : 'disputed';
-      if (received !== transfer.amount && transfer.shiftId) {
+      if (transfer.shiftId) {
         const shift = state.shifts.find((item) => item.id === transfer.shiftId);
-        if (shift?.closingReview?.status === 'approved')
-          (shift.closingReview.handoffDifferences ??= {})[transfer.id] = received - transfer.amount;
+        if (shift?.closingReview?.status === 'approved') {
+          const differences = (shift.closingReview.handoffDifferences ??= {});
+          if (received !== transfer.amount) differences[transfer.id] = received - transfer.amount;
+          else delete differences[transfer.id];
+        }
       }
       ref = transfer.id;
       break;
@@ -4144,11 +4241,16 @@ function applyCommandCore(
           (item) =>
             item.id === p.transferId &&
             item.type === 'transfer' &&
-            ['requested', 'in_transit'].includes(item.status),
+            ['requested', 'in_transit', 'disputed'].includes(item.status),
         ),
         'Traslado pendiente',
       );
-      if (transfer.status === 'in_transit') {
+      if (transfer.status !== 'requested') {
+        assert(
+          transfer.recipientId === actor.id && transfer.by !== actor.id && transfer.executedBy !== actor.id,
+          'Solo el administrador receptor puede declinar el envío.',
+          'FORBIDDEN',
+        );
         assert(p.cashRestored === true, 'Confirma que el dinero permanece en el origen o ya se devolvió.');
         if (transfer.from.startsWith('cash:'))
           assert(
@@ -4164,8 +4266,11 @@ function applyCommandCore(
       };
       transfer.status = 'cancelled';
       delete transfer.executedAt;
+      const shift = state.shifts.find((item) => item.id === transfer.shiftId);
+      if (shift?.closingReview?.handoffDifferences)
+        delete shift.closingReview.handoffDifferences[transfer.id];
       ref = transfer.id;
-      message = 'Traslado anulado.';
+      message = 'Traslado declinado. El saldo volvió al origen.';
       break;
     }
     case 'save_promotion': {
@@ -4205,7 +4310,14 @@ function applyCommandCore(
         by: actor.id,
         at: receivedAt,
         stackable: p.stackable === true,
-        checkoutText: p.checkoutText ? text(p.checkoutText, 'Texto de la casilla', 250) : undefined,
+        checkoutText:
+          p.checkoutText === undefined && settings.v4Enabled
+            ? verificationText
+            : p.checkoutText
+              ? text(p.checkoutText, 'Texto de la casilla', 250)
+              : '',
+        shareText: typeof p.shareText === 'string' ? p.shareText.slice(0, 1000) : undefined,
+        ...(p.versus ? { versus: { a: id(p.versus.a), b: id(p.versus.b) } } : {}),
         limitedSchedule:
           p.limitedSchedule === true ||
           (p.limitedSchedule === undefined &&
@@ -4219,6 +4331,14 @@ function applyCommandCore(
         'Productos de la promoción desconocidos.',
       );
       const priorPromo = state.promotions.find((x) => x.id === key);
+      if (promo.versus)
+        assert(
+          promo.versus.a !== promo.versus.b &&
+            state.flavors.some((f) => f.id === promo.versus!.a && f.active) &&
+            state.flavors.some((f) => f.id === promo.versus!.b && f.active) &&
+            ['upgrade', 'fixed'].includes(promo.effect),
+          'Define dos sabores distintos y un beneficio de precio o tamaño.',
+        );
       const legacyConditionsUnchanged =
         priorPromo &&
         priorPromo.effect === 'free' &&
@@ -4320,6 +4440,7 @@ function applyCommandCore(
           flavorIds,
           alcohol: spec.alcohol,
           courtesyOnly: true,
+          checkoutText: settings.v4Enabled ? verificationText : undefined,
           allowMixed: spec.allowMixed !== false,
           stackable: spec.stackable !== false,
           startsAt: command.at,

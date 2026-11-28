@@ -121,6 +121,7 @@ it('limita la proyección de empleados y conserva los dos conteos ciegos para el
 });
 
 it('archiva avisos previos al arqueo de referencia sin eliminarlos de PostgreSQL', async () => {
+  const noticesBefore = (await db.forBranch(branchId).load()).state.notifications.length;
   const auditId = crypto.randomUUID();
   const cutoff = '2026-11-18T18:00:00.000Z';
   const noticeId = crypto.randomUUID();
@@ -145,7 +146,7 @@ it('archiva avisos previos al arqueo de referencia sin eliminarlos de PostgreSQL
     'accepted',
   );
   const store = db.forBranch(branchId);
-  expect((await store.load()).state.notifications).toHaveLength(2);
+  expect((await store.load()).state.notifications).toHaveLength(noticesBefore + 1);
   expect(await store.security('notifications_claim')).toEqual([expect.objectContaining({ id: noticeId })]);
 });
 

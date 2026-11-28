@@ -32,7 +32,7 @@ function publicPromotion(promotion: Promotion): Promotion {
 }
 
 function publicOrder(order: Order): Order {
-  const { couponCode, carriedCouponFromId, ...sale } = order;
+  const { couponCode, carriedCouponFromId, componentCosts, ...sale } = order;
   return {
     ...sale,
     lines: order.lines.map(({ couponId, appliedRules, ...line }) => ({
@@ -145,6 +145,14 @@ export function employeeView(full: State, actor: Actor): State {
   safe.settings = [
     {
       id: settings.id,
+      v4Enabled: settings.v4Enabled,
+      v4: settings.v4Enabled
+        ? {
+            candies: settings.v4?.candies?.map((c) => ({ ...c, cost: 0 })),
+            recipes: settings.v4?.recipes,
+            additionRecipes: settings.v4?.additionRecipes,
+          }
+        : undefined,
       version: settings.version,
       businessName: settings.businessName,
       cupPackageUnits: settings.cupPackageUnits,
@@ -204,6 +212,7 @@ export function employeeView(full: State, actor: Actor): State {
           reconcileClosingId: shift.reconcileClosingId,
           closingSupplies: shift.closingSupplies,
           visibleClosing: shift.visibleClosing,
+          v4ClosingStarted: shift.v4ClosingStarted,
           closingCountId:
             shift.blindOpening?.depth || shift.visibleClosing ? shift.closingCountId : undefined,
           closingFlow: shift.closingFlow,
@@ -256,6 +265,32 @@ export function employeeView(full: State, actor: Actor): State {
     syncReviews
       .filter((request) => request.status === 'pending' && !rehearsalRequest(full, request))
       .map((request) => request.id);
+  if (settings.v4Enabled && hasPermission(actor, 'inventory')) {
+    safe.shipments = full.shipments
+      .filter((s) => s.status !== 'received')
+      .map((s) => ({
+        ...s,
+        by: '',
+        expenseId: undefined,
+        evidenceId: undefined,
+        notes: '',
+        items: s.items.map(({ article, quantity }) => ({ article, quantity, unitCost: 0 })),
+      }));
+    safe.receipts = full.receipts
+      .filter((r) => safe.shipments.some((s) => s.id === r.shipmentId))
+      .map((r) => ({
+        id: r.id,
+        shipmentId: r.shipmentId,
+        by: r.by === actor.id ? r.by : '',
+        at: r.at,
+        items: r.items,
+        damaged: r.damaged,
+        missing: r.missing,
+        expected: r.expected,
+        evidenceId: '',
+        notes: '',
+      }));
+  }
   if (orderAssistant) {
     safe.shifts = [];
     return safe;
@@ -280,30 +315,32 @@ export function employeeView(full: State, actor: Actor): State {
   if (isCashier) {
     if (actor.role === 'encargado') {
       if (hasPermission(actor, 'inventory')) {
-        safe.shipments = full.shipments
-          .filter((item) => item.status !== 'received')
-          .map(({ id, from, supplier, at, status }) => ({
-            id,
-            from,
-            supplier,
-            at,
-            status,
-            by: '',
-            items: [],
-            notes: '',
-          }));
-        safe.receipts = full.receipts
-          .filter((item) => item.by === actor.id && !!active.openedAt && item.at >= active.openedAt)
-          .map(({ id, shipmentId, by, at, items, damaged, evidenceId, notes }) => ({
-            id,
-            shipmentId,
-            by,
-            at,
-            items,
-            damaged,
-            evidenceId,
-            notes,
-          }));
+        if (!settings.v4Enabled)
+          safe.shipments = full.shipments
+            .filter((item) => item.status !== 'received')
+            .map(({ id, from, supplier, at, status }) => ({
+              id,
+              from,
+              supplier,
+              at,
+              status,
+              by: '',
+              items: [],
+              notes: '',
+            }));
+        if (!settings.v4Enabled)
+          safe.receipts = full.receipts
+            .filter((item) => item.by === actor.id && !!active.openedAt && item.at >= active.openedAt)
+            .map(({ id, shipmentId, by, at, items, damaged, evidenceId, notes }) => ({
+              id,
+              shipmentId,
+              by,
+              at,
+              items,
+              damaged,
+              evidenceId,
+              notes,
+            }));
       }
       if (hasPermission(actor, 'expenses'))
         safe.expenses = full.expenses.filter((item) => item.source === 'cash' && item.shiftId === active.id);

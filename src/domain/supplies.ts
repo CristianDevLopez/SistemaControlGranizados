@@ -1,4 +1,5 @@
 import type { State } from './types.ts';
+import { candies } from './v4-catalog.ts';
 
 const catalog = [
   ['bolsa-cierre', 'Bolsa cierre', 'paquete'],
@@ -15,9 +16,20 @@ const catalog = [
 ] as const;
 
 export function supplies(state: State) {
-  return catalog.map(([key, name, defaultUnit]) => {
+  const result = catalog.map(([key, name, defaultUnit]) => {
     const id = `supply:${key}`;
     const config = state.settings[0].supplies?.[id];
-    return { id, name, unit: config?.unit ?? defaultUnit, initialized: config?.initialized === true };
+    const candy = state.settings[0].v4Enabled ? candies(state).find((c) => c.id === id) : undefined;
+    return {
+      id,
+      name: candy?.name ?? name,
+      unit: candy?.unit ?? config?.unit ?? defaultUnit,
+      initialized: candy ? true : config?.initialized === true,
+    };
   });
+  if (state.settings[0].v4Enabled)
+    for (const candy of candies(state))
+      if (!result.some((s) => s.id === candy.id))
+        result.push({ id: candy.id, name: candy.name, unit: candy.unit, initialized: true });
+  return result;
 }

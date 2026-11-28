@@ -9,6 +9,26 @@ function items(state: State) {
   return Object.fromEntries(blindCountArticles(state).map(({ id }) => [id, balances[id] ?? 0]));
 }
 
+it('avisa desde el primer conteo de cierre, cuadre o tenga diferencias', () => {
+  for (const cash of [20000, 15000]) {
+    const state = fixture();
+    const first = run(state, 'submit_blind_count', {
+      kind: 'closing',
+      shiftId: ids.shift,
+      cash,
+      items: items(state),
+      attempt: 1,
+    });
+    expect(first.state.notifications).toEqual([
+      expect.objectContaining({
+        channel: 'mermas',
+        status: 'pending',
+        text: expect.stringContaining(cash === 20000 ? 'sin diferencias' : 'con diferencias'),
+      }),
+    ]);
+  }
+});
+
 it('no envía cifras al cerrar con $5.000 de menos y conserva ambos intentos', () => {
   let state = fixture();
   const payload = { kind: 'closing', shiftId: ids.shift, cash: 15000, items: items(state), attempt: 1 };

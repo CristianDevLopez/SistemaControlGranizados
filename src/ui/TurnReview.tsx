@@ -1,3 +1,4 @@
+import { V4Closing } from './V4Closing.tsx';
 import { orderedFlavors } from '../domain/flavors.ts';
 import { useState } from 'react';
 import { businessDay, periodStart } from '../domain/business-date.ts';
@@ -54,7 +55,9 @@ const digits = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 1 });
 export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: () => void } = {}) {
   const app = useApp();
   const { state, profiles } = app.data!;
-  const [selected, setSelected] = useState<string | null>(shiftId ?? null);
+  const [selected, setSelected] = useState<string | null>(
+    shiftId ?? new URLSearchParams(window.location.hash.split('?')[1]).get('registro'),
+  );
   const [action, setAction] = useState<Action | null>(null);
   const [history, setHistory] = useState('pending');
   const [error, setError] = useState('');
@@ -343,687 +346,696 @@ export function TurnReview({ shiftId, onClose }: { shiftId?: string; onClose?: (
               <Empty title="Sin turnos en esta vista" />
             )}
           </Panel>
-          <MermaReport
-            onTurn={(id) => {
-              setKind('all');
-              setSelected(id);
-            }}
-          />
-          <InventoryComparison state={state} day={day} />
+          {!state.settings[0].v4Enabled && (
+            <MermaReport
+              onTurn={(id) => {
+                setKind('all');
+                setSelected(id);
+              }}
+            />
+          )}
+          {!state.settings[0].v4Enabled && <InventoryComparison state={state} day={day} />}
         </>
       )}
-      {shift && (
-        <Modal title={`Turno de ${name(shift.cashierId)}`} onClose={onClose ?? (() => setSelected(null))}>
-          <div className="detail-content turn-review">
-            {error && (
-              <p className="form-error" role="alert">
-                {error}
-              </p>
-            )}
-            <p>
-              {date(shift.openedAt ?? shift.requestedAt)}
-              {archived && ' · Archivado'}
-            </p>
-            {filteredCounts.map((count) => (
-              <div key={count.id}>
-                <CountDetails count={reconciledCount(state, shift, count)} original={count} />
-                {shift.operationsReview?.countResolutions?.[count.id] && (
-                  <p>Arqueo revisado · {shift.operationsReview.countResolutions[count.id].notes}</p>
-                )}
-                {!archived &&
-                  count.kind === 'audit' &&
-                  countHasDifferences(count) &&
-                  !shift.operationsReview?.countResolutions?.[count.id] && (
-                    <button
-                      className="text-button"
-                      onClick={() =>
-                        requestAction('Cerrar diferencia de arqueo', 'resolve_count', [note], {
-                          countId: count.id,
-                        })
-                      }
-                    >
-                      Cerrar diferencia de arqueo · No mueve inventario ni plata
-                    </button>
-                  )}
-                {!archived &&
-                  !shift.closingFlow &&
-                  shift.closingCountId === count.id &&
-                  shift.closingReview?.status === 'pending' && (
-                    <button className="text-button" onClick={() => setApprovalCount(count)}>
-                      Reconfirmar cuadre · Permite proponer ajustes de inventario
-                    </button>
-                  )}
-                {Object.entries(
-                  shift.operationsReview?.openingDifferences?.countId === count.id
-                    ? shift.operationsReview.openingDifferences.items
-                    : {},
-                ).map(([key, item]) => (
-                  <p key={key}>
-                    {count.itemLabels?.[key] ?? key} · {item.difference > 0 ? '+' : ''}
-                    {item.difference} ·
-                    {item.lastFullCountAt
-                      ? ` Diferencia desde el último conteo completo del ${date(item.lastFullCountAt)}`
-                      : ' Primer conteo completo registrado'}
-                  </p>
-                ))}
-                {Object.entries(count.inventoryDifferences ?? {}).map(([article, entry]) => {
-                  const compensated = compensatedInventory(state, count, article);
-                  return (
-                    <p key={article}>
-                      {count.itemLabels?.[article] ?? article} · {entry.quantity} · Costo unitario{' '}
-                      {money(entry.unitCost)}
-                      {' · Venta unitaria '}
-                      {money(entry.saleValue)}
-                      {compensated > 0 &&
-                        ` · ${compensated === Math.abs(entry.quantity) ? 'Compensado' : 'Compensado parcialmente'} (${compensated}) · Neto ${entry.quantity - Math.sign(entry.quantity) * compensated}`}
-                    </p>
-                  );
-                })}
-                {!archived && (!shift.closingFlow || count.kind === 'audit') && (
-                  <button className="text-button" onClick={() => setReviewCount(count)}>
-                    Revisar conteo · Permite proponer ajustes de inventario
-                  </button>
-                )}
-              </div>
-            ))}
-            {shift.closingFlow?.versions.map((version, index) => {
-              const transfer = state.transfers.find((item) => item.id === version.transferId);
-              return (
-                <p key={version.at + index}>
-                  Versión {index + 1} · {date(version.at)}
-                  {!transfer?.blindReceipt && ` · Base ${money(version.retained)}`}
-                  {transfer &&
-                    ` · ${state.locations.find((item) => item.id === transfer.to)?.name ?? 'Destino'} · ${transfer.status === 'in_transit' ? 'En camino' : 'Recibido'}`}
-                  {transfer &&
-                    !transfer.blindReceipt &&
-                    ` · ${transfer.receiptCorrection ? 'En el cuadre' : 'Enviado'} ${money(transfer.amount)}`}
-                  {transfer?.receivedAmount !== undefined &&
-                    ` · ${transfer.receiptCorrection ? 'Recepción corregida' : 'Recibido'} ${money(transfer.receivedAmount)}`}
-                  {transfer?.status === 'disputed' &&
-                    ` · Diferencia ${money(transfer.receivedAmount! - transfer.amount)}`}
-                  {version.notes && ` · ${version.notes}`}
+      {shift &&
+        (state.settings[0].v4Enabled && shift.closingCountId ? (
+          <Modal title="Revisión del cierre" onClose={onClose ?? (() => setSelected(null))}>
+            <V4Closing count={state.counts.find((c) => c.id === shift.closingCountId)!} />
+          </Modal>
+        ) : (
+          <Modal title={`Turno de ${name(shift.cashierId)}`} onClose={onClose ?? (() => setSelected(null))}>
+            <div className="detail-content turn-review">
+              {error && (
+                <p className="form-error" role="alert">
+                  {error}
                 </p>
-              );
-            })}
-            {approvedCash !== undefined && (
-              <p>Base aprobada para el siguiente turno · {money(approvedCash)}</p>
-            )}
-            {shift.closingFlow?.returns?.map((item) => (
-              <p key={item.at}>
-                Devuelto · {date(item.at)} · {item.notes}
-              </p>
-            ))}
-            {shift.closingFlow?.response && (
-              <p>
-                Respuesta ·{' '}
-                {
-                  {
-                    accepted: 'Acepto',
-                    disagreed: 'No estoy de acuerdo',
-                    unanswered: 'Sin respuesta',
-                  }[shift.closingFlow.response.outcome]
-                }{' '}
-                · {shift.closingFlow.response.notes}
-              </p>
-            )}
-            {!archived &&
-              shift.closingFlow &&
-              ['pending', 'returned'].includes(shift.closingReview?.status ?? '') &&
-              counted && (
-                <>
-                  {awaitsVerification && <p>Verifica las transferencias del turno.</p>}
-                  {awaitsPaymentChanges && <p>Resuelve los cambios de medio de pago.</p>}
-                  <ClosingConfirmation
-                    key={counted.id}
-                    count={counted}
-                    blocked={awaitsVerification || awaitsPaymentChanges}
-                  />
-                </>
               )}
-            {shift.closingReview?.inventoryVerification?.status === 'pending' && (
-              <p>Inventario por verificar en el próximo arqueo de apertura.</p>
-            )}
-            {shift.closingReview?.openingChecks?.map((check) => (
-              <p key={check.countId}>
-                Arqueo de apertura aprobado ·{' '}
-                {Object.entries(check.differences)
-                  .map(
-                    ([key, amount]) =>
-                      `${counted?.itemLabels?.[key] ?? key} ${amount > 0 ? '+' : ''}${amount}`,
-                  )
-                  .join(' · ') || 'Sin diferencias de inventario'}
-                {check.cash ? ` · Efectivo ${money(check.cash)}` : ''}
-              </p>
-            ))}
-            {!!explanations.length && (
-              <div className="notice warning">
-                {explanations.map((text) => (
-                  <p key={text}>{text}</p>
-                ))}
-              </div>
-            )}
-            {shift.operationsReview?.resolution && (
               <p>
-                <strong>
-                  {
-                    {
-                      shortage: 'Faltante del negocio',
-                      surplus: 'Sobrante del negocio',
-                      matched: 'Coincidió tras la corrección',
-                    }[shift.operationsReview.resolution.outcome]
-                  }
-                </strong>{' '}
-                · {shift.operationsReview.resolution.notes}
+                {date(shift.openedAt ?? shift.requestedAt)}
+                {archived && ' · Archivado'}
               </p>
-            )}
-            {shift.operationsReview?.openingResolution && (
-              <p>Apertura revisada · {shift.operationsReview.openingResolution.notes}</p>
-            )}
-            {shift.operationsReview?.camera && (
-              <p>
-                Revisar cámaras · {date(shift.operationsReview.camera.at)} ·{' '}
-                {shift.operationsReview.camera.notes}
-              </p>
-            )}
-            <details open>
-              <summary>Transferencias del turno</summary>
-              {transfers.length ? (
-                <ul>
-                  {transfers.map((payment) => {
-                    const verified = shift.operationsReview?.verifiedTransfers?.[payment.id];
-                    return (
-                      <li key={payment.id}>
-                        <strong>#{orderName(payment.orderId)}</strong>
-                        {' · '}
-                        {state.locations.find((location) => location.id === payment.accountId)?.name ??
-                          'Transferencia'}{' '}
-                        · {money(payment.amount)}
-                        {payment.reference && ` · Ref. ${payment.reference}`}{' '}
-                        {verified ? (
-                          <Badge tone={verified.missing ? 'red' : 'green'}>
-                            {verified.missing ? 'Marcada como no recibida por' : 'Verificada por'}{' '}
-                            {name(verified.by)}
-                          </Badge>
-                        ) : (
-                          <Badge tone="orange">Sin verificar</Badge>
-                        )}{' '}
-                        {canReviewPayments && (!verified || verified.missing) && (
-                          <button
-                            className="button small secondary"
-                            onClick={() =>
-                              void run('review_shift', {
-                                shiftId: shift.id,
-                                paymentId: payment.id,
-                                action: 'verify_transfer',
-                              })
-                            }
-                          >
-                            Marcar verificada · No mueve plata
-                          </button>
-                        )}
-                        {canReviewPayments && (!verified || !verified.missing) && (
-                          <button
-                            className="button small secondary"
-                            onClick={() =>
-                              void run('review_shift', {
-                                shiftId: shift.id,
-                                paymentId: payment.id,
-                                action: 'verify_transfer',
-                                missing: true,
-                              })
-                            }
-                          >
-                            No llegó · Registra faltante de plata
-                          </button>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                <p>Sin transferencias registradas.</p>
-              )}
-            </details>
-            <details open>
-              <summary>Solicitudes y explicaciones</summary>
-              {state.requests
-                .filter(
-                  (request) =>
-                    (archived || !inRehearsalPeriod(state, request.at)) &&
-                    ((request.type === 'shift_explanation' && request.referenceId === shift.id) ||
-                      (request.type === 'payment_change' &&
-                        orders.some((order) => order.id === request.referenceId)) ||
-                      (request.type === 'difference' &&
-                        counts.some((count) => count.id === request.referenceId))),
-                )
-                .map((request) => {
-                  const payment = currentPayments(state.payments).find(
-                    (item) => item.orderId === request.referenceId && item.amount > 0,
-                  );
-                  return (
-                    <article key={request.id}>
-                      <p>
-                        <strong>
-                          {request.type === 'payment_change'
-                            ? `Cambio de pago · #${orderName(request.referenceId!)}`
-                            : 'Explicación del turno'}
-                        </strong>
-                        {' · '}
-                        {request.notes}
-                      </p>
-                      {request.response && (
-                        <p>
-                          {request.response.notes} · {date(request.response.at)}
-                        </p>
-                      )}
-                      {request.resolutionNotes && <p>{request.resolutionNotes}</p>}
-                      {!archived && request.type === 'difference' && request.status === 'pending' && (
-                        <button
-                          className="button small secondary"
-                          onClick={() =>
-                            void run('resolve_request', {
-                              requestId: request.id,
-                              approve: true,
-                            })
-                          }
-                        >
-                          Aceptar explicación · No mueve inventario ni plata
-                        </button>
-                      )}
-                      {canReviewPayments &&
-                        request.type === 'payment_change' &&
-                        request.status === 'pending' && (
-                          <button
-                            className="button small secondary"
-                            onClick={() =>
-                              requestAction(
-                                'Rechazar cambio de medio de pago',
-                                'reject_payment_change',
-                                [note],
-                                { requestId: request.id },
-                              )
-                            }
-                          >
-                            Rechazar cambio · No mueve inventario ni plata
-                          </button>
-                        )}
-                      {canReviewPayments &&
-                        request.type === 'payment_change' &&
-                        request.status === 'pending' &&
-                        payment && (
-                          <button
-                            className="button small secondary"
-                            onClick={() => correctPayment(payment, request.id)}
-                          >
-                            Aplicar cambio · Corrige el registro de plata
-                          </button>
-                        )}
-                    </article>
-                  );
-                })}
-            </details>
-            <details open>
-              <summary>Gastos y daños del turno</summary>
-              {state.expenses
-                .filter((item) => item.shiftId === shift.id)
-                .map((item) => (
-                  <div className="list-row" key={item.id}>
-                    <span>
-                      {item.category} · {money(item.amount)} · {stateNames[item.status]}
-                      {item.notes && ` · ${item.notes}`}
-                    </span>
-                    <div className="button-row">
-                      {item.evidenceId && <EvidenceButton id={item.evidenceId} />}
-                      {!archived && (
-                        <ExpenseApproval
-                          expense={item}
-                          label=" gasto"
-                          onDecision={(approve) =>
-                            void run('approve_expense', { expenseId: item.id, approve })
-                          }
-                        />
-                      )}
-                    </div>
-                  </div>
-                ))}
-              {state.requests
-                .filter(
-                  (item) =>
-                    item.type === 'damage' &&
-                    (item.referenceId === shift.id ||
-                      (!item.referenceId &&
-                        !!shift.openedAt &&
-                        item.at >= shift.openedAt &&
-                        (!shift.closedAt || item.at <= shift.closedAt))),
-                )
-                .map((item) => (
-                  <div className="list-row" key={item.id}>
-                    <span>
-                      Daño · {item.notes} · {stateNames[item.status]}
-                    </span>
-                    {!archived && item.status === 'pending' && (
-                      <div className="button-row">
-                        <button
-                          className="button small primary"
-                          onClick={() =>
-                            void run('resolve_request', {
-                              requestId: item.id,
-                              approve: true,
-                              ...(shift.closingReview?.status === 'pending'
-                                ? { reviewClosing: true, shiftId: shift.id }
-                                : {}),
-                            })
-                          }
-                        >
-                          Aprobar daño
-                        </button>
-                        <button
-                          className="button small secondary"
-                          onClick={() => void run('resolve_request', { requestId: item.id, approve: false })}
-                        >
-                          Rechazar daño
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-            </details>
-            <details open>
-              <summary>Inventario y ventas del turno</summary>
-              {openings.map((item) => (
-                <div className="list-row" key={item.id}>
-                  <span>
-                    {item.kind} · {item.article} · {date(item.openedAt)}
-                  </span>
-                  {!archived && shift.closingReview?.status !== 'approved' && (
-                    <div className="button-row">
+              {filteredCounts.map((count) => (
+                <div key={count.id}>
+                  <CountDetails count={reconciledCount(state, shift, count)} original={count} />
+                  {shift.operationsReview?.countResolutions?.[count.id] && (
+                    <p>Arqueo revisado · {shift.operationsReview.countResolutions[count.id].notes}</p>
+                  )}
+                  {!archived &&
+                    count.kind === 'audit' &&
+                    countHasDifferences(count) &&
+                    !shift.operationsReview?.countResolutions?.[count.id] && (
                       <button
-                        className="button small secondary"
+                        className="text-button"
                         onClick={() =>
-                          requestAction(
-                            'Cambiar hora de apertura',
-                            'correct_opening',
-                            [
-                              {
-                                name: 'openedAt',
-                                label: 'Fecha y hora de apertura (Colombia)',
-                                type: 'datetime-local',
-                                required: true,
-                                value: localDateTime(new Date(item.openedAt)),
-                              },
-                              note,
-                            ],
-                            { openingId: item.id },
-                          )
-                        }
-                      >
-                        Cambiar hora
-                      </button>
-                      <button
-                        className="button small secondary"
-                        onClick={() =>
-                          requestAction('Quitar apertura', 'correct_opening', [note], {
-                            openingId: item.id,
-                            remove: true,
+                          requestAction('Cerrar diferencia de arqueo', 'resolve_count', [note], {
+                            countId: count.id,
                           })
                         }
                       >
-                        Quitar
+                        Cerrar diferencia de arqueo · No mueve inventario ni plata
                       </button>
-                    </div>
+                    )}
+                  {!archived &&
+                    !shift.closingFlow &&
+                    shift.closingCountId === count.id &&
+                    shift.closingReview?.status === 'pending' && (
+                      <button className="text-button" onClick={() => setApprovalCount(count)}>
+                        Reconfirmar cuadre · Permite proponer ajustes de inventario
+                      </button>
+                    )}
+                  {Object.entries(
+                    shift.operationsReview?.openingDifferences?.countId === count.id
+                      ? shift.operationsReview.openingDifferences.items
+                      : {},
+                  ).map(([key, item]) => (
+                    <p key={key}>
+                      {count.itemLabels?.[key] ?? key} · {item.difference > 0 ? '+' : ''}
+                      {item.difference} ·
+                      {item.lastFullCountAt
+                        ? ` Diferencia desde el último conteo completo del ${date(item.lastFullCountAt)}`
+                        : ' Primer conteo completo registrado'}
+                    </p>
+                  ))}
+                  {Object.entries(count.inventoryDifferences ?? {}).map(([article, entry]) => {
+                    const compensated = compensatedInventory(state, count, article);
+                    return (
+                      <p key={article}>
+                        {count.itemLabels?.[article] ?? article} · {entry.quantity} · Costo unitario{' '}
+                        {money(entry.unitCost)}
+                        {' · Venta unitaria '}
+                        {money(entry.saleValue)}
+                        {compensated > 0 &&
+                          ` · ${compensated === Math.abs(entry.quantity) ? 'Compensado' : 'Compensado parcialmente'} (${compensated}) · Neto ${entry.quantity - Math.sign(entry.quantity) * compensated}`}
+                      </p>
+                    );
+                  })}
+                  {!archived && (!shift.closingFlow || count.kind === 'audit') && (
+                    <button className="text-button" onClick={() => setReviewCount(count)}>
+                      Revisar conteo · Permite proponer ajustes de inventario
+                    </button>
                   )}
                 </div>
               ))}
-
-              {orderedFlavors(state.flavors)
-                .filter(
-                  (flavor) =>
-                    openings.some((item) => item.kind === 'Bolsa' && item.flavorId === flavor.id) ||
-                    sales?.ouncesByFlavor.has(flavor.id),
-                )
-                .map((flavor) => {
-                  const bags = openings.filter(
-                    (item) => item.kind === 'Bolsa' && item.flavorId === flavor.id,
-                  );
-                  const sold = sales?.ouncesByFlavor.get(flavor.id) ?? 0;
-                  const opened = bags.reduce(
-                    (sum, item) => sum + (item.kind === 'Bolsa' ? (item.ounces ?? 0) : 0),
-                    0,
-                  );
-                  return (
-                    <p key={flavor.id}>
-                      {flavor.name} · {bags.length} bolsas abiertas · {digits.format(sold)} oz vendidas.
-                      {bags.length >= 2 && opened > 0 && sold < opened / 2 && (
-                        <strong> Conviene pedir un arqueo de este sabor.</strong>
-                      )}
-                    </p>
-                  );
-                })}
-              {state.sizes
-                .filter(
-                  (size) =>
-                    openings.some((item) => item.kind === 'Paquete' && item.sizeId === size.id) ||
-                    sales?.cupsBySize.has(size.id),
-                )
-                .map((size) => (
-                  <p key={size.id}>
-                    {size.name} ·{' '}
-                    {openings.filter((item) => item.kind === 'Paquete' && item.sizeId === size.id).length}{' '}
-                    paquetes abiertos · {sales?.cupsBySize.get(size.id) ?? 0} vasos vendidos.
+              {shift.closingFlow?.versions.map((version, index) => {
+                const transfer = state.transfers.find((item) => item.id === version.transferId);
+                return (
+                  <p key={version.at + index}>
+                    Versión {index + 1} · {date(version.at)}
+                    {!transfer?.blindReceipt && ` · Base ${money(version.retained)}`}
+                    {transfer &&
+                      ` · ${state.locations.find((item) => item.id === transfer.to)?.name ?? 'Destino'} · ${transfer.status === 'in_transit' ? 'En camino' : 'Recibido'}`}
+                    {transfer &&
+                      !transfer.blindReceipt &&
+                      ` · ${transfer.receiptCorrection ? 'En el cuadre' : 'Enviado'} ${money(transfer.amount)}`}
+                    {transfer?.receivedAmount !== undefined &&
+                      ` · ${transfer.receiptCorrection ? 'Recepción corregida' : 'Recibido'} ${money(transfer.receivedAmount)}`}
+                    {transfer?.status === 'disputed' &&
+                      ` · Diferencia ${money(transfer.receivedAmount! - transfer.amount)}`}
+                    {version.notes && ` · ${version.notes}`}
                   </p>
-                ))}
-            </details>
-            {!archived && (
-              <div className="button-row">
-                {openingReview === 'review' && (
+                );
+              })}
+              {approvedCash !== undefined && (
+                <p>Base aprobada para el siguiente turno · {money(approvedCash)}</p>
+              )}
+              {shift.closingFlow?.returns?.map((item) => (
+                <p key={item.at}>
+                  Devuelto · {date(item.at)} · {item.notes}
+                </p>
+              ))}
+              {shift.closingFlow?.response && (
+                <p>
+                  Respuesta ·{' '}
+                  {
+                    {
+                      accepted: 'Acepto',
+                      disagreed: 'No estoy de acuerdo',
+                      unanswered: 'Sin respuesta',
+                    }[shift.closingFlow.response.outcome]
+                  }{' '}
+                  · {shift.closingFlow.response.notes}
+                </p>
+              )}
+              {!archived &&
+                shift.closingFlow &&
+                ['pending', 'returned'].includes(shift.closingReview?.status ?? '') &&
+                counted && (
                   <>
-                    {priorCount && (
-                      <div className="notice info">
-                        <strong>Diferencias del cierre anterior</strong>
+                    {awaitsVerification && <p>Verifica las transferencias del turno.</p>}
+                    {awaitsPaymentChanges && <p>Resuelve los cambios de medio de pago.</p>}
+                    <ClosingConfirmation
+                      key={counted.id}
+                      count={counted}
+                      blocked={awaitsVerification || awaitsPaymentChanges}
+                    />
+                  </>
+                )}
+              {shift.closingReview?.inventoryVerification?.status === 'pending' && (
+                <p>Inventario por verificar en el próximo arqueo de apertura.</p>
+              )}
+              {shift.closingReview?.openingChecks?.map((check) => (
+                <p key={check.countId}>
+                  Arqueo de apertura aprobado ·{' '}
+                  {Object.entries(check.differences)
+                    .map(
+                      ([key, amount]) =>
+                        `${counted?.itemLabels?.[key] ?? key} ${amount > 0 ? '+' : ''}${amount}`,
+                    )
+                    .join(' · ') || 'Sin diferencias de inventario'}
+                  {check.cash ? ` · Efectivo ${money(check.cash)}` : ''}
+                </p>
+              ))}
+              {!!explanations.length && (
+                <div className="notice warning">
+                  {explanations.map((text) => (
+                    <p key={text}>{text}</p>
+                  ))}
+                </div>
+              )}
+              {shift.operationsReview?.resolution && (
+                <p>
+                  <strong>
+                    {
+                      {
+                        shortage: 'Faltante del negocio',
+                        surplus: 'Sobrante del negocio',
+                        matched: 'Coincidió tras la corrección',
+                      }[shift.operationsReview.resolution.outcome]
+                    }
+                  </strong>{' '}
+                  · {shift.operationsReview.resolution.notes}
+                </p>
+              )}
+              {shift.operationsReview?.openingResolution && (
+                <p>Apertura revisada · {shift.operationsReview.openingResolution.notes}</p>
+              )}
+              {shift.operationsReview?.camera && (
+                <p>
+                  Revisar cámaras · {date(shift.operationsReview.camera.at)} ·{' '}
+                  {shift.operationsReview.camera.notes}
+                </p>
+              )}
+              <details open>
+                <summary>Transferencias del turno</summary>
+                {transfers.length ? (
+                  <ul>
+                    {transfers.map((payment) => {
+                      const verified = shift.operationsReview?.verifiedTransfers?.[payment.id];
+                      return (
+                        <li key={payment.id}>
+                          <strong>#{orderName(payment.orderId)}</strong>
+                          {' · '}
+                          {state.locations.find((location) => location.id === payment.accountId)?.name ??
+                            'Transferencia'}{' '}
+                          · {money(payment.amount)}
+                          {payment.reference && ` · Ref. ${payment.reference}`}{' '}
+                          {verified ? (
+                            <Badge tone={verified.missing ? 'red' : 'green'}>
+                              {verified.missing ? 'Marcada como no recibida por' : 'Verificada por'}{' '}
+                              {name(verified.by)}
+                            </Badge>
+                          ) : (
+                            <Badge tone="orange">Sin verificar</Badge>
+                          )}{' '}
+                          {canReviewPayments && (!verified || verified.missing) && (
+                            <button
+                              className="button small secondary"
+                              onClick={() =>
+                                void run('review_shift', {
+                                  shiftId: shift.id,
+                                  paymentId: payment.id,
+                                  action: 'verify_transfer',
+                                })
+                              }
+                            >
+                              Marcar verificada · No mueve plata
+                            </button>
+                          )}
+                          {canReviewPayments && (!verified || !verified.missing) && (
+                            <button
+                              className="button small secondary"
+                              onClick={() =>
+                                void run('review_shift', {
+                                  shiftId: shift.id,
+                                  paymentId: payment.id,
+                                  action: 'verify_transfer',
+                                  missing: true,
+                                })
+                              }
+                            >
+                              No llegó · Registra faltante de plata
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p>Sin transferencias registradas.</p>
+                )}
+              </details>
+              <details open>
+                <summary>Solicitudes y explicaciones</summary>
+                {state.requests
+                  .filter(
+                    (request) =>
+                      (archived || !inRehearsalPeriod(state, request.at)) &&
+                      ((request.type === 'shift_explanation' && request.referenceId === shift.id) ||
+                        (request.type === 'payment_change' &&
+                          orders.some((order) => order.id === request.referenceId)) ||
+                        (request.type === 'difference' &&
+                          counts.some((count) => count.id === request.referenceId))),
+                  )
+                  .map((request) => {
+                    const payment = currentPayments(state.payments).find(
+                      (item) => item.orderId === request.referenceId && item.amount > 0,
+                    );
+                    return (
+                      <article key={request.id}>
                         <p>
-                          {Object.entries(priorCount.differences ?? {})
-                            .filter(([key, amount]) => !isLegacyCoolerArticle(key) && amount !== 0)
-                            .map(
-                              ([key, amount]) =>
-                                `${priorCount.itemLabels?.[key] ?? key} ${amount > 0 ? '+' : ''}${amount}`,
-                            )
-                            .join(' · ') || 'Inventario sin diferencias'}
+                          <strong>
+                            {request.type === 'payment_change'
+                              ? `Cambio de pago · #${orderName(request.referenceId!)}`
+                              : 'Explicación del turno'}
+                          </strong>
+                          {' · '}
+                          {request.notes}
                         </p>
-                        {!!priorCount.difference && <p>Efectivo · {money(priorCount.difference)}</p>}
+                        {request.response && (
+                          <p>
+                            {request.response.notes} · {date(request.response.at)}
+                          </p>
+                        )}
+                        {request.resolutionNotes && <p>{request.resolutionNotes}</p>}
+                        {!archived && request.type === 'difference' && request.status === 'pending' && (
+                          <button
+                            className="button small secondary"
+                            onClick={() =>
+                              void run('resolve_request', {
+                                requestId: request.id,
+                                approve: true,
+                              })
+                            }
+                          >
+                            Aceptar explicación · No mueve inventario ni plata
+                          </button>
+                        )}
+                        {canReviewPayments &&
+                          request.type === 'payment_change' &&
+                          request.status === 'pending' && (
+                            <button
+                              className="button small secondary"
+                              onClick={() =>
+                                requestAction(
+                                  'Rechazar cambio de medio de pago',
+                                  'reject_payment_change',
+                                  [note],
+                                  { requestId: request.id },
+                                )
+                              }
+                            >
+                              Rechazar cambio · No mueve inventario ni plata
+                            </button>
+                          )}
+                        {canReviewPayments &&
+                          request.type === 'payment_change' &&
+                          request.status === 'pending' &&
+                          payment && (
+                            <button
+                              className="button small secondary"
+                              onClick={() => correctPayment(payment, request.id)}
+                            >
+                              Aplicar cambio · Corrige el registro de plata
+                            </button>
+                          )}
+                      </article>
+                    );
+                  })}
+              </details>
+              <details open>
+                <summary>Gastos y daños del turno</summary>
+                {state.expenses
+                  .filter((item) => item.shiftId === shift.id)
+                  .map((item) => (
+                    <div className="list-row" key={item.id}>
+                      <span>
+                        {item.category} · {money(item.amount)} · {stateNames[item.status]}
+                        {item.notes && ` · ${item.notes}`}
+                      </span>
+                      <div className="button-row">
+                        {item.evidenceId && <EvidenceButton id={item.evidenceId} />}
+                        {!archived && (
+                          <ExpenseApproval
+                            expense={item}
+                            label=" gasto"
+                            onDecision={(approve) =>
+                              void run('approve_expense', { expenseId: item.id, approve })
+                            }
+                          />
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                {state.requests
+                  .filter(
+                    (item) =>
+                      item.type === 'damage' &&
+                      (item.referenceId === shift.id ||
+                        (!item.referenceId &&
+                          !!shift.openedAt &&
+                          item.at >= shift.openedAt &&
+                          (!shift.closedAt || item.at <= shift.closedAt))),
+                  )
+                  .map((item) => (
+                    <div className="list-row" key={item.id}>
+                      <span>
+                        Daño · {item.notes} · {stateNames[item.status]}
+                      </span>
+                      {!archived && item.status === 'pending' && (
+                        <div className="button-row">
+                          <button
+                            className="button small primary"
+                            onClick={() =>
+                              void run('resolve_request', {
+                                requestId: item.id,
+                                approve: true,
+                                ...(shift.closingReview?.status === 'pending'
+                                  ? { reviewClosing: true, shiftId: shift.id }
+                                  : {}),
+                              })
+                            }
+                          >
+                            Aprobar daño
+                          </button>
+                          <button
+                            className="button small secondary"
+                            onClick={() =>
+                              void run('resolve_request', { requestId: item.id, approve: false })
+                            }
+                          >
+                            Rechazar daño
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+              </details>
+              <details open>
+                <summary>Inventario y ventas del turno</summary>
+                {openings.map((item) => (
+                  <div className="list-row" key={item.id}>
+                    <span>
+                      {item.kind} · {item.article} · {date(item.openedAt)}
+                    </span>
+                    {!archived && shift.closingReview?.status !== 'approved' && (
+                      <div className="button-row">
+                        <button
+                          className="button small secondary"
+                          onClick={() =>
+                            requestAction(
+                              'Cambiar hora de apertura',
+                              'correct_opening',
+                              [
+                                {
+                                  name: 'openedAt',
+                                  label: 'Fecha y hora de apertura (Colombia)',
+                                  type: 'datetime-local',
+                                  required: true,
+                                  value: localDateTime(new Date(item.openedAt)),
+                                },
+                                note,
+                              ],
+                              { openingId: item.id },
+                            )
+                          }
+                        >
+                          Cambiar hora
+                        </button>
+                        <button
+                          className="button small secondary"
+                          onClick={() =>
+                            requestAction('Quitar apertura', 'correct_opening', [note], {
+                              openingId: item.id,
+                              remove: true,
+                            })
+                          }
+                        >
+                          Quitar
+                        </button>
                       </div>
                     )}
-                    {openingCount && (
+                  </div>
+                ))}
+
+                {orderedFlavors(state.flavors)
+                  .filter(
+                    (flavor) =>
+                      openings.some((item) => item.kind === 'Bolsa' && item.flavorId === flavor.id) ||
+                      sales?.ouncesByFlavor.has(flavor.id),
+                  )
+                  .map((flavor) => {
+                    const bags = openings.filter(
+                      (item) => item.kind === 'Bolsa' && item.flavorId === flavor.id,
+                    );
+                    const sold = sales?.ouncesByFlavor.get(flavor.id) ?? 0;
+                    const opened = bags.reduce(
+                      (sum, item) => sum + (item.kind === 'Bolsa' ? (item.ounces ?? 0) : 0),
+                      0,
+                    );
+                    return (
+                      <p key={flavor.id}>
+                        {flavor.name} · {bags.length} bolsas abiertas · {digits.format(sold)} oz vendidas.
+                        {bags.length >= 2 && opened > 0 && sold < opened / 2 && (
+                          <strong> Conviene pedir un arqueo de este sabor.</strong>
+                        )}
+                      </p>
+                    );
+                  })}
+                {state.sizes
+                  .filter(
+                    (size) =>
+                      openings.some((item) => item.kind === 'Paquete' && item.sizeId === size.id) ||
+                      sales?.cupsBySize.has(size.id),
+                  )
+                  .map((size) => (
+                    <p key={size.id}>
+                      {size.name} ·{' '}
+                      {openings.filter((item) => item.kind === 'Paquete' && item.sizeId === size.id).length}{' '}
+                      paquetes abiertos · {sales?.cupsBySize.get(size.id) ?? 0} vasos vendidos.
+                    </p>
+                  ))}
+              </details>
+              {!archived && (
+                <div className="button-row">
+                  {openingReview === 'review' && (
+                    <>
+                      {priorCount && (
+                        <div className="notice info">
+                          <strong>Diferencias del cierre anterior</strong>
+                          <p>
+                            {Object.entries(priorCount.differences ?? {})
+                              .filter(([key, amount]) => !isLegacyCoolerArticle(key) && amount !== 0)
+                              .map(
+                                ([key, amount]) =>
+                                  `${priorCount.itemLabels?.[key] ?? key} ${amount > 0 ? '+' : ''}${amount}`,
+                              )
+                              .join(' · ') || 'Inventario sin diferencias'}
+                          </p>
+                          {!!priorCount.difference && <p>Efectivo · {money(priorCount.difference)}</p>}
+                        </div>
+                      )}
+                      {openingCount && (
+                        <button
+                          className="button primary"
+                          onClick={() =>
+                            setAction({
+                              title: 'Aprobar conteo de apertura',
+                              command: 'review_blind_opening',
+                              fields: [
+                                ...Object.entries(openingCount.items)
+                                  .filter(([key]) => !isLegacyCoolerArticle(key))
+                                  .map(([key, value]): Field => ({
+                                    name: key,
+                                    label: openingCount.itemLabels?.[key] ?? key,
+                                    type: 'number',
+                                    value: updatedOpeningItems.has(key) ? undefined : value,
+                                    hint: updatedOpeningItems.has(key)
+                                      ? `Inventario aprobado: ${liveBalances[key] ?? 0}`
+                                      : undefined,
+                                    min: 0,
+                                    max: 1000000,
+                                    step: '1',
+                                    required: !updatedOpeningItems.has(key),
+                                  })),
+                                { ...note, required: false },
+                              ],
+                              payload: { shiftId: shift.id, action: 'approve_count' },
+                            })
+                          }
+                        >
+                          Aprobar apertura y ajustar inventario
+                        </button>
+                      )}
                       <button
-                        className="button primary"
+                        className="button secondary"
+                        disabled={!!shift.reconcileClosingId}
+                        onClick={() =>
+                          void run('review_blind_opening', { shiftId: shift.id, action: 'authorize' })
+                        }
+                      >
+                        Autorizar ventas · No mueve inventario ni plata
+                      </button>
+                      <button
+                        className="button secondary"
+                        disabled={!!shift.reconcileClosingId}
                         onClick={() =>
                           setAction({
-                            title: 'Aprobar conteo de apertura',
+                            title: 'Pedir arqueo antes de vender',
                             command: 'review_blind_opening',
                             fields: [
-                              ...Object.entries(openingCount.items)
-                                .filter(([key]) => !isLegacyCoolerArticle(key))
-                                .map(([key, value]): Field => ({
-                                  name: key,
-                                  label: openingCount.itemLabels?.[key] ?? key,
-                                  type: 'number',
-                                  value: updatedOpeningItems.has(key) ? undefined : value,
-                                  hint: updatedOpeningItems.has(key)
-                                    ? `Inventario aprobado: ${liveBalances[key] ?? 0}`
-                                    : undefined,
-                                  min: 0,
-                                  max: 1000000,
-                                  step: '1',
-                                  required: !updatedOpeningItems.has(key),
-                                })),
-                              { ...note, required: false },
+                              { name: 'all', label: 'Arqueo completo', type: 'checkbox' },
+                              ...fieldsForAudit(),
                             ],
-                            payload: { shiftId: shift.id, action: 'approve_count' },
+                            payload: { shiftId: shift.id, action: 'request_audit' },
                           })
                         }
                       >
-                        Aprobar apertura y ajustar inventario
+                        Pedir arqueo de apertura · No mueve inventario ni plata
                       </button>
-                    )}
+                    </>
+                  )}
+                  {openingReview === 'authorized' && (
                     <button
                       className="button secondary"
-                      disabled={!!shift.reconcileClosingId}
-                      onClick={() =>
-                        void run('review_blind_opening', { shiftId: shift.id, action: 'authorize' })
-                      }
-                    >
-                      Autorizar ventas · No mueve inventario ni plata
-                    </button>
-                    <button
-                      className="button secondary"
-                      disabled={!!shift.reconcileClosingId}
                       onClick={() =>
                         setAction({
-                          title: 'Pedir arqueo antes de vender',
+                          title: 'Revisar diferencia de apertura',
                           command: 'review_blind_opening',
-                          fields: [
-                            { name: 'all', label: 'Arqueo completo', type: 'checkbox' },
-                            ...fieldsForAudit(),
-                          ],
-                          payload: { shiftId: shift.id, action: 'request_audit' },
+                          fields: [note],
+                          payload: { shiftId: shift.id, action: 'resolve' },
                         })
                       }
                     >
-                      Pedir arqueo de apertura · No mueve inventario ni plata
+                      Cerrar revisión de apertura · No mueve inventario ni plata
                     </button>
-                  </>
-                )}
-                {openingReview === 'authorized' && (
+                  )}
+                  {legacyOpeningNeedsReview(state, shift) && (
+                    <button
+                      className="button secondary"
+                      onClick={() => requestAction('Cerrar revisión de apertura', 'resolve_opening', [note])}
+                    >
+                      Cerrar revisión de apertura · No mueve inventario ni plata
+                    </button>
+                  )}
+                  <button
+                    className="button secondary"
+                    onClick={() => requestAction('Pedir explicación', 'ask_explanation', [note])}
+                  >
+                    Pedir explicación · No mueve inventario ni plata
+                  </button>
+                  <button
+                    className="button secondary"
+                    onClick={() =>
+                      requestAction('Marcar para revisar cámaras', 'camera', [
+                        {
+                          name: 'cameraAt',
+                          label: 'Fecha y hora (Colombia)',
+                          type: 'datetime-local',
+                          required: true,
+                        },
+                        note,
+                      ])
+                    }
+                  >
+                    Revisar cámaras · No mueve inventario ni plata
+                  </button>
                   <button
                     className="button secondary"
                     onClick={() =>
                       setAction({
-                        title: 'Revisar diferencia de apertura',
-                        command: 'review_blind_opening',
-                        fields: [note],
-                        payload: { shiftId: shift.id, action: 'resolve' },
+                        title: 'Pedir arqueo para el siguiente turno',
+                        command: 'start_audit',
+                        fields: [],
+                        payload: { when: 'next_opening', mode: 'full' },
                       })
                     }
                   >
-                    Cerrar revisión de apertura · No mueve inventario ni plata
+                    Pedir arqueo para el siguiente turno · No mueve inventario ni plata
                   </button>
-                )}
-                {legacyOpeningNeedsReview(state, shift) && (
-                  <button
-                    className="button secondary"
-                    onClick={() => requestAction('Cerrar revisión de apertura', 'resolve_opening', [note])}
-                  >
-                    Cerrar revisión de apertura · No mueve inventario ni plata
+                  <button className="button secondary" onClick={() => correction('open_bag')}>
+                    Agregar bolsa abierta
                   </button>
-                )}
-                <button
-                  className="button secondary"
-                  onClick={() => requestAction('Pedir explicación', 'ask_explanation', [note])}
-                >
-                  Pedir explicación · No mueve inventario ni plata
-                </button>
-                <button
-                  className="button secondary"
-                  onClick={() =>
-                    requestAction('Marcar para revisar cámaras', 'camera', [
-                      {
-                        name: 'cameraAt',
-                        label: 'Fecha y hora (Colombia)',
-                        type: 'datetime-local',
-                        required: true,
-                      },
-                      note,
-                    ])
-                  }
-                >
-                  Revisar cámaras · No mueve inventario ni plata
-                </button>
-                <button
-                  className="button secondary"
-                  onClick={() =>
-                    setAction({
-                      title: 'Pedir arqueo para el siguiente turno',
-                      command: 'start_audit',
-                      fields: [],
-                      payload: { when: 'next_opening', mode: 'full' },
-                    })
-                  }
-                >
-                  Pedir arqueo para el siguiente turno · No mueve inventario ni plata
-                </button>
-                <button className="button secondary" onClick={() => correction('open_bag')}>
-                  Agregar bolsa abierta
-                </button>
-                <button className="button secondary" onClick={() => correction('open_package')}>
-                  Agregar paquete abierto
-                </button>
-                {canReviewPayments &&
-                  currentPayments(state.payments).some(
-                    (item) => item.shiftId === shift.id && item.amount > 0,
-                  ) && (
+                  <button className="button secondary" onClick={() => correction('open_package')}>
+                    Agregar paquete abierto
+                  </button>
+                  {canReviewPayments &&
+                    currentPayments(state.payments).some(
+                      (item) => item.shiftId === shift.id && item.amount > 0,
+                    ) && (
+                      <button
+                        className="button secondary"
+                        onClick={() =>
+                          requestAction('Corregir medio de pago', 'correct_payment', [
+                            {
+                              name: 'paymentId',
+                              label: 'Pago',
+                              type: 'select',
+                              required: true,
+                              options: currentPayments(state.payments)
+                                .filter((item) => item.shiftId === shift.id && item.amount > 0)
+                                .map((item) => ({
+                                  value: item.id,
+                                  label: `#${orderName(item.orderId)} · ${money(item.amount)} · ${paymentMethod(item) === 'cash' ? 'Efectivo' : 'Transferencia'}`,
+                                })),
+                            },
+                            {
+                              name: 'method',
+                              label: 'Medio correcto',
+                              type: 'select',
+                              required: true,
+                              options: [
+                                { value: 'cash', label: 'Efectivo' },
+                                ...locations.map((item) => ({
+                                  value: `transfer:${item.id}`,
+                                  label: item.name,
+                                })),
+                              ],
+                            },
+                            note,
+                          ])
+                        }
+                      >
+                        Corregir medio de pago · Corrige el registro de plata
+                      </button>
+                    )}
+                  {!shift.closingFlow && shift.status === 'closed' && closingNeedsReview(state, shift) && (
                     <button
-                      className="button secondary"
+                      className="button primary"
                       onClick={() =>
-                        requestAction('Corregir medio de pago', 'correct_payment', [
+                        requestAction('Cerrar diferencia', 'resolve', [
                           {
-                            name: 'paymentId',
-                            label: 'Pago',
-                            type: 'select',
-                            required: true,
-                            options: currentPayments(state.payments)
-                              .filter((item) => item.shiftId === shift.id && item.amount > 0)
-                              .map((item) => ({
-                                value: item.id,
-                                label: `#${orderName(item.orderId)} · ${money(item.amount)} · ${paymentMethod(item) === 'cash' ? 'Efectivo' : 'Transferencia'}`,
-                              })),
-                          },
-                          {
-                            name: 'method',
-                            label: 'Medio correcto',
+                            name: 'outcome',
+                            label: 'Resultado',
                             type: 'select',
                             required: true,
                             options: [
-                              { value: 'cash', label: 'Efectivo' },
-                              ...locations.map((item) => ({
-                                value: `transfer:${item.id}`,
-                                label: item.name,
-                              })),
+                              { value: 'shortage', label: 'Faltante del negocio' },
+                              { value: 'surplus', label: 'Sobrante del negocio' },
+                              { value: 'matched', label: 'Coincidió tras la corrección' },
                             ],
                           },
                           note,
                         ])
                       }
                     >
-                      Corregir medio de pago · Corrige el registro de plata
+                      Cerrar diferencia · No mueve inventario ni plata
                     </button>
                   )}
-                {!shift.closingFlow && shift.status === 'closed' && closingNeedsReview(state, shift) && (
-                  <button
-                    className="button primary"
-                    onClick={() =>
-                      requestAction('Cerrar diferencia', 'resolve', [
-                        {
-                          name: 'outcome',
-                          label: 'Resultado',
-                          type: 'select',
-                          required: true,
-                          options: [
-                            { value: 'shortage', label: 'Faltante del negocio' },
-                            { value: 'surplus', label: 'Sobrante del negocio' },
-                            { value: 'matched', label: 'Coincidió tras la corrección' },
-                          ],
-                        },
-                        note,
-                      ])
-                    }
-                  >
-                    Cerrar diferencia · No mueve inventario ni plata
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </Modal>
-      )}
+                </div>
+              )}
+            </div>
+          </Modal>
+        ))}
       {approvalCount && (
         <ClosingApprovalDialog count={approvalCount} onClose={() => setApprovalCount(null)} />
       )}

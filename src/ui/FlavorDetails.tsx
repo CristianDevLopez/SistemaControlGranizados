@@ -1,7 +1,8 @@
 import { lineFlavorIds, liquidPortions, orderedFlavors } from '../domain/flavors.ts';
 import type { Flavor, OrderLine, State } from '../domain/types.ts';
 
-export function flavorName(line: Pick<OrderLine, 'flavorId' | 'flavorIds'>, flavors: Flavor[]) {
+export function flavorName(line: Pick<OrderLine, 'flavorId' | 'flavorIds' | 'bomba'>, flavors: Flavor[]) {
+  if (line.bomba) return 'Bomba';
   return orderedFlavors(
     lineFlavorIds(line).map((id) => ({ name: flavors.find((flavor) => flavor.id === id)?.name ?? 'Sabor' })),
   )

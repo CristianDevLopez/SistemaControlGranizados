@@ -89,6 +89,54 @@ async function openSeededOrder(page: Page) {
   await page.getByRole('button', { name: 'Ver pedidos abiertos', exact: true }).click();
   await page.locator('.open-order-picker').getByRole('button', { name: /#/ }).click();
 }
+test('conserva el nombre editado al agregar, quitar productos y adiciones y sincronizar', async ({
+  page,
+  context,
+}) => {
+  await enter(page);
+  await nav(page, 'Mostrador');
+  const name = page.getByLabel('Nombre del pedido (opcional)');
+  await name.fill('María');
+  await page.locator('.flavor-card').first().click();
+  await expect(page.getByRole('heading', { name: / · María$/ })).toBeVisible();
+  await name.fill('María González');
+  await page.locator('.flavor-card').first().click();
+  await expect(page.getByRole('heading', { name: / · María González$/ })).toBeVisible();
+  await page.reload();
+  await expect(name).toHaveValue('María González');
+  await name.fill('María Pérez');
+  await page.getByRole('button', { name: 'Disminuir cantidad', exact: true }).click();
+  await expect(page.getByRole('heading', { name: / · María Pérez$/ })).toBeVisible();
+  await page.reload();
+  await expect(name).toHaveValue('María Pérez');
+  await page.locator('.candy-additions summary').click();
+  await name.fill('María López');
+  await page.getByRole('button', { name: 'Agregar Cintas', exact: true }).click();
+  await expect(page.getByRole('heading', { name: / · María López$/ })).toBeVisible();
+  await page.reload();
+  await expect(name).toHaveValue('María López');
+  await context.setOffline(true);
+  await name.fill('María sin conexión');
+  await page.getByRole('button', { name: 'Aumentar cantidad', exact: true }).click();
+  await expect(page.getByRole('heading', { name: / · María sin conexión$/ })).toBeVisible();
+  await context.setOffline(false);
+  await expect(page.getByRole('button', { name: 'Estado de sincronización' })).toContainText('Sincronizado');
+  await page.reload();
+  await expect(name).toHaveValue('María sin conexión');
+});
+
+test('el administrador consulta exportación y avisos desde Configuración', async ({ page }) => {
+  await enter(page, true);
+  await nav(page, 'Configuración');
+  await page.getByRole('button', { name: 'Exportación, avisos y auditoría', exact: true }).click();
+  await page.locator('summary').filter({ hasText: 'Exportación, avisos y auditoría' }).click();
+  await expect(page.getByRole('heading', { name: 'Avisos a administradores' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Rastro de auditoría' })).toBeVisible();
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Exportar información', exact: true }).click();
+  expect((await download).suggestedFilename()).toMatch(/^dexter-exportacion-.*\.zip$/);
+});
+
 test('el administrador ve primero las diferencias de inventario y puede desplegar el historial', async ({
   page,
   request,

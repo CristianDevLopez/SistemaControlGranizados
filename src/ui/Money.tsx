@@ -274,6 +274,11 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                             Recepción corregida · Antes {money(transfer.receiptCorrection.previousAmount)}
                           </small>
                         )}
+                        {transfer.receivedAmount !== undefined && !transfer.blindReceipt && (
+                          <small>
+                            Enviado: {money(transfer.amount)} · Recibido: {money(transfer.receivedAmount)}
+                          </small>
+                        )}
                       </td>
                       <td>
                         {transfer.status === 'requested' && <small>Solicitó: {byName(transfer.by)}</small>}
@@ -378,7 +383,7 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                               Registrar ejecución
                             </button>
                           )}
-                          {transfer.status === 'in_transit' &&
+                          {['in_transit', 'disputed'].includes(transfer.status) &&
                             transfer.recipientId === actor.id &&
                             transfer.by !== actor.id &&
                             transfer.executedBy !== actor.id && (
@@ -387,7 +392,10 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                                 disabled={!app.online}
                                 onClick={() =>
                                   setForm({
-                                    title: 'Confirmar recepción',
+                                    title:
+                                      transfer.status === 'disputed'
+                                        ? 'Corregir recepción en disputa'
+                                        : 'Confirmar recepción',
                                     command: 'confirm_transfer',
                                     extra: { transferId: transfer.id },
                                     fields: [
@@ -397,18 +405,35 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                                         type: 'money',
                                         min: 0,
                                         required: true,
+                                        value:
+                                          transfer.status === 'disputed'
+                                            ? transfer.receivedAmount
+                                            : undefined,
                                       },
+                                      ...(transfer.status === 'disputed'
+                                        ? [
+                                            {
+                                              name: 'notes',
+                                              label: 'Motivo de la corrección',
+                                              type: 'textarea' as const,
+                                              required: true,
+                                            },
+                                          ]
+                                        : []),
                                     ],
                                   })
                                 }
                               >
                                 <ArrowDownLeft size={15} />
-                                Confirmar
+                                {transfer.status === 'disputed' ? 'Corregir recepción' : 'Confirmar'}
                               </button>
                             )}
                           {transfer.type === 'transfer' &&
                             (transfer.status === 'requested' ||
-                              (transfer.status === 'in_transit' &&
+                              (['in_transit', 'disputed'].includes(transfer.status) &&
+                                transfer.recipientId === actor.id &&
+                                transfer.by !== actor.id &&
+                                transfer.executedBy !== actor.id &&
                                 (!transfer.from.startsWith('cash:') ||
                                   transfer.from === `cash:${active?.id}`))) && (
                               <button
@@ -416,11 +441,14 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                                 disabled={!app.online}
                                 onClick={() =>
                                   setForm({
-                                    title: 'Anular traslado',
+                                    title:
+                                      transfer.status === 'requested'
+                                        ? 'Anular traslado'
+                                        : 'Declinar envío y devolver saldo',
                                     command: 'cancel_transfer',
                                     extra: { transferId: transfer.id },
                                     fields: [
-                                      ...(transfer.status === 'in_transit'
+                                      ...(transfer.status !== 'requested'
                                         ? [
                                             {
                                               name: 'cashRestored',
@@ -441,7 +469,7 @@ export function Money({ transferId }: { transferId?: string } = {}) {
                                   })
                                 }
                               >
-                                Anular
+                                {transfer.status === 'requested' ? 'Anular' : 'Declinar envío'}
                               </button>
                             )}
                         </div>

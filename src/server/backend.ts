@@ -35,6 +35,7 @@ export interface Backend {
   download(path: string): Promise<Blob>;
   signedDownload(path: string): Promise<string>;
   finalizePhoto(from: string, to: string): Promise<void>;
+  deletePhoto(path: string): Promise<void>;
   securityAudit(actorId: string, deviceId: string, action: string, detail: string): Promise<void>;
 }
 function checked<T>(result: { data: T; error: any }): NonNullable<T> {
@@ -250,6 +251,9 @@ export class SupabaseBackend implements Backend {
   async finalizePhoto(from: string, to: string) {
     checked(await this.client.storage.from('evidence').copy(from, to));
     await this.client.storage.from('evidence').remove([from]);
+  }
+  async deletePhoto(path: string) {
+    checked(await this.client.storage.from('evidence').remove([path]));
   }
   async securityAudit(actorId: string, deviceId: string, action: string, detail: string) {
     checked(

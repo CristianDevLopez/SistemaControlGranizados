@@ -92,6 +92,15 @@ export function Today({ pendingRequests, onRequests }: { pendingRequests: number
 
   return (
     <div className="page-stack">
+      {state.notifications.some((n) => n.status === 'failed') && (
+        <p className="notice danger" role="alert">
+          {state.notifications.filter((n) => n.status === 'failed').length} avisos de Telegram no se pudieron
+          enviar.{' '}
+          <button className="text-button" onClick={onRequests}>
+            Ver
+          </button>
+        </p>
+      )}
       <Panel
         title="Turno de hoy"
         action={

@@ -72,6 +72,19 @@ function isThreeForTwo(p: Promotion): boolean {
 
 export function eligible(p: Promotion, u: OrderLine, state: State): boolean {
   const flavors = lineFlavorIds(u);
+  if (p.versus) {
+    const matched = flavors.filter((id) => id === p.versus!.a || id === p.versus!.b).length;
+    if (
+      u.sizeId === COOLER_SIZE_ID ||
+      flavors.length > 3 ||
+      !(
+        (flavors.includes(p.versus.a) && 1 / flavors.length >= 0.5) ||
+        (flavors.includes(p.versus.b) && 1 / flavors.length >= 0.5) ||
+        matched / flavors.length >= 2 / 3
+      )
+    )
+      return false;
+  }
   return (
     (!isThreeForTwo(p) ||
       state.sizes.some(
@@ -80,7 +93,7 @@ export function eligible(p: Promotion, u: OrderLine, state: State): boolean {
     flavors.every((id) => state.flavors.some((flavor) => flavor.id === id)) &&
     (!p.sizeIds.length || p.sizeIds.includes(u.sizeId)) &&
     (p.allowMixed !== false || flavors.length === 1) &&
-    (!p.flavorIds.length || flavors.every((id) => p.flavorIds.includes(id))) &&
+    (p.versus || !p.flavorIds.length || flavors.every((id) => p.flavorIds.includes(id))) &&
     (p.alcohol === 'all' || (p.alcohol === 'yes') === hasAlcohol(u, state.flavors))
   );
 }
@@ -111,6 +124,13 @@ export function quoteOrder(
   const normalized = [...new Set(codes.map((x) => x.trim().toUpperCase()).filter(Boolean))];
   if (normalized.length > 10) throw new DomainError('Máximo diez cupones por pedido.');
   const selectedIds = [...new Set(typeof selected === 'string' ? [selected] : (selected ?? []))];
+  if (!selectedIds.length && state.settings[0].v4Enabled && !normalized.length) {
+    const automatic = checkoutPromotions(state, original, at, online).filter((p) => p.checkoutText === '');
+    if (automatic.length)
+      return automatic
+        .map((p) => quoteOrder(state, original, at, online, codes, additions, [p.id]))
+        .reduce((a, b) => (b.total < a.total ? b : a));
+  }
   const available = selectedIds.length ? checkoutPromotions(state, original, at, online) : [];
   const chosen = selectedIds.map((id) => available.find((promotion) => promotion.id === id));
   if (chosen.some((promotion) => !promotion))

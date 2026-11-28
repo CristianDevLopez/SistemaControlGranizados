@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { V4Reception } from './V4Reception.tsx';
+import { expenseCategories, logistics } from '../domain/v4-catalog.ts';
 import { Plus, Truck, ReceiptText, Check, Trash2 } from 'lucide-react';
 import { useApp } from '../lib/store.tsx';
 import { articles } from '../domain/engine.ts';
@@ -29,6 +31,7 @@ export function Purchasing() {
     [shipment, setShipment] = useState(false),
     [receive, setReceive] = useState<Shipment | null>(null),
     [error, setError] = useState('');
+  const [category, setCategory] = useState('');
   const locationOptions = state.locations
     .filter((x) => x.active)
     .map((x) => ({ value: x.id, label: x.name }));
@@ -100,6 +103,37 @@ export function Purchasing() {
       setError((e as Error).message);
     }
   };
+  if (state.settings[0].v4Enabled) {
+    const field = expenseFields.find((f) => f.name === 'category')!;
+    field.options = expenseCategories(state)
+      .filter((c) => admin || !c.adminOnly)
+      .map((c) => ({ value: c.name, label: c.group + ' · ' + c.name }));
+    if (expenseCategories(state).find((c) => c.name === category)?.group === 'Logística')
+      expenseFields.push({
+        name: 'shipmentIds',
+        label: 'Envíos (opcional)',
+        type: 'multiselect',
+        options: state.shipments.map((s) => ({ value: s.id, label: date(s.at) + ' · ' + s.from })),
+      });
+    if (expenseCategories(state).find((c) => c.name === category)?.group === 'Otros')
+      expenseFields.push(
+        {
+          name: 'nature',
+          label: 'Costo o gasto',
+          type: 'select',
+          required: true,
+          options: ['Costo', 'Gasto'].map((value) => ({ value, label: value })),
+        },
+        {
+          name: 'behavior',
+          label: 'Fijo o variable',
+          type: 'select',
+          required: true,
+          options: ['Fijo', 'Variable'].map((value) => ({ value, label: value })),
+        },
+      );
+  }
+  if (state.settings[0].v4Enabled && !admin) return <V4Reception />;
   return (
     <div className="page-stack">
       <div className="page-toolbar">
@@ -137,7 +171,13 @@ export function Purchasing() {
           {error}
         </div>
       )}
-      {hasPermission(actor, 'inventory') && (
+      {state.settings[0].v4Enabled && (
+        <>
+          <V4Reception />
+          <V4Logistics />
+        </>
+      )}
+      {hasPermission(actor, 'inventory') && !state.settings[0].v4Enabled && (
         <>
           <Panel title={admin ? 'Mercancía en camino y recibida' : 'Mercancía por recibir'}>
             {state.shipments.length ? (
@@ -334,7 +374,10 @@ export function Purchasing() {
           <FieldsForm
             fields={expenseFields}
             onCancel={() => setExpense(false)}
-            onValuesChange={(values) => setExpenseSource(values.source)}
+            onValuesChange={(values) => {
+              setExpenseSource(values.source);
+              setCategory(values.category);
+            }}
             onSubmit={async ({ source, shiftId, locationId, ...values }) => {
               await app.run('expense', {
                 ...values,
@@ -350,6 +393,137 @@ export function Purchasing() {
       {shipment && <ShipmentDialog onClose={() => setShipment(false)} />}
       {receive && <ReceiveDialog shipment={receive} onClose={() => setReceive(null)} />}
     </div>
+  );
+}
+
+function V4Logistics() {
+  const app = useApp(),
+    { state } = app.data!,
+    allocation = logistics(state);
+  const [link, setLink] = useState<string>();
+  const [month, setMonth] = useState(
+    new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'America/Bogota',
+      year: 'numeric',
+      month: '2-digit',
+    }).format(new Date()),
+  );
+  const rows = state.shipments
+    .filter((s) => s.at.slice(0, 7) === month)
+    .map((s) => {
+      const sent = s.items.reduce((n, i) => n + i.quantity * i.unitCost, 0);
+      const received = state.receipts
+        .filter((r) => r.shipmentId === s.id)
+        .reduce(
+          (n, r) =>
+            n +
+            Object.entries(r.items).reduce(
+              (sum, [article, q]) =>
+                sum +
+                (q - (r.damaged[article] ?? 0) + (r.reviewed?.[article]?.good ?? 0)) *
+                  (s.items.find((i) => i.article === article)?.unitCost ?? 0),
+              0,
+            ),
+          0,
+        );
+      const losses = state.requests
+        .filter(
+          (r) =>
+            r.merma?.type === 'Transporte' &&
+            state.receipts.find((receipt) => receipt.id === r.merma!.receiptId)?.shipmentId === s.id,
+        )
+        .reduce((n, r) => n + r.merma!.quantity * r.merma!.unitCost, 0);
+      return {
+        id: s.id,
+        from: s.from,
+        sent,
+        received,
+        losses,
+        freight: allocation.allocations.get(s.id) ?? 0,
+      };
+    });
+  const received = rows.reduce((n, r) => n + r.received, 0),
+    freight = rows.reduce((n, r) => n + r.freight, 0);
+  return (
+    <Panel title="Logística por envío">
+      <label className="field">
+        Mes
+        <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+      </label>
+      <p>
+        Total logística {money(freight)} · {received ? ((100 * freight) / received).toFixed(1) : '0'} % sobre
+        mercancía recibida · Mermas {money(rows.reduce((n, r) => n + r.losses, 0))}
+      </p>
+      {allocation.undistributed > 0 && (
+        <p className="notice warning">
+          {money(allocation.undistributed)} de logística pendiente de distribución hasta recibir mercancía.
+        </p>
+      )}
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Envío</th>
+              <th>Mercancía enviada</th>
+              <th>Recibida</th>
+              <th>Merma</th>
+              <th>Logística</th>
+              <th>% recibido</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <th>
+                  {r.from} · {r.id.slice(0, 8)}
+                </th>
+                <td>{money(r.sent)}</td>
+                <td>{money(r.received)}</td>
+                <td>{money(r.losses)}</td>
+                <td>{money(r.freight)}</td>
+                <td>{r.received ? ((100 * r.freight) / r.received).toFixed(1) : '—'} %</td>
+                <td>{money(r.received + r.freight + r.losses)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {state.expenses
+        .filter((e) => e.classification?.group === 'Logística')
+        .map((e) => (
+          <div className="list-row" key={e.id}>
+            <span>
+              {e.category} · {money(e.amount)}
+            </span>
+            <button className="text-button" onClick={() => setLink(e.id)}>
+              Vincular envíos
+            </button>
+          </div>
+        ))}
+      {link && (
+        <Modal title="Vincular logística a envíos" onClose={() => setLink(undefined)}>
+          <FieldsForm
+            fields={[
+              {
+                name: 'shipmentIds',
+                label: 'Envíos',
+                type: 'multiselect',
+                value: state.expenses.find((e) => e.id === link)?.shipmentIds ?? [],
+                options: state.shipments.map((s) => ({
+                  value: s.id,
+                  label: date(s.at) + ' · ' + s.from + ' · ' + s.id.slice(0, 8),
+                })),
+              },
+            ]}
+            onSubmit={async (v) => {
+              await app.run('v4', { action: 'link_logistics', expenseId: link, ...v });
+              setLink(undefined);
+            }}
+          />
+        </Modal>
+      )}
+    </Panel>
   );
 }
 function ShipmentDialog({ onClose }: { onClose: () => void }) {

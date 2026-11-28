@@ -32,6 +32,7 @@ export function reviewCounts(state: State, shift: Shift, archived = false) {
 }
 
 export function reviewIsPending(state: State, shift: Shift) {
+  if (shift.v4Reviews?.at(-1)?.status === 'pending') return true;
   if (shift.closingArchive || rehearsalShift(state, shift)) return false;
   if (shift.closingFlow && shift.closingReview?.status !== 'approved') return true;
   if (['review', 'audit', 'authorized'].includes(shift.blindOpening?.status ?? '')) return true;

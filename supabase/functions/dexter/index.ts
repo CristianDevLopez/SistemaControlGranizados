@@ -1,6 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { SupabaseBackend } from '../../../src/server/backend.ts';
 import { createGateway, dispatchNotifications } from '../../../src/server/gateway.ts';
+import { telegramTick } from '../../../src/server/telegram.ts';
+import { constantEqual } from '../../../src/server/crypto.ts';
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void };
 const env = Deno.env.toObject();
 const authOptions = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } };
@@ -14,6 +16,17 @@ const origins = (env.ALLOWED_ORIGINS ?? `${appUrl},http://localhost:5173,http://
   .map((x) => x.trim());
 const gateway = createGateway({ backend, allowedOrigins: origins, appUrl });
 Deno.serve(async (req) => {
+  if (new URL(req.url).pathname.endsWith('/telegram/tick')) {
+    const token = req.headers.get('x-dexter-scheduler') ?? '';
+    if (
+      req.method !== 'POST' ||
+      !env.DEXTER_SCHEDULER_TOKEN ||
+      !constantEqual(token, env.DEXTER_SCHEDULER_TOKEN)
+    )
+      return Response.json({ error: 'No autorizado.' }, { status: 401 });
+    await telegramTick(backend, env, appUrl);
+    return Response.json({ ok: true });
+  }
   const response = await gateway(req);
   if (
     req.method === 'POST' &&

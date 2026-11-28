@@ -47,6 +47,38 @@ createServer(async (req, res) => {
       await backend.db.close();
       backend = await PgBackend.create();
       const options = body.length ? JSON.parse(body.toString()) : {};
+      if (options.v4 === true)
+        await backend.db.query('update public.settings set data=data||$1', [
+          { v4Enabled: true, v4: { lossDays: 30, candyTolerance: 0.1, lowStockDays: 3 } },
+        ]);
+      if (options.v4ClosingHint === true) {
+        const size = (await backend.load()).state.sizes[0];
+        await backend.db.exec(
+          "update public.shifts set data=jsonb_set(data,'{closingCountMode}','\"full\"')",
+        );
+        for (const [article, quantity] of [
+          ['cup:' + size.id, 100],
+          ['package:' + size.id, 2],
+        ] as const) {
+          const id = crypto.randomUUID();
+          await backend.db.query(
+            'insert into public.stock(id,branch_id,data)select $1,private.legacy_branch(),$2',
+            [
+              id,
+              {
+                id,
+                article,
+                quantity,
+                reason: 'initial',
+                referenceId: id,
+                at: new Date().toISOString(),
+                by: admin.id,
+                eventId: id,
+              },
+            ],
+          );
+        }
+      }
       if (options.emptyCash === true) await backend.db.exec('delete from public.shifts');
       res.writeHead(200, cors);
       res.end('ok');

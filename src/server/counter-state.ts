@@ -64,12 +64,13 @@ export type CounterScope = NonNullable<ReturnType<typeof counterScope>>;
 
 export function counterNeedsFullState(state: StateChanges, scope: CounterScope) {
   return (
-    scope.checkout &&
-    state.orders?.some(
-      (order) =>
-        order.id === scope.orderId &&
-        (order.paymentCredit !== undefined || order.replacesId || order.carriedCouponFromId),
-    )
+    (scope.checkout && state.settings?.[0]?.v4Enabled === true) ||
+    (scope.checkout &&
+      state.orders?.some(
+        (order) =>
+          order.id === scope.orderId &&
+          (order.paymentCredit !== undefined || order.replacesId || order.carriedCouponFromId),
+      ))
   );
 }
 
