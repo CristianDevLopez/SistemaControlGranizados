@@ -37,6 +37,7 @@ function check(condition: unknown, message: string, code = 'VALIDATION'): assert
 }
 
 function requiresChangeApproval(state: State, { type, payload }: Command): boolean {
+  if (state.settings[0].v4Enabled && type === 'save_promotion') return false;
   if (payload.reviewClosing === true) {
     const shift = state.shifts.find(
       (item) =>

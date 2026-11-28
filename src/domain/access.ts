@@ -41,7 +41,16 @@ export function hasPermission(actor: Profile, permission: Permission): boolean {
 }
 export function canWork(actor: Profile, state: State, permission: Permission, shiftId?: string): boolean {
   const shift = operatingShift(state);
-  if (shift && shiftBlocksSales(shift)) return false;
+  if (
+    shift &&
+    shiftBlocksSales(shift) &&
+    !(
+      state.settings[0].v4Enabled &&
+      (shift.blindClosing || shift.v4ClosingStarted) &&
+      ['inventory', 'expenses'].includes(permission)
+    )
+  )
+    return false;
   return (
     hasPermission(actor, permission) &&
     (actor.role === 'admin' || (!!shift && (!shiftId || shift.id === shiftId)))
@@ -72,6 +81,7 @@ export function commandPermission(type: CommandType): Permission | undefined {
 export function shiftBlocksSales(shift: Shift | undefined): boolean {
   const opening = shift?.blindOpening?.status;
   return (
+    shift?.v4ClosingStarted === true ||
     opening === 'pending' ||
     opening === 'recount' ||
     opening === 'review' ||

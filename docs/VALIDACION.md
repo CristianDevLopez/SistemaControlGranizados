@@ -1,5 +1,21 @@
 # Validación de Dexter’s V1
 
+## Dexter v4: 28 de noviembre de 2026
+
+- `npm run check`: **349 pruebas aprobadas en 42 archivos**, con TypeScript y migraciones completas en PGlite. Incluyen recetas de 24 oz y adiciones, Bomba, apertura omitida, rechazo y nueva propuesta sin alterar movimientos posteriores, corrección de recepción por cuatro unidades, flete de $80.000 sin duplicación, recuperación parcial y sobrante ya contado, costos históricos y corte colombiano de exportación. La conversión de bolsas se prueba con saldos existentes y verifica la identidad JSON/SQL de cada movimiento.
+- Navegador: nombre del pedido sin guardado previo, reintentos, recarga offline, actualización PWA con pendientes, recepción 980/10/10, revisión de cierre, configuración, exportación y Versus de 12 a 16 comprobados en Chromium, iPhone WebKit y Android. También se comprueba la venta entre sesiones independientes de apoyo y caja. Los ensayos funcionales usan datos aislados.
+- Deno y compilación de producción/PWA correctos. Se corrigieron durante la validación el bloqueo SQL antiguo de campañas y la generación de identificadores del movimiento de conversión. El primer intento de migración fue revertido transaccionalmente antes de aplicar la versión corregida y probada. Permanecen los avisos de tamaño de bundle/importación conocidos.
+- Producción: candidato `dpl_7DHDfLsknSMxvjSgLU5dBVn3TSgu` promovido; bundle `/assets/index-Do5qa_Ej.js`, manifiesto y service worker comprobados en el dominio público. Función `dexter` **45**, 25 módulos descargados idénticos a los locales. Migración v4 aplicada y 341 avisos archivados con respaldo completo por local; se verificó identidad de 584 pedidos, 455 pagos y 15 turnos. Los saldos de 20 bolsas equivalen a 2.000 gusanitos, 960 bombones y 700 oz de minichicles.
+- Programador cada minuto activo. El mensaje técnico real al grupo `-5480458026` obtuvo `message_id=6`; la resolución editó ese mensaje y guardó `resolution_reply_id=16`, sin errores. Las pruebas SQL verifican cinco intentos, nuevo ciclo manual, concurrencia, deduplicación y versiones de resolución. No se cerró un turno del negocio para simular una prueba.
+- Asesor de seguridad sin errores de base de datos; conserva avisos de configuración de Auth sobre contraseñas filtradas y opciones MFA. El bypass temporal de automatización de Vercel fue retirado. El cliente debe completar su ensayo operativo con el personal; ver [lista de prueba](V4-PRUEBAS-CLIENTE.md). Los costos históricos ausentes se identifican, no se presentan como costos completos.
+
+## Disputas y conteos finales: 25 de noviembre de 2026
+
+- `npm run check`: 328 pruebas aprobadas en 38 archivos, con todas las migraciones sobre PGlite. Se verifica que solo el receptor corrige o declina una disputa, que los reintentos no duplican saldos y que declinar restituye el monto completo al origen. Los conteos finales 0, 12 y 25 sustituyen el conteo del cajero y dejan el inventario en ese total, conservando el original. Las propuestas de inventario fijan saldos finales, incluido cero, tras aprobación.
+- 21 recorridos Playwright aprobados en Chromium, iPhone WebKit y Android: corrección y devolución de disputas, propuesta de saldo final y aprobación del cuadre, recuperación del timeout sin duplicados, cobros entre dos equipos y actualización PWA con operaciones pendientes.
+- Compilación de producción/PWA, comprobación Deno, Prettier y `git diff --check` correctos. Permanecen los avisos conocidos de tamaño de bundles e importaciones dinámicas también estáticas.
+- Migración `20261125211500_transfer_dispute_resolution` aplicada en producción; RPC con `SECURITY INVOKER`, ejecución exclusiva de servicio y validación del receptor comprobadas mediante SQL. Función `dexter` versión 40 activa; el motor descargado coincide por SHA-256 con el probado. Candidato promovido y dominio público verificado con el bundle `/assets/index-Bc6JKT4T.js`, PWA correcta, salud HTTP 200, CORS y snapshot anónimo rechazado. Despliegue anterior: `dpl_7DFoysYBmZFr4KzagLfM6LAXx2Bo`; copia de su función en `.local/release-disputas-backup`.
+
 ## Revisión de cuadre: 14 de noviembre de 2026
 
 - **254 pruebas aprobadas** en 27 archivos con `npm run check`, incluidas las migraciones completas sobre PGlite aislado. Se verifican comparación desactualizada, aprobación obligatoria, corrección de efectivo/base/cuentas/vasos, conservación de originales, autorización administrativa y MFA, permisos SQL de servicio, reintentos sin duplicados, ajuste tardío de cierres anteriores y mermas/recetas ya corregidas.
@@ -132,3 +148,15 @@ Proyecto: `nglfyhcrpxuuqqnaeevf`, Dexter's Granizados, CristianDevLopez's Org.
 6. Restaurar el respaldo externo en un proyecto Supabase separado y verificar Auth, MFA, saldos, permisos y fotografías antes de producción.
 
 El respaldo S3 y los avisos de Telegram no se consideran activos por existir su código o configuración. Vercel sí está publicado y fue comprobado por HTTPS.
+
+## Avance v4 del 28 de noviembre de 2026
+
+- `npm run check`: 39 archivos, 330 pruebas aprobadas.
+- `npm run build`: compilación de producción correcta.
+- Nombre editado al cambiar productos y adiciones, recarga y sincronización offline: aprobado en Chromium, Safari móvil y Android.
+- Actualización de la PWA con operaciones pendientes: aprobada en los tres proyectos de navegador.
+- Exportación, avisos y auditoría desde Configuración, incluida descarga del ZIP: aprobado en los tres proyectos.
+- Regresiones de conteo final, cierres del día colombiano y gasto durante el cierre: aprobadas en Chromium.
+- Pruebas específicas del primer aviso de cierre y de eliminación de credenciales en errores de Telegram: aprobadas.
+- Candidato y producción verificaron el bundle `/assets/index-Dc-fHs6D.js`, manifiesto, service worker, salud, CORS y rechazo de lectura anónima. El motor y gateway descargados del servidor coinciden byte por byte con las fuentes locales.
+- El alcance pendiente de la v4 está registrado en OPERACION.md. La entrega efectiva de un cierre nuevo al grupo de Telegram sigue pendiente de configuración y validación integral.

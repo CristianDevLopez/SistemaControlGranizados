@@ -1,3 +1,4 @@
+import { promotionMessage, verificationText } from '../domain/v4-catalog.ts';
 import { orderedFlavors } from '../domain/flavors.ts';
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
@@ -39,7 +40,9 @@ export function Promotions() {
   const show = state.coupons.find((coupon) => coupon.id === showId);
   const promotions = state.promotions.filter((promotion) => !promotion.courtesyOnly);
   const now = new Date().toISOString();
-  const current = promotions.filter((item) => item.active && item.startsAt <= now && now < item.endsAt);
+  const current = promotions.filter(
+    (item) => item.delivery === 'schedule' && item.active && item.startsAt <= now && now < item.endsAt,
+  );
   const upcoming = promotions.filter((item) => item.active && now < item.startsAt);
   const history = promotions.filter((item) => !item.active || item.endsAt <= now);
   const cards = (items: Promotion[]) => (
@@ -61,6 +64,34 @@ export function Promotions() {
             </Badge>
           </div>
           <h3>{p.name}</h3>
+          {p.versus && (
+            <p>
+              {[p.versus.a, p.versus.b]
+                .map(
+                  (id) =>
+                    (state.flavors.find((f) => f.id === id)?.name ?? 'Sabor') +
+                    ': ' +
+                    state.orders
+                      .filter((o) => o.status === 'paid')
+                      .reduce(
+                        (n, o) =>
+                          n +
+                          o.lines
+                            .filter((l) => (l.flavorIds ?? [l.flavorId]).includes(id))
+                            .reduce(
+                              (sum, l) =>
+                                sum +
+                                (l.appliedRules ?? [])
+                                  .filter((r) => r.promotion.id === p.id)
+                                  .reduce((count, r) => count + r.quantity, 0),
+                              0,
+                            ),
+                        0,
+                      ),
+                )
+                .join(' · ')}
+            </p>
+          )}
           <strong className="promo-effect">{effect(p)}</strong>
           <p>
             {p.delivery === 'coupon'
@@ -91,7 +122,13 @@ export function Promotions() {
               }}
             >
               <Power size={15} />
-              {p.active ? 'Proponer desactivación' : 'Proponer activación'}
+              {state.settings[0].v4Enabled
+                ? p.active
+                  ? 'Desactivar'
+                  : 'Activar'
+                : p.active
+                  ? 'Proponer desactivación'
+                  : 'Proponer activación'}
             </button>
           </div>
         </Panel>
@@ -120,6 +157,7 @@ export function Promotions() {
           </button>
         </div>
       </div>
+      <h3>Promociones para activar</h3>
       {current.length ? (
         cards(current)
       ) : (
@@ -409,6 +447,7 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
     { state } = app.data!,
     [effect, setEffect] = useState<PromoEffect>(promotion?.effect ?? 'fixed'),
     [delivery, setDelivery] = useState(promotion?.delivery ?? 'schedule');
+  const [versus, setVersus] = useState(!!promotion?.versus);
   const [limited, setLimited] = useState(
     promotion?.limitedSchedule ??
       (!!promotion &&
@@ -416,6 +455,40 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
   );
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const fields: Field[] = [
+    ...(versus
+      ? (['a', 'b'] as const).map((key) => ({
+          name: 'versus_' + key,
+          label: 'Sabor ' + key.toUpperCase(),
+          type: 'select' as const,
+          required: true,
+          value: promotion?.versus?.[key],
+          options: state.flavors.filter((f) => f.active).map((f) => ({ value: f.id, label: f.name })),
+        }))
+      : []),
+    {
+      name: 'checkoutText',
+      label: 'Verificación en caja (vacío: aplicación automática)',
+      type: 'textarea',
+      value: promotion?.checkoutText ?? verificationText,
+    },
+    {
+      name: 'shareText',
+      label: 'Mensaje para compartir',
+      type: 'textarea',
+      value: promotion?.shareText ?? '',
+    },
+    {
+      name: 'alcohol',
+      label: 'Tipo de sabor',
+      type: 'select',
+      value: 'all',
+      options: [
+        { value: 'all', label: 'Con y sin licor' },
+        { value: 'yes', label: 'Con licor' },
+        { value: 'no', label: 'Sin licor' },
+      ],
+    },
+    { name: 'maxRedemptions', label: 'Cupo máximo (vacío: sin límite)', type: 'number', min: 1 },
     {
       name: 'name',
       label: 'Nombre de la promoción',
@@ -449,34 +522,6 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
           },
         ] satisfies Field[])
       : []),
-    ...(delivery === 'schedule'
-      ? [
-          {
-            name: 'checkoutText',
-            label: 'Texto de la casilla en el cobro',
-            type: 'text' as const,
-            required: true,
-          },
-        ]
-      : []),
-    {
-      name: 'alcohol',
-      label: 'Tipo de sabor',
-      type: 'select',
-      value: 'all',
-      options: [
-        { value: 'all', label: 'Con y sin licor' },
-        { value: 'yes', label: 'Con licor' },
-        { value: 'no', label: 'Sin licor' },
-      ],
-    },
-    {
-      name: 'maxRedemptions',
-      label: 'Límite global de beneficios (opcional)',
-      type: 'number',
-      min: 1,
-      hint: 'Si tiene límite global, su aplicación requiere conexión.',
-    },
     ...(effect === 'fixed'
       ? [{ name: 'fixedPrice', label: 'Precio promocional', type: 'money' as const, required: true, min: 1 }]
       : effect === 'upgrade'
@@ -550,6 +595,17 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
     : {};
   return (
     <Modal title={promotion ? 'Editar promoción' : 'Crear promoción'} onClose={onClose}>
+      <label className="check-inline">
+        <input
+          type="checkbox"
+          checked={versus}
+          onChange={(e) => {
+            setVersus(e.target.checked);
+            if (e.target.checked && !['fixed', 'upgrade'].includes(effect)) setEffect('upgrade');
+          }}
+        />{' '}
+        Campaña Versus
+      </label>
       <div className="promotion-builder">
         <label className="field">
           <span>Qué cambia</span>
@@ -595,6 +651,7 @@ function PromotionDialog({ promotion, onClose }: { promotion: Promotion | null; 
             ...v,
             id: promotion?.id,
             effect,
+            versus: versus ? { a: v.versus_a, b: v.versus_b } : undefined,
             delivery,
             steps: Number(v.steps),
             limitedSchedule: limited,
@@ -624,7 +681,7 @@ function CouponDialog({ coupon, onClose }: { coupon: Coupon; onClose: () => void
   const conditions = promotion
     ? `${effect(promotion)} · Tamaños: ${promotion.sizeIds.map((id) => state.sizes.find((s) => s.id === id)?.name).join(', ') || 'todos'} · Sabores: ${promotion.flavorIds.map((id) => state.flavors.find((f) => f.id === id)?.name).join(', ') || 'todos'} · ${promotion.stackable === false ? 'No acumulable' : 'Acumulable en productos distintos'} · ${promotion.alcohol === 'all' ? 'Con o sin licor' : promotion.alcohol === 'yes' ? 'Con licor' : 'Sin licor'} · Horario ${promotion.startTime}–${promotion.endTime} Colombia · Días: ${promotion.days.length ? promotion.days.map((d) => ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][d]).join(', ') : 'todos'}`
     : '';
-  const shareText = `Dexter’s Granizados · ${name}\n${description ? `${description}\n` : ''}${conditions}\nCupón: ${coupon.code}\nVence: ${date(coupon.expiresAt)}. Un solo uso. No canjeable por dinero ni devolución de efectivo.`;
+  const shareText = promotion ? promotionMessage(promotion, coupon, state) : coupon.code;
   return (
     <Modal title={promotion?.courtesyOnly ? 'Cortesía Dexter’s' : 'Cupón Dexter’s'} onClose={onClose}>
       <div className="coupon-preview">
@@ -641,66 +698,37 @@ function CouponDialog({ coupon, onClose }: { coupon: Coupon; onClose: () => void
         <p>Válido hasta {date(coupon.expiresAt)}. Un solo uso, sujeto al beneficio indicado.</p>
         <div className="button-row">
           <button
-            className="button secondary"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(coupon.code);
-                app.toast('Código copiado.');
-              } catch {
-                app.toast('Selecciona el código para copiarlo desde tu navegador.');
-              }
-            }}
-          >
-            <Copy size={16} />
-            Copiar código
-          </button>
-          <button
             className="button primary"
             onClick={async () => {
-              const text = shareText;
               try {
-                if (navigator.share) await navigator.share({ title: 'Cupón Dexter’s', text });
+                if (navigator.share) await navigator.share({ title: 'Cupón Dexter’s', text: shareText });
                 else {
-                  await navigator.clipboard.writeText(text);
-                  app.toast('Texto del cupón copiado.');
+                  await navigator.clipboard.writeText(shareText);
+                  app.toast('Mensaje copiado.');
                 }
               } catch {}
             }}
           >
-            <Share2 size={16} />
-            Compartir código
+            <Share2 size={16} /> Compartir
           </button>
           <button
             className="button secondary"
             disabled={!qr}
             onClick={async () => {
               const blob = await (await fetch(qr)).blob();
-              const file = new File([blob], `cupon-${coupon.code}.png`, { type: 'image/png' });
-              try {
-                if (navigator.canShare?.({ files: [file] }))
-                  await navigator.share({ title: 'Cupón Dexter’s', text: shareText, files: [file] });
-                else {
-                  downloadFile(blob, file.name, 'image/png');
-                  app.toast('QR descargado para compartir junto al código y sus condiciones.');
-                }
-              } catch (e) {
-                if ((e as Error).name !== 'AbortError')
-                  app.toast('No se pudo compartir. Puedes descargar el QR.');
-              }
+              downloadFile(blob, 'cupon-' + coupon.code + '.png', 'image/png');
             }}
           >
-            <Share2 size={16} />
-            Compartir QR
+            <Download size={16} /> Descargar QR
           </button>
           <button
             className="button secondary"
             onClick={async () => {
-              const blob = await (await fetch(qr)).blob();
-              downloadFile(blob, `cupon-${coupon.code}.png`, 'image/png');
+              await navigator.clipboard.writeText(coupon.code);
+              app.toast('Código copiado.');
             }}
           >
-            <Download size={16} />
-            Descargar QR
+            <Copy size={16} /> Copiar código
           </button>
         </div>
       </div>

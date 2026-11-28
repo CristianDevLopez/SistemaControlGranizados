@@ -87,6 +87,124 @@ test.beforeEach(async ({ request }) => {
   await request.post('http://127.0.0.1:5180/reset');
 });
 
+for (const action of ['Corregir recepción', 'Declinar envío']) {
+  test(`el receptor resuelve la disputa mediante ${action}`, async ({ page, request, browser }) => {
+    const sent = await execute(
+      request,
+      'execute_transfer',
+      { to: ids.location, amount: 5000, notes: 'Disputa de prueba', evidenceId: ids.photo },
+      cashier,
+    );
+    await execute(request, 'confirm_transfer', { transferId: sent.referenceId, receivedAmount: 4000 });
+    await login(page, 'other@test.invalid');
+    await nav(page, 'Dinero');
+    await expect(page.getByRole('row').filter({ hasText: 'Disputa de prueba' })).toContainText('En disputa');
+    await expect(page.getByRole('button', { name: /Corregir recepción|Declinar envío/ })).toHaveCount(0);
+    const context = await browser.newContext({ viewport: page.viewportSize() ?? undefined });
+    try {
+      const receiver = await context.newPage();
+      await login(receiver, 'admin@test.invalid');
+      await nav(receiver, 'Dinero');
+      const row = receiver.getByRole('row').filter({ hasText: 'Disputa de prueba' });
+      await row.getByRole('button', { name: action, exact: true }).click();
+      const dialog = receiver.getByRole('dialog');
+      if (action === 'Corregir recepción') {
+        await dialog.getByLabel('Monto recibido').fill('5.000');
+        await dialog.getByLabel('Motivo de la corrección').fill('Reconteo físico');
+      } else {
+        await dialog.getByRole('checkbox').check();
+        await dialog.getByLabel('Motivo de la anulación').fill('Envío devuelto');
+      }
+      await dialog.getByRole('button', { name: 'Guardar', exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(row).toContainText(action === 'Corregir recepción' ? 'Confirmado' : 'Cancelado');
+      const { state } = await snapshot(request);
+      expect(state.transfers[0].status).toBe(action === 'Corregir recepción' ? 'confirmed' : 'cancelled');
+      if (action === 'Declinar envío') expect(state.transfers[0].executedAt).toBeUndefined();
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+test('la corrección de inventario pide el saldo definitivo y el cuadre aplica el conteo final del administrador', async ({
+  page,
+  request,
+}) => {
+  await login(page, 'admin@test.invalid');
+  await nav(page, 'Inventario');
+  await page.getByText('Saldos de inventario', { exact: true }).click();
+  await page.getByRole('button', { name: /Proponer corrección/ }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Artículo', { exact: false }).selectOption('coronita');
+  await dialog.getByLabel('Cantidad final en inventario').fill('15');
+  await dialog.getByLabel('Motivo').fill('Total físico contado');
+  await dialog.getByRole('button', { name: 'Proponer corrección', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  let { state } = await snapshot(request);
+  const proposal = state.requests.find((item: any) => item.change?.command.type === 'correct_inventory');
+  expect(proposal.change.command.payload).toMatchObject({ finalQuantity: 15 });
+  await execute(request, 'resolve_change', { requestId: proposal.id, approve: true }, other);
+
+  await execute(request, 'open_package', { quantities: { [state.sizes[0].id]: 1 } }, cashier);
+  const previewResponse = await request.post('http://127.0.0.1:5180/dexter/closing-preview', {
+    headers: { ...headers, authorization: `Bearer ${cashier.id}`, 'x-device-id': cashier.deviceId },
+    data: { shiftId: ids.shift, visible: true },
+  });
+  const preview = await previewResponse.json();
+  const article = `cup:${state.sizes[0].id}`;
+  const payload = {
+    shiftId: ids.shift,
+    kind: 'closing',
+    cash: preview.expectedCash,
+    preview,
+    items: {
+      ...Object.fromEntries(
+        Object.entries(preview.expectedItems).map(([id, value]) => [id, Math.max(0, Number(value))]),
+      ),
+      [article]: 18,
+    },
+    payments: preview.expectedPayments,
+    notes: 'Reconteo del cajero',
+  };
+  await execute(request, 'submit_blind_count', { ...payload, attempt: 1 }, cashier);
+  const counted = await execute(request, 'submit_blind_count', { ...payload, attempt: 2 }, cashier);
+  await execute(
+    request,
+    'submit_closing',
+    {
+      shiftId: ids.shift,
+      countId: counted.referenceId,
+      retained: 20000,
+      sent: 0,
+      verified: true,
+      cashTotal: 0,
+      transferTotal: 0,
+    },
+    cashier,
+  );
+  await page.reload();
+  await nav(page, 'Revisiones');
+  await page.getByRole('button', { name: 'Revisar turno', exact: true }).click();
+  await expect(page.getByRole('columnheader', { name: 'Conteo final del administrador' })).toBeVisible();
+  const input = page.getByLabel(`Corrección · Vasos · ${state.sizes[0].name}`, { exact: true });
+  await input.fill('12');
+  await page.getByRole('button', { name: 'Confirmar y ajustar inventario', exact: true }).click();
+  await expect(page.getByRole('status')).toHaveText('Cierre confirmado e inventario ajustado.');
+  ({ state } = await snapshot(request));
+  const reviewed = state.counts.find((count: any) => count.id === state.shifts[0].closingReview.countId);
+  expect(reviewed.items[article]).toBe(12);
+  const balance = state.stock
+    .filter((item: any) => item.article === article)
+    .reduce((sum: number, item: any) => sum + item.quantity, 0);
+  expect(balance).toBe(12);
+  expect(
+    state.stock
+      .filter((item: any) => item.article === 'coronita')
+      .reduce((sum: number, item: any) => sum + item.quantity, 0),
+  ).toBe(15);
+});
+
 test('muestra la foto de compra y reserva la aprobación a otro administrador', async ({
   page,
   browser,

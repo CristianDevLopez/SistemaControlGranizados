@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { businessDay } from '../domain/business-date.ts';
 import { inRehearsalPeriod } from '../domain/closing-archive.ts';
-import { closingNeedsRecount, paymentsByMethod } from '../domain/engine.ts';
+import { closingNeedsRecount, countHasDifferences, paymentsByMethod } from '../domain/engine.ts';
 import type { Count } from '../domain/types.ts';
 import { useApp } from '../lib/store.tsx';
 import { FieldsForm, Modal, Panel, date, money, stateNames } from './components.tsx';
@@ -91,6 +91,13 @@ export function OwnClosing({ requestsOnly = false, day }: { requestsOnly?: boole
       if (!canEdit && shift.closingReview?.status === 'approved') return null;
       return (
         <Panel key={shift.id} title={`Cierre · ${date(count.at)}`}>
+          {canEdit && (
+            <p className={countHasDifferences(count) ? 'notice danger' : 'notice success'} role="status">
+              {countHasDifferences(count)
+                ? 'Sigue sin cuadrar. Tu conteo ya se envió a los admins; espera su ayuda. Mientras tanto puedes hacer la entrega de efectivo.'
+                : 'Tu conteo cuadra. Sigue con la entrega de efectivo.'}
+            </p>
+          )}
           <p>{differences(count)}</p>
           {shift.closingReview?.status === 'pending' && <p>Cierre pendiente de aprobación.</p>}
           {summary?.handoffs.map((item) => (
@@ -122,6 +129,15 @@ export function OwnClosing({ requestsOnly = false, day }: { requestsOnly?: boole
               <p>
                 Efectivo contado · {money(count.cash ?? 0)} · Base máxima ·{' '}
                 {money(state.settings[0].maxClosingBase ?? state.settings[0].cashLimit)}
+              </p>
+              <p>
+                La base para el siguiente turno es{' '}
+                {money(
+                  Math.min(count.cash ?? 0, state.settings[0].maxClosingBase ?? state.settings[0].cashLimit),
+                )}
+                .
+                {(count.cash ?? 0) > (state.settings[0].maxClosingBase ?? state.settings[0].cashLimit) &&
+                  ` Debes enviar al menos ${money((count.cash ?? 0) - (state.settings[0].maxClosingBase ?? state.settings[0].cashLimit))}.`}
               </p>
               <FieldsForm
                 fields={[

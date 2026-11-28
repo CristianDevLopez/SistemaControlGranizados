@@ -1108,6 +1108,11 @@ strong {
   background: #f0f6e8;
   border-color: #e0e9d1;
 }
+.notice.danger {
+  color: #a45447;
+  background: #fff1ed;
+  border-color: #f4d9d1;
+}
 .form-error {
   background: #fff1ed;
   color: #a45447;

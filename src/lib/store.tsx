@@ -96,6 +96,7 @@ export function useApp() {
   return value;
 }
 const ONLINE_TYPES = new Set<CommandType>([
+  'v4',
   'record_paper',
   'send_order',
   'save_flavor',
@@ -512,7 +513,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const snapshot = current.current;
           if (!snapshot) throw new Error('Inicia sesión.');
           const orderAssistant = isOrderAssistant(snapshot.actor, snapshot.state);
-          if (orderAssistant && !isCustomerOrderCommand(type))
+          if (
+            orderAssistant &&
+            !isCustomerOrderCommand(type) &&
+            !(type === 'v4' && payload.action === 'receive') &&
+            !(type === 'register_attachment' && hasPermission(snapshot.actor, 'inventory'))
+          )
             throw new Error('Desde apoyo solo puedes tomar y enviar tus pedidos a caja.');
           const permission = commandPermission(type);
           if (permission && !hasPermission(snapshot.actor, permission))

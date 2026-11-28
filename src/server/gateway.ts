@@ -883,7 +883,9 @@ export function createGateway(options: GatewayOptions) {
           try {
             if (actor.role !== 'admin') {
               assert(
-                staffCommands.has(command.type),
+                staffCommands.has(command.type) ||
+                  (command.type === 'v4' &&
+                    ['receive', 'start_closing'].includes(String(command.payload.action))),
                 'Esta operación requiere un administrador.',
                 'FORBIDDEN',
               );
@@ -1089,6 +1091,8 @@ export function createGateway(options: GatewayOptions) {
       }
       if (route === 'notifications/retry') {
         admin();
+        if ((await store.load()).state.settings[0].v4Enabled)
+          await store.security('notification_retry', body.id ? { id: id(body.id) } : {});
         return json({ ok: true, message: 'Reintento solicitado.' });
       }
       return json({ error: 'Ruta no encontrada.' }, 404);
@@ -1129,37 +1133,4 @@ export function createGateway(options: GatewayOptions) {
   };
 }
 
-export async function dispatchNotifications(
-  store: Backend,
-  env: Record<string, string | undefined>,
-  appUrl: string,
-  legacy = true,
-): Promise<void> {
-  const notices = await store.security('notifications_claim');
-  for (const n of notices) {
-    try {
-      const prefix = store.branchId
-        ? `TELEGRAM_BRANCH_${store.branchId.replaceAll('-', '').toUpperCase()}`
-        : 'TELEGRAM';
-      const token = env[`${prefix}_BOT_TOKEN`] ?? (legacy ? env.TELEGRAM_BOT_TOKEN : undefined),
-        chat =
-          env[`${prefix}_${String(n.channel).toUpperCase()}_CHAT_ID`] ??
-          (legacy ? env[`TELEGRAM_${String(n.channel).toUpperCase()}_CHAT_ID`] : undefined);
-      assert(token && chat, 'Telegram pendiente de configuración.');
-      const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chat, text: `Dexter’s · ${n.text}\nRegistro: ${n.id}\n${appUrl}` }),
-        signal: AbortSignal.timeout(10000),
-      });
-      assert(response.ok, 'Telegram rechazó el aviso.');
-      await store.security('notification_finish', { id: n.id, ok: true });
-    } catch (error) {
-      await store.security('notification_finish', {
-        id: n.id,
-        ok: false,
-        error: (error as Error).message.slice(0, 300),
-      });
-    }
-  }
-}
+export { dispatchNotifications } from './telegram.ts';

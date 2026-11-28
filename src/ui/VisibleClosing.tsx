@@ -4,6 +4,8 @@ import { api } from '../lib/api.ts';
 import { parseMoney } from '../lib/money.ts';
 import { useApp } from '../lib/store.tsx';
 import { AddPackages } from './AddPackages.tsx';
+import { CandyCountInput } from './CandyCountInput.tsx';
+import { candies } from '../domain/v4-catalog.ts';
 import { Modal, MoneyInput, date, money } from './components.tsx';
 
 export function VisibleClosing({ shift, onClose }: { shift: Shift; onClose: () => void }) {
@@ -69,7 +71,13 @@ export function VisibleClosing({ shift, onClose }: { shift: Shift; onClose: () =
       ? (firstValues?.notes ?? '')
       : String((name === 'cash' ? firstValues?.cash : firstValues?.items[name]) ?? ''));
   const counted = (id: string, monetary: boolean) =>
-    monetary ? parseMoney(entry(id)) : entry(id) ? Number(entry(id)) : null;
+    monetary
+      ? parseMoney(entry(id))
+      : entry(id)
+        ? Number(entry(id))
+        : state.settings[0].v4Enabled && candies(state).some((c) => c.id === id)
+          ? 0
+          : null;
   const different = countRows.some(({ id, expected, monetary }) => {
     const actual = counted(id, monetary);
     return expected !== undefined && actual !== null && actual !== expected;
@@ -128,9 +136,10 @@ export function VisibleClosing({ shift, onClose }: { shift: Shift; onClose: () =
       <Modal title={preview ? 'Cierre de caja · Segundo conteo' : 'Cierre de caja'} onClose={onClose}>
         {form ? (
           <form className="fields-form" onSubmit={submit}>
-            <p>
+            <p>1. Conteo de cierre · 2. Entrega de efectivo</p>
+            <p className={preview ? 'notice warning' : undefined} role="status">
               {preview
-                ? 'Revisa las diferencias y vuelve a contar antes de repartir el efectivo.'
+                ? 'Hay diferencias con lo esperado. Vuelve a contar: ahora ves cuánto debería haber. Si olvidaste registrar un gasto, un paquete o una bolsa, regístralo antes.'
                 : 'Cuenta el efectivo, los vasos y los demás artículos del turno.'}
             </p>
             <div className="table-wrap">
@@ -164,6 +173,12 @@ export function VisibleClosing({ shift, onClose }: { shift: Shift; onClose: () =
                               onChange={(value) => change(id, value)}
                               required
                               preview={false}
+                            />
+                          ) : state.settings[0].v4Enabled && candies(state).some((c) => c.id === id) ? (
+                            <CandyCountInput
+                              candy={candies(state).find((c) => c.id === id)!}
+                              value={entry(id)}
+                              onChange={(value) => change(id, value)}
                             />
                           ) : (
                             <input
@@ -248,7 +263,7 @@ export function VisibleClosing({ shift, onClose }: { shift: Shift; onClose: () =
               <textarea
                 value={entry('notes')}
                 onChange={(event) => change('notes', event.target.value)}
-                required={different}
+                required={different && !state.settings[0].v4Enabled}
                 maxLength={1500}
               />
             </label>

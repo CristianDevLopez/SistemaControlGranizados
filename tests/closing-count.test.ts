@@ -16,6 +16,55 @@ import type { State } from '../src/domain/types.ts';
 
 const key = `transfer:${ids.location}`;
 
+for (const finalCount of [0, 12, 25]) {
+  it(`el conteo del administrador ${finalCount} sustituye al del cajero y deja el inventario en ese total`, () => {
+    let state = fixture();
+    const article = `cup:${state.sizes[0].id}`;
+    state = run(state, 'open_package', { quantities: { [state.sizes[0].id]: 1 } }).state;
+    state.shifts[0].blindOpening = { depth: 'simple', status: 'matched' };
+    const preview = visibleClosingPreview(state, state.shifts[0]);
+    const payload = {
+      shiftId: ids.shift,
+      kind: 'closing',
+      cash: preview.expectedCash,
+      preview,
+      items: {
+        ...Object.fromEntries(
+          Object.entries(preview.expectedItems).map(([id, value]) => [id, Math.max(0, value)]),
+        ),
+        [article]: 18,
+      },
+      payments: preview.expectedPayments,
+      notes: 'Reconteo del cajero',
+    };
+    const first = run(state, 'submit_blind_count', { ...payload, attempt: 1 });
+    const counted = run(first.state, 'submit_blind_count', { ...payload, attempt: 2 });
+    state = run(counted.state, 'submit_closing', {
+      shiftId: ids.shift,
+      countId: counted.result.referenceId,
+      retained: 20000,
+      sent: 0,
+      verified: true,
+      cashTotal: 0,
+      transferTotal: 0,
+    }).state;
+    const originalId = state.shifts[0].closingCountId;
+    const confirmed = run(
+      state,
+      'approve_closing',
+      { shiftId: ids.shift, adjustInventory: true, items: { [article]: finalCount } },
+      admin,
+    ).state;
+    expect(confirmed.counts.find((count) => count.id === originalId)?.items[article]).toBe(18);
+    expect(
+      confirmed.counts.find((count) => count.id === confirmed.shifts[0].closingReview?.countId)?.items[
+        article
+      ],
+    ).toBe(finalCount);
+    expect(stockBalances(confirmed)[article]).toBe(finalCount);
+  });
+}
+
 it('un ajuste aprobado durante la revisión del cierre sustituye el esperado sin revertirse al confirmar', () => {
   let state = fixture();
   const article = `cup:${state.sizes[0].id}`;

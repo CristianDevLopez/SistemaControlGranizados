@@ -1,3 +1,5 @@
+import { V4Stock } from './V4Stock.tsx';
+import { candies } from '../domain/v4-catalog.ts';
 import { orderedFlavors } from '../domain/flavors.ts';
 import { supplies } from '../domain/supplies.ts';
 import { supplyDuration } from '../domain/inventory.ts';
@@ -54,59 +56,61 @@ function AdminInventory({ snapshot, onCorrect }: { snapshot: Snapshot; onCorrect
 
   return (
     <>
-      <InventoryTable
-        title="Saldos de inventario"
-        description="Consulta las existencias teóricas por artículo."
-      >
-        <div className="table-toolbar">
-          <input
-            className="search"
-            aria-label="Buscar insumo"
-            placeholder="Buscar un insumo…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <select
-            aria-label="Tipo de inventario"
-            value={group}
-            onChange={(event) => setGroup(event.target.value)}
-          >
-            <option value="">Todos los insumos</option>
-            <option value="sealed_bag:">Bolsas selladas</option>
-            <option value="liquid:">Líquido</option>
-            <option value="cup:">Vasos sueltos</option>
-            <option value="package:">Paquetes</option>
-            <option value="coronita">Coronitas</option>
-          </select>
-          <button className="button small secondary" onClick={onCorrect}>
-            Proponer corrección de inventario
-          </button>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Artículo</th>
-                <th>Saldo teórico</th>
-                <th>Unidad</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stock.map((row) => (
-                <tr key={row.id}>
-                  <td>
-                    <strong>{row.name}</strong>
-                  </td>
-                  <td className={(balances[row.id] ?? 0) < 0 ? 'negative' : ''}>
-                    {amount.format(balances[row.id] ?? 0)}
-                  </td>
-                  <td>{row.unit}</td>
+      {!settings.v4Enabled && (
+        <InventoryTable
+          title="Saldos de inventario"
+          description="Consulta las existencias teóricas por artículo."
+        >
+          <div className="table-toolbar">
+            <input
+              className="search"
+              aria-label="Buscar insumo"
+              placeholder="Buscar un insumo…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <select
+              aria-label="Tipo de inventario"
+              value={group}
+              onChange={(event) => setGroup(event.target.value)}
+            >
+              <option value="">Todos los insumos</option>
+              <option value="sealed_bag:">Bolsas selladas</option>
+              <option value="liquid:">Líquido</option>
+              <option value="cup:">Vasos sueltos</option>
+              <option value="package:">Paquetes</option>
+              <option value="coronita">Coronitas</option>
+            </select>
+            <button className="button small secondary" onClick={onCorrect}>
+              Proponer corrección de inventario
+            </button>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Artículo</th>
+                  <th>Saldo teórico</th>
+                  <th>Unidad</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </InventoryTable>
+              </thead>
+              <tbody>
+                {stock.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <strong>{row.name}</strong>
+                    </td>
+                    <td className={(balances[row.id] ?? 0) < 0 ? 'negative' : ''}>
+                      {amount.format(balances[row.id] ?? 0)}
+                    </td>
+                    <td>{row.unit}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </InventoryTable>
+      )}
       <InventoryTable title="Duración de insumos" description="Promedio entre aperturas registradas.">
         <div className="table-wrap">
           <table>
@@ -247,7 +251,11 @@ export function Inventory() {
       label: `${item.name} (${item.unit})`,
     }));
   const [addingPackages, setAddingPackages] = useState(false);
-  const availableSupplies = supplies(state).filter((item) => item.initialized);
+  const [query, setQuery] = useState('');
+  const availableSupplies = supplies(state).filter(
+    (item) =>
+      item.initialized && !(state.settings[0].v4Enabled && candies(state).some((c) => c.id === item.id)),
+  );
   const openSupply = () =>
     setForm({
       title: 'Abrir insumo',
@@ -303,14 +311,14 @@ export function Inventory() {
       fields: [
         { name: 'article', label: 'Artículo', type: 'select', required: true, options: articleOptions },
         {
-          name: 'quantity',
-          label: 'Ajuste de cantidad',
+          name: 'finalQuantity',
+          label: 'Cantidad final en inventario',
           type: 'number',
           step: '0.000001',
-          min: -1_000_000,
+          min: 0,
           max: 1_000_000,
           required: true,
-          hint: 'Usa una cantidad positiva para sumar o una negativa para restar.',
+          hint: 'Escribe el total que debe quedar. Por ejemplo, 15 deja el inventario en 15. Puedes escribir 0.',
         },
         { name: 'notes', label: 'Motivo', type: 'textarea', required: true },
       ],
@@ -340,7 +348,10 @@ export function Inventory() {
         </div>
       </div>
       {admin ? (
-        <AdminInventory snapshot={snapshot} onCorrect={proposeCorrection} />
+        <>
+          {state.settings[0].v4Enabled && <V4Stock onCorrect={proposeCorrection} />}
+          <AdminInventory snapshot={snapshot} onCorrect={proposeCorrection} />
+        </>
       ) : (
         <Panel title="Aperturas del turno">
           {openings.length ? (
@@ -360,20 +371,42 @@ export function Inventory() {
         </Panel>
       )}
       {form && (
-        <Modal title={form.title} onClose={() => setForm(null)}>
+        <Modal
+          title={form.title}
+          onClose={() => {
+            setForm(null);
+            setQuery('');
+          }}
+        >
           {form.type === 'open_bag' && (
             <p className="modal-intro">
               Al abrir una bolsa, se da por terminada la anterior del mismo sabor.
             </p>
           )}
+          {state.settings[0].v4Enabled && ['open_bag', 'open_supply'].includes(form.type) && (
+            <input
+              className="search"
+              aria-label="Buscar artículo para abrir"
+              placeholder="Buscar…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          )}
           <FieldsForm
-            fields={form.fields}
+            fields={form.fields.map((f) => ({
+              ...f,
+              options: f.options?.filter((o) => o.label.toLowerCase().includes(query.trim().toLowerCase())),
+            }))}
             submit={form.type === 'correct_inventory' ? 'Proponer corrección' : 'Registrar'}
-            onCancel={() => setForm(null)}
+            onCancel={() => {
+              setForm(null);
+              setQuery('');
+            }}
             onSubmit={async (values) => {
               await app.run(form.type, values);
               if (form.type !== 'correct_inventory') app.toast('Movimiento registrado.');
               setForm(null);
+              setQuery('');
             }}
           />
         </Modal>

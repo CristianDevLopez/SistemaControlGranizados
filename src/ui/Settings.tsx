@@ -1,3 +1,5 @@
+import { AdminRecords } from './AdminRecords.tsx';
+import { V4Settings } from './V4Settings.tsx';
 import { orderedFlavors } from '../domain/flavors.ts';
 import { supplies } from '../domain/supplies.ts';
 import { configuredAdditions } from '../domain/additions.ts';
@@ -122,6 +124,13 @@ export function Settings() {
     ['accounts', 'Cuentas y custodia'],
     ['goals', 'Metas'],
     ['history', 'Histórico'],
+    ['records', 'Exportación, avisos y auditoría'],
+    ...(settings.v4Enabled
+      ? [
+          ['v4', 'Dulces y categorías'],
+          ['telegram', 'Avisos de Telegram'],
+        ]
+      : []),
   ];
   return (
     <div className="page-stack">
@@ -143,6 +152,9 @@ export function Settings() {
           {error}
         </div>
       )}
+      {tab === 'records' && <AdminRecords />}
+      {tab === 'v4' && <V4Settings />}
+      {tab === 'telegram' && <V4Settings mode="telegram" />}
       {tab === 'catalog' && (
         <>
           <Panel
@@ -405,7 +417,7 @@ export function Settings() {
                 min: 0,
                 required: true,
               },
-              ...configuredAdditions(settings.candyPrices).map((item) => ({
+              ...configuredAdditions(settings.candyPrices, settings.v4Enabled).map((item) => ({
                 name: `candy:${item.id}`,
                 label: `Adición · ${item.name}`,
                 type: 'money' as const,
@@ -430,7 +442,10 @@ export function Settings() {
               ...settings,
               maxClosingBase: settings.maxClosingBase ?? settings.cashLimit,
               ...Object.fromEntries(
-                configuredAdditions(settings.candyPrices).map((item) => [`candy:${item.id}`, item.unitPrice]),
+                configuredAdditions(settings.candyPrices, settings.v4Enabled).map((item) => [
+                  `candy:${item.id}`,
+                  item.unitPrice,
+                ]),
               ),
               expenseCategories: settings.expenseCategories.join(', '),
               openingChecklist: (settings.openingChecklist ?? []).join('\n'),

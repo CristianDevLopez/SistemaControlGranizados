@@ -399,6 +399,7 @@ export function Orders() {
                         {orderLabel(o)}
                       </button>
                       <small>{date(o.originalAt ?? o.createdAt)}</small>
+                      {o.addedAtClosing && <small>Agregada en el cierre</small>}
                       <small>
                         {profiles.find((x) => x.id === o.sellerId)?.name}
                         {o.origin === 'paper' ? ' · Desde papel' : ''}

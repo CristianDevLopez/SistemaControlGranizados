@@ -79,6 +79,14 @@ export function dashboardData(state: State, filter: DashboardFilter) {
   const expenses = state.expenses
     .filter((e) => e.status === 'approved' && matchesShift(e.shiftId) && inRange(e.at))
     .reduce((n, e) => n + e.amount, 0);
+  const losses = state.requests.filter(
+    (r) => r.merma && !r.merma.superseded && matchesShift(r.merma.shiftId) && inRange(r.at),
+  );
+  const lossCost = losses.reduce((n, r) => n + r.merma!.quantity * r.merma!.unitCost, 0);
+  const lossRecovered = losses.reduce(
+    (n, r) => n + r.merma!.recoveries.reduce((sum, x) => sum + x.amount, 0),
+    0,
+  );
   const monthly = duration / DAY > 62;
   const buckets = new Map<string, { key: string; amount: number; tickets: number; units: number }>();
   for (let day = monthly ? `${filter.from.slice(0, 7)}-01` : filter.from; day <= filter.to;) {
@@ -242,6 +250,10 @@ export function dashboardData(state: State, filter: DashboardFilter) {
     methods,
     refunds,
     expenses,
+    lossCost,
+    lossRecovered,
+    netLoss: lossCost - lossRecovered,
+    lossCostsMissing: losses.some((r) => r.merma!.costMissing),
     goals,
     voided: issues.filter((o) => o.status === 'voided').length,
     unpaid: issues.filter((o) => o.status === 'unpaid_incident').reduce((n, o) => n + o.total, 0),

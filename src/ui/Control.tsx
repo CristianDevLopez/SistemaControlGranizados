@@ -1,10 +1,7 @@
+import { V4Mermas } from './V4Mermas.tsx';
 import { useState } from 'react';
-import { Download, RefreshCw } from 'lucide-react';
 import { articles, currentPayments, paymentMethod } from '../domain/engine.ts';
 import { useApp } from '../lib/store.tsx';
-import { api } from '../lib/api.ts';
-import { exportZip, downloadFile } from '../lib/export.ts';
-import { inRehearsalPeriod } from '../domain/closing-archive.ts';
 import {
   Badge,
   Empty,
@@ -24,7 +21,26 @@ import { Money } from './Money.tsx';
 import { EvidenceButton } from './EvidenceButton.tsx';
 import { ExpenseApproval } from './ExpenseApproval.tsx';
 import { openingItemsField } from './CashAudit.tsx';
-export function Control({
+export function Control(props: { onHistory: () => void; initialCategory?: keyof typeof requestCategories }) {
+  const app = useApp();
+  const [tab, setTab] = useState('reviews');
+  if (!app.data!.state.settings[0].v4Enabled) return <LegacyControl {...props} />;
+  return (
+    <div className="page-stack">
+      <div className="tabs">
+        <button className={tab === 'reviews' ? 'active' : ''} onClick={() => setTab('reviews')}>
+          Revisiones
+        </button>
+        <button className={tab === 'mermas' ? 'active' : ''} onClick={() => setTab('mermas')}>
+          Mermas
+        </button>
+      </div>
+      {tab === 'mermas' ? <V4Mermas /> : <LegacyControl {...props} />}
+    </div>
+  );
+}
+
+function LegacyControl({
   onHistory,
   initialCategory = 'shifts',
 }: {
@@ -34,7 +50,6 @@ export function Control({
   const app = useApp(),
     { state, actor, profiles } = app.data!,
     [filter, setFilter] = useState('pending'),
-    [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
     [reconcile, setReconcile] = useState<{ requestId: string; approve: boolean } | null>(null);
   const [category, setCategory] = useState(initialCategory);
@@ -48,9 +63,6 @@ export function Control({
   }>();
   const entries = adminRequests(state);
   const visible = entries.filter((item) => (filter === 'all' || item.pending) && item.category === category);
-  const notifications = state.notifications.filter(
-    (item) => !inRehearsalPeriod(state, item.at) && item.channel !== 'mermas',
-  );
   const perform = async (command: CommandType, payload: Record<string, unknown>) => {
     setError('');
     try {
@@ -455,115 +467,7 @@ export function Control({
           />
         )}
       </Panel>
-      <details>
-        <summary>Exportación, avisos y auditoría</summary>
-        <button
-          className="button primary"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              const payload = await api('export');
-              downloadFile(
-                new Uint8Array(exportZip(payload)).buffer,
-                `dexter-exportacion-${new Date().toISOString().slice(0, 10)}.zip`,
-                'application/zip',
-              );
-              app.toast('Exportación generada con archivos relacionados y diccionario.');
-            } catch (e) {
-              setError((e as Error).message);
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          <Download size={17} />
-          {busy ? 'Preparando…' : 'Exportar información'}
-        </button>
-        <Panel
-          title="Avisos a administradores"
-          action={
-            <button
-              className="text-button"
-              onClick={async () => {
-                try {
-                  await api('notifications/retry', {});
-                  app.toast('Reintento solicitado.');
-                } catch (e) {
-                  app.toast((e as Error).message);
-                }
-              }}
-            >
-              <RefreshCw size={15} />
-              Reintentar
-            </button>
-          }
-        >
-          {notifications.length ? (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Aviso</th>
-                    <th>Canal</th>
-                    <th>Estado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...notifications]
-                    .reverse()
-                    .slice(0, 100)
-                    .map((n) => (
-                      <tr key={n.id}>
-                        <td>
-                          {n.text}
-                          <small>{date(n.at)}</small>
-                          {n.lastError && <small>{n.lastError}</small>}
-                        </td>
-                        <td>{n.channel}</td>
-                        <td>
-                          <Badge tone={n.status === 'sent' ? 'green' : 'orange'}>
-                            {n.status === 'sent' ? 'Enviado' : 'Pendiente'}
-                          </Badge>
-                          <small>{n.attempts} intentos</small>
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <Empty title="Sin avisos por enviar" />
-          )}
-        </Panel>
-        <Panel title="Rastro de auditoría">
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Momento</th>
-                  <th>Acción</th>
-                  <th>Usuario</th>
-                  <th>Detalle</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...state.audit]
-                  .reverse()
-                  .slice(0, 150)
-                  .map((a) => (
-                    <tr key={a.id}>
-                      <td>{date(a.at)}</td>
-                      <td>{a.action}</td>
-                      <td>{profiles.find((x) => x.id === a.by)?.name}</td>
-                      <td>{a.detail}</td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-      </details>
+
       {shiftId && <TurnReview key={shiftId} shiftId={shiftId} onClose={() => setShiftId(undefined)} />}
       {transferId && (
         <Modal title="Detalle del movimiento" onClose={() => setTransferId(undefined)}>

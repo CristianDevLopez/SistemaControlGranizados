@@ -57,6 +57,7 @@ export function shiftRequestLabel(shift: Shift) {
 export function adminRequests(state: State) {
   const queue: InboxEntry[] = [];
   for (const item of state.requests) {
+    if (item.merma) continue;
     if (!rehearsalRequest(state, item))
       queue.push({
         source: 'request',
@@ -106,6 +107,7 @@ export function adminRequests(state: State) {
       });
     }
     const pending =
+      item.v4Reviews?.at(-1)?.status === 'pending' ||
       item.status === 'requested' ||
       item.closingReview?.status === 'pending' ||
       item.closingReview?.status === 'returned' ||

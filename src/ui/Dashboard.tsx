@@ -92,6 +92,9 @@ export function Dashboard() {
       ['Costo de cortesías COP', data.courtesyCost],
       ['Devoluciones COP', data.refunds],
       ['Gastos aprobados COP', data.expenses],
+      ['Mermas al costo COP', data.lossCost],
+      ['Recuperación de mermas COP', data.lossRecovered],
+      ['Pérdida neta COP', data.netLoss],
       ['Anulaciones', data.voided],
       ['Entregado sin pagar COP', data.unpaid],
     ] as const)
@@ -250,6 +253,20 @@ export function Dashboard() {
                   : 'Según la información cargada del local'}
             </span>
           </div>
+          {state.settings[0].v4Enabled && (
+            <Panel title="Mermas del período al costo de compra">
+              <div className="stats-grid">
+                <Stat label="Merma" value={money(data.lossCost)} />
+                <Stat label="Recuperado" value={money(data.lossRecovered)} />
+                <Stat label="Pérdida neta" value={money(data.netLoss)} />
+              </div>
+              {data.lossCostsMissing && (
+                <p className="notice warning">
+                  Hay costos históricos pendientes; las cifras incluyen los costos conocidos.
+                </p>
+              )}
+            </Panel>
+          )}
           <div className="stats-grid dashboard-kpis" aria-live="polite">
             {[
               {

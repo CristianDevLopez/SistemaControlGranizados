@@ -7,6 +7,9 @@ import { COLLECTIONS, type Command, type Profile, type Result, type State } from
 import { sha256, pinHash } from '../../src/server/crypto.ts';
 import { admin, other, cashier, support, owner, ids, fixture } from './fixture.ts';
 export class PgBackend implements Backend {
+  async deletePhoto(path: string) {
+    this.files.delete(path);
+  }
   files = new Map<string, Blob>();
   tokens = new Map<string, AuthIdentity>();
   constructor(

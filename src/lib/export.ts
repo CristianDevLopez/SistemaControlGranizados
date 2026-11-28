@@ -1,3 +1,4 @@
+import { exportRange, localDates, v4ExportRows, type ExportRange } from './v4-export.ts';
 import { strToU8, zipSync } from 'fflate';
 import type { State } from '../domain/types.ts';
 function cell(value: unknown): string {
@@ -293,19 +294,31 @@ const schema: Record<string, string[]> = {
   profiles: ['id', 'name', 'role', 'active', 'username', 'permissions'],
   devices: ['id', 'userId', 'name', 'active', 'primary', 'lastSeen'],
 };
-export function exportZip(input: {
-  branch?: import('../domain/platform.ts').Branch;
-  state: State;
-  profiles: unknown[];
-  devices: unknown[];
-  exportedAt: string;
-  schemaVersion: number;
-}): Uint8Array {
+export function exportZip(
+  input: {
+    branch?: import('../domain/platform.ts').Branch;
+    state: State;
+    profiles: unknown[];
+    devices: unknown[];
+    exportedAt: string;
+    schemaVersion: number;
+  },
+  range?: ExportRange,
+): Uint8Array {
   const files: Record<string, Uint8Array> = {},
     dictionary: Record<string, unknown>[] = [];
+  const fullState = input.state;
+  input = { ...input, state: exportRange(fullState, range) };
   for (const [key, value] of Object.entries(input.state)) {
     const rows = value as unknown as Record<string, unknown>[];
-    files[`${key}.csv`] = strToU8(csv(rows, schema[key]));
+    const dated = rows.map(localDates);
+    files[`${key}.csv`] = strToU8(csv(dated, schema[key]));
+    for (const field of new Set(dated.flatMap(Object.keys).filter((k) => k.endsWith('Colombia'))))
+      dictionary.push({
+        archivo: key + '.csv',
+        campo: field,
+        descripcion: 'Fecha y hora de Colombia, UTC-05:00',
+      });
   }
   files['order_lines.csv'] = strToU8(
     csv(
@@ -343,11 +356,60 @@ export function exportZip(input: {
                         ? 'Composición histórica: onzas, vasos y coronitas en JSON'
                         : 'Campo de la entidad; objetos y listas se representan como JSON',
       });
+  for (const [key, rows] of Object.entries(v4ExportRows(fullState, range))) {
+    files[key + '.csv'] = strToU8(
+      csv(
+        rows,
+        key === 'ventas_detalle'
+          ? [
+              'fecha_hora_colombia',
+              'fecha_hora_utc',
+              'numero_pedido',
+              'pedido_id',
+              'turno',
+              'tamano',
+              'sabores',
+              'con_licor',
+              'precio_normal',
+              'descuento',
+              'promocion',
+              'precio_producto',
+              'adiciones_asignadas',
+              'precio_cobrado',
+              'medio_pago',
+              'agregada_en_cierre',
+              'costo_vaso',
+              'costo_liquido',
+              'costo_coronitas',
+              'costo_dulces',
+              'costo_adiciones_asignado',
+              'costo_total',
+              'costos_historicos_faltantes',
+              'margen_producto',
+              'margen_cobrado',
+            ]
+          : [],
+      ),
+    );
+    for (const field of new Set(rows.flatMap(Object.keys)))
+      dictionary.push({
+        archivo: key + '.csv',
+        campo: field,
+        descripcion: field.includes('colombia')
+          ? 'Fecha y hora de Colombia, UTC-05:00'
+          : field.includes('costo')
+            ? 'Costo histórico de compra; vacío indica dato faltante'
+            : field === 'precio_cobrado'
+              ? 'COP enteros; incluye adiciones distribuidas entre los vasos, sin duplicar el total del pedido'
+              : 'Campo del registro v4; cantidades en su unidad base y dinero en COP',
+      });
+  }
   files['diccionario.csv'] = strToU8(csv(dictionary));
   files['manifest.json'] = strToU8(
     JSON.stringify(
       {
         exportedAt: input.exportedAt,
+        range,
         schemaVersion: input.schemaVersion,
         ...(input.branch ? { branch: input.branch } : {}),
         timeZone: 'UTC',

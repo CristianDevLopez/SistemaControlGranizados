@@ -67,7 +67,11 @@ const pages = [
 ];
 export function App() {
   const app = useApp(),
-    [page, setPage] = useState('pos'),
+    [page, setPage] = useState(() =>
+      pages.some((p) => p.id === window.location.hash.slice(1).split('?')[0])
+        ? window.location.hash.slice(1).split('?')[0]
+        : 'pos',
+    ),
     [mobile, setMobile] = useState(false),
     [syncOpen, setSyncOpen] = useState(false),
     [exit, setExit] = useState(false);
@@ -78,6 +82,14 @@ export function App() {
     window.location.pathname === recoveryPath ? 'reset' : null,
   );
   const { available: needRefresh, activate: activateUpdate } = useAppUpdate();
+  useEffect(() => {
+    const navigateFromLink = () => {
+      const id = window.location.hash.slice(1).split('?')[0];
+      if (pages.some((p) => p.id === id)) setPage(id);
+    };
+    window.addEventListener('hashchange', navigateFromLink);
+    return () => window.removeEventListener('hashchange', navigateFromLink);
+  }, []);
   useEffect(() => {
     const subscription = supabase?.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY') setRecovery('reset');
@@ -113,9 +125,12 @@ export function App() {
       .filter(
         (p) =>
           (!p.admin || actor.role === 'admin') &&
-          (!orderAssistant || p.id === 'pos') &&
+          (!orderAssistant ||
+            p.id === 'pos' ||
+            (p.id === 'purchases' && state.settings[0].v4Enabled && hasPermission(actor, 'inventory'))) &&
           (p.id !== 'purchases' ||
             actor.role === 'admin' ||
+            (state.settings[0].v4Enabled && hasPermission(actor, 'inventory')) ||
             (actor.role === 'encargado' &&
               state.shifts.some((shift) => shift.status === 'open') &&
               (hasPermission(actor, 'inventory') || hasPermission(actor, 'expenses')))) &&

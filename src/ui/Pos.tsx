@@ -16,7 +16,7 @@ import {
 import { useApp } from '../lib/store.tsx';
 import { api } from '../lib/api.ts';
 import { getMeta, setMeta } from '../lib/db.ts';
-import { checkoutPromotions, lineTotal, quoteOrder } from '../domain/pricing.ts';
+import { checkoutPromotions, eligible, isScheduled, lineTotal, quoteOrder } from '../domain/pricing.ts';
 import { additionsTotal, configuredAdditions, type CandyAddition } from '../domain/additions.ts';
 import { orderedFlavors, hasAlcohol, sameFlavors } from '../domain/flavors.ts';
 import { FlavorPortions, flavorName, portionLabel } from './FlavorDetails.tsx';
@@ -233,6 +233,7 @@ function Checkout({
     [code, setCode] = useState(''),
     [codes, setCodes] = useState<string[]>([]),
     [promotionIds, setPromotionIds] = useState<string[]>([]),
+    [verifiedCodes, setVerifiedCodes] = useState<string[]>([]),
     [unusedCodes, setUnusedCodes] = useState<string[]>([]),
     [applications, setApplications] = useState<
       { code: string; lineId: string; quantity: number; unitAmount: number }[]
@@ -311,6 +312,31 @@ function Checkout({
             </span>
           )}
         </div>
+        {state.settings[0].v4Enabled &&
+          quotedLines
+            .flatMap((l) => l.appliedRules ?? [])
+            .filter(
+              (r, i, all) =>
+                r.couponId &&
+                r.promotion.checkoutText &&
+                all.findIndex((other) => other.couponId === r.couponId) === i,
+            )
+            .map((rule) => (
+              <label className="check-inline" key={rule.couponId}>
+                <input
+                  type="checkbox"
+                  checked={verifiedCodes.includes(rule.couponCode!)}
+                  onChange={(e) =>
+                    setVerifiedCodes((list) =>
+                      e.target.checked
+                        ? [...list, rule.couponCode!]
+                        : list.filter((code) => code !== rule.couponCode),
+                    )
+                  }
+                />
+                {rule.promotion.checkoutText} · {rule.couponCode}
+              </label>
+            ))}
         {eligiblePromotions.map((promotion) => (
           <label key={promotion.id} className="button secondary promotion-option">
             <input
@@ -437,7 +463,18 @@ function Checkout({
         )}
         <button
           className="button primary full large"
-          disabled={busy || (due < 0 && !refundPhoto) || !!code || (codes.length > 0 && !app.online)}
+          disabled={
+            busy ||
+            (due < 0 && !refundPhoto) ||
+            !!code ||
+            (codes.length > 0 && !app.online) ||
+            (state.settings[0].v4Enabled &&
+              quotedLines.some((l) =>
+                l.appliedRules?.some(
+                  (r) => r.couponId && r.promotion.checkoutText && !verifiedCodes.includes(r.couponCode!),
+                ),
+              ))
+          }
           onClick={async () => {
             if (submitting.current) return;
             submitting.current = true;
@@ -453,6 +490,7 @@ function Checkout({
                   expectedTotal: total,
                   codes,
                   promotionIds,
+                  verifiedCodes,
                   deliver,
                   refundEvidenceId,
                   ...paymentPayload(payment),
@@ -526,6 +564,8 @@ export function Pos() {
       : storedOrder;
   const customerName =
     nameDraft && nameDraft.orderId === (order?.id ?? null) ? nameDraft.value : (order?.customerName ?? '');
+  const nameChange =
+    order && customerName.trim() !== (order.customerName ?? '') ? { customerName: customerName.trim() } : {};
   const canCash =
     hasPermission(actor, 'payments') &&
     !!active &&
@@ -540,7 +580,9 @@ export function Pos() {
   const canCancel = !!order && !order.replacesId && !order.lines.some((line) => line.delivered > 0);
   const eligiblePromotions =
     order && order.paymentCredit === undefined && !order.replacesId && !order.carriedCouponFromId
-      ? checkoutPromotions(state, order.lines, promotionTime, app.online)
+      ? checkoutPromotions(state, order.lines, promotionTime, app.online).filter(
+          (promotion) => !state.settings[0].v4Enabled || promotion.checkoutText !== '',
+        )
       : [];
   const mixPrice = hasAlcohol({ flavorId: mixFlavors[0], flavorIds: mixFlavors }, state.flavors)
     ? size?.alcoholPrice
@@ -601,6 +643,7 @@ export function Pos() {
         expectedVersion: order.version,
         lines: inputs(order.lines),
         additions,
+        ...nameChange,
       });
     });
   const cancelOrder = async () => {
@@ -622,7 +665,12 @@ export function Pos() {
         prior = lines.find((line) => line.sizeId === sizeId && sameFlavors(line, product));
       if (prior) prior.quantity++;
       else lines.push({ id: crypto.randomUUID(), ...product, quantity: 1 });
-      await app.run('update_order', { orderId: order.id, lines, expectedVersion: order.version });
+      await app.run('update_order', {
+        orderId: order.id,
+        lines,
+        expectedVersion: order.version,
+        ...nameChange,
+      });
     } else {
       const result = await app.run('create_order', {
         lines: [{ ...product, quantity: 1 }],
@@ -651,7 +699,12 @@ export function Pos() {
         await cancelOrder();
         return;
       }
-      await app.run('update_order', { orderId: order.id, expectedVersion: order.version, lines });
+      await app.run('update_order', {
+        orderId: order.id,
+        expectedVersion: order.version,
+        lines,
+        ...nameChange,
+      });
     });
   return (
     <>
@@ -965,6 +1018,39 @@ export function Pos() {
               <div className="cart-lines">
                 {order.lines.map((line) => (
                   <div className="cart-line" key={line.id}>
+                    {state.settings[0].v4Enabled &&
+                      state.sizes.find((s) => s.id === line.sizeId)?.ounces === 12 &&
+                      state.promotions.some(
+                        (p) =>
+                          p.versus &&
+                          p.effect === 'upgrade' &&
+                          isScheduled(p, promotionTime) &&
+                          eligible(p, line, state),
+                      ) && (
+                        <div className="notice info">
+                          Campaña Versus: ofrécele el de 16 por el mismo precio.
+                          <button
+                            className="text-button"
+                            disabled={busy || !canOrders || line.delivered > 0}
+                            onClick={() =>
+                              void action(async () => {
+                                const size = state.sizes.find((s) => s.active && s.ounces === 16);
+                                if (size)
+                                  await app.run('update_order', {
+                                    orderId: order.id,
+                                    expectedVersion: order.version,
+                                    lines: inputs(order.lines).map((l) =>
+                                      l.id === line.id ? { ...l, sizeId: size.id } : l,
+                                    ),
+                                    ...nameChange,
+                                  });
+                              })
+                            }
+                          >
+                            Cambiar a 16
+                          </button>
+                        </div>
+                      )}
                     <div className="cart-line-head">
                       <div>
                         <strong>{flavorName(line, state.flavors)}</strong>
@@ -1028,37 +1114,39 @@ export function Pos() {
                     <summary>
                       Adiciones{order.additions?.length ? ` · ${money(additionsTotal(order.additions))}` : ''}
                     </summary>
-                    {configuredAdditions(state.settings[0].candyPrices).map((addition) => {
-                      const quantity =
-                        order.additions?.find((item) => item.id === addition.id)?.quantity ?? 0;
-                      return (
-                        <div className="list-row" key={addition.id}>
-                          <div>
-                            <strong>{addition.name}</strong>
-                            <small>{money(addition.unitPrice)}</small>
+                    {configuredAdditions(state.settings[0].candyPrices, state.settings[0].v4Enabled).map(
+                      (addition) => {
+                        const quantity =
+                          order.additions?.find((item) => item.id === addition.id)?.quantity ?? 0;
+                        return (
+                          <div className="list-row" key={addition.id}>
+                            <div>
+                              <strong>{addition.name}</strong>
+                              <small>{money(addition.unitPrice)}</small>
+                            </div>
+                            <div className="quantity-control">
+                              <button
+                                type="button"
+                                aria-label={`Quitar ${addition.name}`}
+                                disabled={busy || !canOrders || quantity === 0}
+                                onClick={() => adjustAddition(addition.id, -1)}
+                              >
+                                <Minus size={13} />
+                              </button>
+                              <span>{quantity}</span>
+                              <button
+                                type="button"
+                                aria-label={`Agregar ${addition.name}`}
+                                disabled={busy || !canOrders || quantity >= 500}
+                                onClick={() => adjustAddition(addition.id, 1)}
+                              >
+                                <Plus size={13} />
+                              </button>
+                            </div>
                           </div>
-                          <div className="quantity-control">
-                            <button
-                              type="button"
-                              aria-label={`Quitar ${addition.name}`}
-                              disabled={busy || !canOrders || quantity === 0}
-                              onClick={() => adjustAddition(addition.id, -1)}
-                            >
-                              <Minus size={13} />
-                            </button>
-                            <span>{quantity}</span>
-                            <button
-                              type="button"
-                              aria-label={`Agregar ${addition.name}`}
-                              disabled={busy || !canOrders || quantity >= 500}
-                              onClick={() => adjustAddition(addition.id, 1)}
-                            >
-                              <Plus size={13} />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      },
+                    )}
                   </details>
                 )}
                 {!orderAssistant && (
